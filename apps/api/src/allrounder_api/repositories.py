@@ -1,0 +1,577 @@
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any, Protocol
+
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
+
+_EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_SECRET_KEY = re.compile(r"(api[_-]?key|token|secret|password)", re.IGNORECASE)
+_SECRET_VALUE = re.compile(
+    r"\b(?:(?:sk|ghp|gho|ghu|ghs|ghr|github_pat|pat)[-_][A-Za-z0-9_-]{6,}"
+    r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b",
+    re.IGNORECASE,
+)
+
+
+def redact(value: object, key: str = "") -> object:
+    if _SECRET_KEY.search(key):
+        return "[REDACTED]"
+    if isinstance(value, str):
+        return _SECRET_VALUE.sub("[REDACTED]", _EMAIL.sub("[REDACTED_EMAIL]", value))
+    if isinstance(value, dict):
+        return {str(item_key): redact(item, str(item_key)) for item_key, item in value.items()}
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    return value
+
+
+@dataclass
+class CaseEvent:
+    actor: str
+    kind: str
+    payload: dict[str, object]
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
+class CaseRecord:
+    id: str
+    tenant_id: str
+    ticket_key: str
+    domain: str
+    status: str
+    events: list[CaseEvent] = field(default_factory=list)
+    cost_usd_micro: int = 0
+    outcome: str | None = None
+
+
+@dataclass
+class ApprovalRecord:
+    id: str
+    case_id: str
+    tenant_id: str
+    action: dict[str, object]
+    evidence: list[dict[str, object]]
+    approver: str
+    scope: str
+    expires_at: datetime
+    decision: str | None = None
+    comment: str | None = None
+    decided_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class SupportSendReceipt:
+    idempotency_key: str
+    case_id: str
+    ticket_key: str
+    status: str
+    sent_at: datetime
+
+
+class CaseRepository(Protocol):
+    async def create(self, case: CaseRecord) -> CaseRecord: ...
+    async def append_event(
+        self, case_id: str, *, actor: str, kind: str, payload: dict[str, object]
+    ) -> None: ...
+    async def get(self, case_id: str, tenant_id: str) -> CaseRecord: ...
+    async def get_by_ticket(self, ticket_key: str, tenant_id: str) -> CaseRecord: ...
+
+
+class ApprovalRepository(Protocol):
+    async def create(self, approval: ApprovalRecord) -> ApprovalRecord: ...
+    async def list(self, tenant_id: str) -> list[ApprovalRecord]: ...
+    async def get(self, approval_id: str, tenant_id: str) -> ApprovalRecord: ...
+    async def decide(
+        self, approval_id: str, tenant_id: str, decision: str, comment: str | None
+    ) -> ApprovalRecord: ...
+
+
+class SupportSendRepository(Protocol):
+    async def authorize_and_send(
+        self,
+        receipt_id: str,
+        approval_id: str,
+        case_id: str,
+        action_hash: str,
+        ticket_key: str,
+        body: str,
+    ) -> SupportSendReceipt: ...
+
+    async def consume_receipt(
+        self, receipt_id: str, approval_id: str, case_id: str, action_hash: str
+    ) -> None: ...
+
+    async def send_once(
+        self, idempotency_key: str, case_id: str, ticket_key: str, body: str
+    ) -> SupportSendReceipt: ...
+
+
+class InMemoryCaseRepository:
+    def __init__(self) -> None:
+        self._cases: dict[str, CaseRecord] = {}
+
+    async def create(self, case: CaseRecord) -> CaseRecord:
+        if case.id in self._cases:
+            raise ValueError("Case already exists")
+        safe = deepcopy(case)
+        self._cases[case.id] = safe
+        return deepcopy(safe)
+
+    async def append_event(
+        self, case_id: str, *, actor: str, kind: str, payload: dict[str, object]
+    ) -> None:
+        case = self._cases.get(case_id)
+        if case is None:
+            raise KeyError("Case not found")
+        safe = redact(payload)
+        if not isinstance(safe, dict):
+            raise TypeError("Event payload must be an object")
+        cost = safe.get("costUsdMicro", 0)
+        if not isinstance(cost, int) or isinstance(cost, bool) or cost < 0:
+            raise ValueError("costUsdMicro must be a non-negative integer")
+        case.cost_usd_micro += cost
+        case.events.append(CaseEvent(actor=actor, kind=kind, payload=safe))
+
+    async def get(self, case_id: str, tenant_id: str) -> CaseRecord:
+        case = self._cases.get(case_id)
+        if case is None or case.tenant_id != tenant_id:
+            raise KeyError("Case not found")
+        return deepcopy(case)
+
+    async def get_by_ticket(self, ticket_key: str, tenant_id: str) -> CaseRecord:
+        for case in self._cases.values():
+            if case.ticket_key == ticket_key and case.tenant_id == tenant_id:
+                return deepcopy(case)
+        raise KeyError("Case not found")
+
+
+class InMemoryApprovalRepository:
+    def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
+        self._approvals: dict[str, ApprovalRecord] = {}
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    async def create(self, approval: ApprovalRecord) -> ApprovalRecord:
+        if approval.id in self._approvals:
+            raise ValueError("Approval already exists")
+        safe = deepcopy(approval)
+        redacted_action = redact(safe.action)
+        redacted_evidence = redact(safe.evidence)
+        if not isinstance(redacted_action, dict) or not isinstance(redacted_evidence, list):
+            raise TypeError("Approval payload is invalid")
+        safe.action = redacted_action
+        safe.evidence = redacted_evidence
+        self._approvals[safe.id] = safe
+        return deepcopy(safe)
+
+    async def list(self, tenant_id: str) -> list[ApprovalRecord]:
+        return [
+            deepcopy(value) for value in self._approvals.values()
+            if value.tenant_id == tenant_id
+        ]
+
+    async def get(self, approval_id: str, tenant_id: str) -> ApprovalRecord:
+        approval = self._approvals.get(approval_id)
+        if approval is None or approval.tenant_id != tenant_id:
+            raise KeyError("Approval not found")
+        if approval.decision is None and approval.expires_at <= self._clock():
+            approval.decision = "expired"
+            approval.decided_at = self._clock()
+        return deepcopy(approval)
+
+    async def decide(
+        self, approval_id: str, tenant_id: str, decision: str, comment: str | None
+    ) -> ApprovalRecord:
+        approval = await self.get(approval_id, tenant_id)
+        if approval.decision is not None:
+            raise ValueError("Approval is no longer pending")
+        stored = self._approvals[approval_id]
+        stored.decision = decision
+        stored.comment = str(redact(comment)) if comment is not None else None
+        stored.decided_at = self._clock()
+        return deepcopy(stored)
+
+
+class InMemorySupportSendRepository:
+    def __init__(self) -> None:
+        self.sent: dict[str, SupportSendReceipt] = {}
+        self._used_receipts: set[str] = set()
+
+    async def consume_receipt(
+        self, receipt_id: str, approval_id: str, case_id: str, action_hash: str
+    ) -> None:
+        del approval_id, case_id, action_hash
+        if receipt_id in self._used_receipts:
+            raise ValueError("Receipt already consumed")
+        self._used_receipts.add(receipt_id)
+
+    async def authorize_and_send(
+        self,
+        receipt_id: str,
+        approval_id: str,
+        case_id: str,
+        action_hash: str,
+        ticket_key: str,
+        body: str,
+    ) -> SupportSendReceipt:
+        await self.consume_receipt(receipt_id, approval_id, case_id, action_hash)
+        return await self.send_once(receipt_id, case_id, ticket_key, body)
+
+    async def send_once(
+        self, idempotency_key: str, case_id: str, ticket_key: str, body: str
+    ) -> SupportSendReceipt:
+        del body
+        existing = self.sent.get(idempotency_key)
+        if existing is not None:
+            return existing
+        receipt = SupportSendReceipt(
+            idempotency_key, case_id, ticket_key, "sent", datetime.now(UTC)
+        )
+        self.sent[idempotency_key] = receipt
+        return receipt
+
+
+class PostgresRepositories:
+    """Parameterized async repositories over the Supabase direct Postgres URL."""
+
+    def __init__(self, database_url: str) -> None:
+        if not database_url:
+            raise ValueError("DATABASE_URL is required")
+        self.pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] = AsyncConnectionPool(
+            database_url, min_size=0, max_size=10, open=False,
+            kwargs={"row_factory": dict_row},
+        )
+
+    async def open(self) -> None:
+        await self.pool.open()
+
+    async def close(self) -> None:
+        await self.pool.close()
+
+    async def create_case(self, case: CaseRecord) -> CaseRecord:
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                insert into public.cases
+                  (id, tenant_id, ticket_key, domain, status, cost_usd_micro, outcome)
+                values (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    case.id, case.tenant_id, case.ticket_key, case.domain, case.status,
+                    case.cost_usd_micro, redact(case.outcome),
+                ),
+            )
+        return case
+
+    async def append_case_event(
+        self, case_id: str, *, actor: str, kind: str, payload: dict[str, object]
+    ) -> None:
+        safe = redact(payload)
+        if not isinstance(safe, dict):
+            raise TypeError("Event payload must be an object")
+        cost = safe.get("costUsdMicro", 0)
+        if not isinstance(cost, int) or isinstance(cost, bool) or cost < 0:
+            raise ValueError("costUsdMicro must be a non-negative integer")
+        async with self.pool.connection() as connection, connection.transaction():
+            await connection.execute(
+                """
+                insert into public.case_events (case_id, actor, kind, payload, cost_usd_micro)
+                values (%s, %s, %s, %s::jsonb, %s)
+                """,
+                (case_id, actor, kind, json.dumps(safe), cost),
+            )
+            await connection.execute(
+                """
+                update public.cases
+                set cost_usd_micro = cost_usd_micro + %s, updated_at = now()
+                where id = %s
+                """,
+                (cost, case_id),
+            )
+
+    async def create_approval(self, approval: ApprovalRecord) -> ApprovalRecord:
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                insert into public.approvals
+                  (id, case_id, tenant_id, payload, action, evidence,
+                   approver, scope, expires_at)
+                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s)
+                """,
+                (
+                    approval.id, approval.case_id, approval.tenant_id,
+                    json.dumps(
+                        {"action": redact(approval.action), "evidence": redact(approval.evidence)}
+                    ),
+                    json.dumps(redact(approval.action)), json.dumps(redact(approval.evidence)),
+                    approval.approver, approval.scope, approval.expires_at,
+                ),
+            )
+        return approval
+
+    async def authorize_and_send(
+        self,
+        receipt_id: str,
+        approval_id: str,
+        case_id: str,
+        action_hash: str,
+        ticket_key: str,
+        body: str,
+    ) -> SupportSendReceipt:
+        async with self.pool.connection() as connection, connection.transaction():
+            receipt_cursor = await connection.execute(
+                """
+                insert into public.approval_receipt_uses
+                  (receipt_id, approval_id, case_id, action_hash)
+                values (%s, %s, %s, %s)
+                on conflict (receipt_id) do nothing
+                returning receipt_id
+                """,
+                (receipt_id, approval_id, case_id, action_hash),
+            )
+            if await receipt_cursor.fetchone() is None:
+                raise ValueError("Receipt already consumed")
+            send_cursor = await connection.execute(
+                """
+                insert into public.support_sends
+                  (idempotency_key, case_id, ticket_key, body_redacted, status)
+                values (%s, %s, %s, %s, 'sent')
+                on conflict (idempotency_key) do update
+                set idempotency_key = excluded.idempotency_key
+                returning sent_at
+                """,
+                (receipt_id, case_id, ticket_key, str(redact(body))),
+            )
+            row = await send_cursor.fetchone()
+            if row is None:
+                raise RuntimeError("Send upsert returned no receipt")
+        return SupportSendReceipt(receipt_id, case_id, ticket_key, "sent", row["sent_at"])
+
+    async def send_once(
+        self, idempotency_key: str, case_id: str, ticket_key: str, body: str
+    ) -> SupportSendReceipt:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                insert into public.support_sends
+                  (idempotency_key, case_id, ticket_key, body_redacted, status)
+                values (%s, %s, %s, %s, 'sent')
+                on conflict (idempotency_key) do update
+                set idempotency_key = excluded.idempotency_key
+                returning sent_at
+                """,
+                (idempotency_key, case_id, ticket_key, str(redact(body))),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Send upsert returned no receipt")
+        return SupportSendReceipt(idempotency_key, case_id, ticket_key, "sent", row["sent_at"])
+
+    async def consume_receipt(
+        self, receipt_id: str, approval_id: str, case_id: str, action_hash: str
+    ) -> None:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                insert into public.approval_receipt_uses
+                  (receipt_id, approval_id, case_id, action_hash)
+                values (%s, %s, %s, %s)
+                on conflict (receipt_id) do nothing
+                returning receipt_id
+                """,
+                (receipt_id, approval_id, case_id, action_hash),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise ValueError("Receipt already consumed")
+
+
+class PostgresCaseRepository:
+    def __init__(self, database: PostgresRepositories) -> None:
+        self._database = database
+
+    async def create(self, case: CaseRecord) -> CaseRecord:
+        return await self._database.create_case(case)
+
+    async def append_event(
+        self, case_id: str, *, actor: str, kind: str, payload: dict[str, object]
+    ) -> None:
+        await self._database.append_case_event(case_id, actor=actor, kind=kind, payload=payload)
+
+    async def get(self, case_id: str, tenant_id: str) -> CaseRecord:
+        return await self._fetch_case(
+            """
+            select c.id, c.tenant_id, c.ticket_key, c.domain, c.status,
+                   c.cost_usd_micro, c.outcome
+            from public.cases c
+            where c.id = %s and c.tenant_id = %s
+            order by c.created_at desc limit 1
+            """,
+            (case_id, tenant_id),
+        )
+
+    async def get_by_ticket(self, ticket_key: str, tenant_id: str) -> CaseRecord:
+        return await self._fetch_case(
+            """
+            select c.id, c.tenant_id, c.ticket_key, c.domain, c.status,
+                   c.cost_usd_micro, c.outcome
+            from public.cases c
+            where c.ticket_key = %s and c.tenant_id = %s
+            order by c.created_at desc limit 1
+            """,
+            (ticket_key, tenant_id),
+        )
+
+    async def _fetch_case(
+        self,
+        statement: str,
+        parameters: tuple[str, str],
+    ) -> CaseRecord:
+        async with self._database.pool.connection() as connection:
+            cursor = await connection.execute(statement, parameters)
+            row = await cursor.fetchone()
+            if row is None:
+                raise KeyError("Case not found")
+            event_cursor = await connection.execute(
+                """
+                select actor, kind, payload, created_at
+                from public.case_events where case_id = %s order by created_at, id
+                """,
+                (row["id"],),
+            )
+            event_rows = await event_cursor.fetchall()
+        return CaseRecord(
+            id=str(row["id"]), tenant_id=row["tenant_id"], ticket_key=row["ticket_key"],
+            domain=row["domain"], status=row["status"],
+            events=[
+                CaseEvent(
+                    actor=item["actor"], kind=item["kind"], payload=item["payload"],
+                    created_at=item["created_at"],
+                )
+                for item in event_rows
+            ],
+            cost_usd_micro=int(row["cost_usd_micro"]), outcome=row["outcome"],
+        )
+
+
+class PostgresApprovalRepository:
+    def __init__(self, database: PostgresRepositories) -> None:
+        self._database = database
+
+    async def create(self, approval: ApprovalRecord) -> ApprovalRecord:
+        return await self._database.create_approval(approval)
+
+    async def list(self, tenant_id: str) -> list[ApprovalRecord]:
+        async with (
+            self._database.pool.connection() as connection,
+            connection.transaction(),
+        ):
+            cursor = await connection.execute(
+                """
+                update public.approvals set decision = 'expired', decided_at = now()
+                where tenant_id = %s and decision is null and expires_at <= now()
+                returning id
+                """,
+                (tenant_id,),
+            )
+            await cursor.fetchall()
+            cursor = await connection.execute(
+                """
+                select * from public.approvals where tenant_id = %s
+                order by created_at desc limit 200
+                """,
+                (tenant_id,),
+            )
+            rows = await cursor.fetchall()
+        return [_approval_from_row(row) for row in rows]
+
+    async def get(self, approval_id: str, tenant_id: str) -> ApprovalRecord:
+        async with self._database.pool.connection() as connection, connection.transaction():
+            await connection.execute(
+                """
+                update public.approvals set decision = 'expired', decided_at = now()
+                where id = %s and tenant_id = %s and decision is null and expires_at <= now()
+                """,
+                (approval_id, tenant_id),
+            )
+            cursor = await connection.execute(
+                "select * from public.approvals where id = %s and tenant_id = %s",
+                (approval_id, tenant_id),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("Approval not found")
+        return _approval_from_row(row)
+
+    async def decide(
+        self, approval_id: str, tenant_id: str, decision: str, comment: str | None
+    ) -> ApprovalRecord:
+        async with self._database.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                update public.approvals
+                set decision = %s, comment = %s, decided_at = now()
+                where id = %s and tenant_id = %s and decision is null and expires_at > now()
+                returning *
+                """,
+                (decision, str(redact(comment)) if comment is not None else None,
+                 approval_id, tenant_id),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise ValueError("Approval is no longer pending")
+        return _approval_from_row(row)
+
+
+class PostgresSupportSendRepository:
+    def __init__(self, database: PostgresRepositories) -> None:
+        self._database = database
+
+    async def authorize_and_send(
+        self,
+        receipt_id: str,
+        approval_id: str,
+        case_id: str,
+        action_hash: str,
+        ticket_key: str,
+        body: str,
+    ) -> SupportSendReceipt:
+        return await self._database.authorize_and_send(
+            receipt_id,
+            approval_id,
+            case_id,
+            action_hash,
+            ticket_key,
+            body,
+        )
+
+    async def consume_receipt(
+        self, receipt_id: str, approval_id: str, case_id: str, action_hash: str
+    ) -> None:
+        await self._database.consume_receipt(receipt_id, approval_id, case_id, action_hash)
+
+    async def send_once(
+        self, idempotency_key: str, case_id: str, ticket_key: str, body: str
+    ) -> SupportSendReceipt:
+        return await self._database.send_once(idempotency_key, case_id, ticket_key, body)
+
+
+def _approval_from_row(row: dict[str, Any]) -> ApprovalRecord:
+    return ApprovalRecord(
+        id=str(row["id"]), case_id=str(row["case_id"]), tenant_id=str(row["tenant_id"]),
+        action=dict(row["action"]),
+        evidence=list(row["evidence"]),
+        approver=str(row["approver"]), scope=str(row["scope"]),
+        expires_at=row["expires_at"],
+        decision=str(row["decision"]) if row["decision"] is not None else None,
+        comment=str(row["comment"]) if row["comment"] is not None else None,
+        decided_at=row["decided_at"],
+    )

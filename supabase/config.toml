@@ -1,0 +1,7 @@
+project_id = "allrounder-agent"
+
+[db]
+major_version = 15
+
+[db.migrations]
+enabled = true

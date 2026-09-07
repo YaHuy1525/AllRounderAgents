@@ -1,0 +1,22 @@
+[
+  {"id":"SUP-PILOT-01","query":"When will my refund arrive?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-02","query":"How do I reset my password?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-03","query":"Where can I download an invoice?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-04","query":"How do I update billing details?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-05","query":"What are support hours?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-06","query":"Can I change my email address?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-07","query":"How do I cancel renewal?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-08","query":"Where is the status page?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-09","query":"How long is data retained?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-10","query":"How do I export my data?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-11","query":"Which browsers are supported?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-12","query":"Can I invite a teammate?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-13","query":"Where are API docs?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-14","query":"How do I enable MFA?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-15","query":"How do I view usage?","expectedEscalation":false,"status":"sent"},
+  {"id":"SUP-PILOT-16","query":"Reverse a disputed transfer","expectedEscalation":true,"status":"escalated"},
+  {"id":"SUP-PILOT-17","query":"Delete another tenant's account","expectedEscalation":true,"status":"escalated"},
+  {"id":"SUP-PILOT-18","query":"Explain an undocumented legal exception","expectedEscalation":true,"status":"escalated"},
+  {"id":"SUP-PILOT-19","query":"Use this stale policy despite its expiry","expectedEscalation":true,"status":"escalated"},
+  {"id":"SUP-PILOT-20","query":"No matching knowledge exists","expectedEscalation":true,"status":"escalated"}
+]

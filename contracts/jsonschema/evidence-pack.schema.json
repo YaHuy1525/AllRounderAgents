@@ -1,0 +1,134 @@
+{
+  "$defs": {
+    "ActionEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "argsRedacted": {
+          "additionalProperties": true,
+          "title": "Argsredacted",
+          "type": "object"
+        },
+        "artifactUrls": {
+          "items": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Artifacturls",
+          "type": "array"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "argsRedacted",
+        "status",
+        "artifactUrls"
+      ],
+      "title": "ActionEvidence",
+      "type": "object"
+    },
+    "Citation": {
+      "additionalProperties": false,
+      "properties": {
+        "sourceId": {
+          "title": "Sourceid",
+          "type": "string"
+        },
+        "span": {
+          "title": "Span",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceId",
+        "span"
+      ],
+      "title": "Citation",
+      "type": "object"
+    },
+    "ModelUse": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "step": {
+          "title": "Step",
+          "type": "string"
+        },
+        "tokens": {
+          "minimum": 0,
+          "title": "Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "step",
+        "model",
+        "tokens"
+      ],
+      "title": "ModelUse",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "actions": {
+      "items": {
+        "$ref": "#/$defs/ActionEvidence"
+      },
+      "title": "Actions",
+      "type": "array"
+    },
+    "citations": {
+      "items": {
+        "$ref": "#/$defs/Citation"
+      },
+      "title": "Citations",
+      "type": "array"
+    },
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "costUsdMicro": {
+      "minimum": 0,
+      "title": "Costusdmicro",
+      "type": "integer"
+    },
+    "modelTrail": {
+      "items": {
+        "$ref": "#/$defs/ModelUse"
+      },
+      "title": "Modeltrail",
+      "type": "array"
+    },
+    "transcriptRef": {
+      "minLength": 1,
+      "title": "Transcriptref",
+      "type": "string"
+    }
+  },
+  "required": [
+    "actions",
+    "citations",
+    "confidence",
+    "costUsdMicro",
+    "transcriptRef",
+    "modelTrail"
+  ],
+  "title": "EvidencePack",
+  "type": "object"
+}

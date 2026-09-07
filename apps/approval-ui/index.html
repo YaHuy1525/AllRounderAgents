@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <title>AllRounder Approvals</title>
+  </head>
+  <body>
+    <main>
+      <h1>Support approvals</h1>
+      <form id="login">
+        <label>Email <input id="email" type="email" required /></label>
+        <button type="submit">Send sign-in link</button>
+      </form>
+      <p id="status" role="status"></p>
+      <section id="approvals" aria-live="polite"></section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

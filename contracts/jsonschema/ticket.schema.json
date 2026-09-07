@@ -1,0 +1,114 @@
+{
+  "$defs": {
+    "Attachment": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "minimum": 0,
+          "title": "Bytes",
+          "type": "integer"
+        },
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "mime": {
+          "minLength": 1,
+          "title": "Mime",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "mime",
+        "bytes"
+      ],
+      "title": "Attachment",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "attachments": {
+      "items": {
+        "$ref": "#/$defs/Attachment"
+      },
+      "title": "Attachments",
+      "type": "array"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "eventId": {
+      "minLength": 1,
+      "title": "Eventid",
+      "type": "string"
+    },
+    "issueType": {
+      "minLength": 1,
+      "title": "Issuetype",
+      "type": "string"
+    },
+    "key": {
+      "pattern": "^[A-Z][A-Z0-9_]*-\\d+$",
+      "title": "Key",
+      "type": "string"
+    },
+    "labels": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Labels",
+      "type": "array"
+    },
+    "priority": {
+      "pattern": "^(Highest|High|Medium|Low|Lowest)$",
+      "title": "Priority",
+      "type": "string"
+    },
+    "project": {
+      "minLength": 1,
+      "title": "Project",
+      "type": "string"
+    },
+    "receivedAt": {
+      "format": "date-time",
+      "title": "Receivedat",
+      "type": "string"
+    },
+    "reporter": {
+      "minLength": 1,
+      "title": "Reporter",
+      "type": "string"
+    },
+    "summary": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Summary",
+      "type": "string"
+    }
+  },
+  "required": [
+    "key",
+    "project",
+    "issueType",
+    "labels",
+    "priority",
+    "summary",
+    "description",
+    "reporter",
+    "attachments",
+    "eventId",
+    "receivedAt"
+  ],
+  "title": "Ticket",
+  "type": "object"
+}

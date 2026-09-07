@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "Domain": {
+      "enum": [
+        "code",
+        "finance",
+        "marketing",
+        "support",
+        "unknown"
+      ],
+      "title": "Domain",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "confidence": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "domain": {
+      "$ref": "#/$defs/Domain"
+    },
+    "needsHuman": {
+      "title": "Needshuman",
+      "type": "boolean"
+    },
+    "rationale": {
+      "minLength": 1,
+      "title": "Rationale",
+      "type": "string"
+    },
+    "urgency": {
+      "maximum": 5,
+      "minimum": 1,
+      "title": "Urgency",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "domain",
+    "confidence",
+    "urgency",
+    "needsHuman",
+    "rationale"
+  ],
+  "title": "TriageVerdict",
+  "type": "object"
+}

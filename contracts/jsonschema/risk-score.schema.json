@@ -1,0 +1,57 @@
+{
+  "$defs": {
+    "Gate": {
+      "enum": [
+        "auto",
+        "approval",
+        "refuse"
+      ],
+      "title": "Gate",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "minLength": 1,
+      "title": "Action",
+      "type": "string"
+    },
+    "blastRadius": {
+      "pattern": "^(low|med|high)$",
+      "title": "Blastradius",
+      "type": "string"
+    },
+    "gate": {
+      "$ref": "#/$defs/Gate"
+    },
+    "reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Reasons",
+      "type": "array"
+    },
+    "reversibility": {
+      "pattern": "^(reversible|compensable|irreversible)$",
+      "title": "Reversibility",
+      "type": "string"
+    },
+    "score": {
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Score",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "action",
+    "blastRadius",
+    "reversibility",
+    "score",
+    "gate",
+    "reasons"
+  ],
+  "title": "RiskScore",
+  "type": "object"
+}

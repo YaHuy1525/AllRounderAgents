@@ -1,0 +1,53 @@
+[
+  {
+    "name": "code_bug",
+    "expectedDomain": "code",
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000001, "issue": {"id": "10001", "key": "ENG-101", "fields": {"project": {"key": "ENG"}, "issuetype": {"name": "Bug"}, "labels": ["backend"], "priority": {"name": "High"}, "summary": "API returns 500 stack trace", "description": "Regression in checkout endpoint", "reporter": {"accountId": "acct-1"}, "attachment": []}}}
+  },
+  {
+    "name": "code_ci",
+    "expectedDomain": "code",
+    "payload": {"webhookEvent": "jira:issue_updated", "timestamp": 1788720000002, "issue": {"id": "10002", "key": "ENG-102", "fields": {"project": {"key": "ENG"}, "issuetype": {"name": "Task"}, "labels": ["code", "ci"], "priority": {"name": "Medium"}, "summary": "Fix failing TypeScript build", "description": "Compiler reports a type mismatch", "reporter": {"displayName": "Engineer"}, "attachment": []}}}
+  },
+  {
+    "name": "finance_reconciliation",
+    "expectedDomain": "finance",
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000003, "issue": {"id": "10003", "key": "FIN-201", "fields": {"project": {"key": "FIN"}, "issuetype": {"name": "Task"}, "labels": ["reconciliation"], "priority": {"name": "Highest"}, "summary": "Reconcile month-end ledger", "description": "Investigate unmatched journal entries", "reporter": {"accountId": "acct-2"}, "attachment": []}}}
+  },
+  {
+    "name": "finance_invoice",
+    "expectedDomain": "finance",
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000004, "issue": {"id": "10004", "key": "FIN-202", "fields": {"project": {"key": "FIN"}, "issuetype": {"name": "Task"}, "labels": ["invoice"], "priority": {"name": "High"}, "summary": "Invoice variance requires audit", "description": "Compare ERP totals against the bank", "reporter": {"accountId": "acct-3"}, "attachment": []}}}
+  },
+  {
+    "name": "marketing_campaign",
+    "expectedDomain": "marketing",
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000005, "issue": {"id": "10005", "key": "MKT-301", "fields": {"project": {"key": "MKT"}, "issuetype": {"name": "Story"}, "labels": ["campaign"], "priority": {"name": "Medium"}, "summary": "Draft launch campaign brief", "description": "Create sourced social copy", "reporter": {"accountId": "acct-4"}, "attachment": []}}}
+  },
+  {
+    "name": "marketing_brand",
+    "expectedDomain": "marketing",
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000006, "issue": {"id": "10006", "key": "MKT-302", "fields": {"project": {"key": "MKT"}, "issuetype": {"name": "Task"}, "labels": ["brand"], "priority": {"name": "Low"}, "summary": "Review newsletter brand claims", "description": "Check legal wording and links", "reporter": {"displayName": "Marketer"}, "attachment": []}}}
+  },
+  {
+    "name": "support_login",
+    "expectedDomain": "support",
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000007, "issue": {"id": "10007", "key": "SUP-401", "fields": {"project": {"key": "SUP"}, "issuetype": {"name": "Service Request"}, "labels": ["customer"], "priority": {"name": "High"}, "summary": "Customer cannot log in", "description": "Needs account access help", "reporter": {"accountId": "acct-5"}, "attachment": []}}}
+  },
+  {
+    "name": "support_refund",
+    "expectedDomain": "support",
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000008, "issue": {"id": "10008", "key": "SUP-402", "fields": {"project": {"key": "SUP"}, "issuetype": {"name": "Question"}, "labels": ["support"], "priority": {"name": "Medium"}, "summary": "Customer asks about refund policy", "description": "Please provide a cited response", "reporter": {"accountId": "acct-6"}, "attachment": []}}}
+  },
+  {
+    "name": "unknown",
+    "expectedDomain": "unknown",
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000009, "issue": {"id": "10009", "key": "OPS-501", "fields": {"project": {"key": "OPS"}, "issuetype": {"name": "Task"}, "labels": [], "priority": {"name": "Lowest"}, "summary": "Arrange office plants", "description": "No matching specialist domain", "reporter": {"accountId": "acct-7"}, "attachment": []}}}
+  },
+  {
+    "name": "duplicate_delivery",
+    "expectedDomain": "support",
+    "duplicate": true,
+    "payload": {"webhookEvent": "jira:issue_created", "timestamp": 1788720000010, "issue": {"id": "10010", "key": "SUP-403", "fields": {"project": {"key": "SUP"}, "issuetype": {"name": "Question"}, "labels": ["support"], "priority": {"name": "Medium"}, "summary": "How do I reset my password?", "description": "FAQ request", "reporter": {"accountId": "acct-8"}, "attachment": []}}}
+  }
+]
