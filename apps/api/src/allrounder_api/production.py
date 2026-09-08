@@ -7,8 +7,10 @@ from .app import create_app
 from .approvals import ApprovalReceiptSigner
 from .auth import SupabaseJWKSVerifier
 from .coding_runs import PostgresCodingRunRepository
+from .finance_runs import PostgresFinanceRunRepository
 from .idempotency import RedisIdempotencyStore
 from .jira import HttpJiraTransport, JiraTools
+from .knowledge import OpenAICompatibleAdapter
 from .persistence import PostgresTicketQueue, PsycopgExecutor
 from .repositories import (
     PostgresApprovalRepository,
@@ -17,6 +19,15 @@ from .repositories import (
     PostgresSupportSendRepository,
 )
 from .settings import Settings
+
+
+def assert_default_project_is_allowlisted(
+    project_key: str,
+    allowlist: dict[str, list[str]],
+) -> None:
+    allowed = {project for projects in allowlist.values() for project in projects}
+    if project_key not in allowed:
+        raise ValueError("JIRA_PROJECT_KEY must be listed in JIRA_TENANT_PROJECT_ALLOWLIST")
 
 
 def create_production_app() -> FastAPI:
@@ -30,6 +41,14 @@ def create_production_app() -> FastAPI:
         raise ValueError("WEBHOOK_SECRET is required for production")
     if not jira_token:
         raise ValueError("JIRA_API_TOKEN is required for production")
+    if not settings.jira_project_key:
+        raise ValueError("JIRA_PROJECT_KEY is required for production")
+    if not settings.jira_tenant_project_allowlist:
+        raise ValueError("JIRA_TENANT_PROJECT_ALLOWLIST is required for production")
+    assert_default_project_is_allowlisted(
+        settings.jira_project_key,
+        settings.jira_tenant_project_allowlist,
+    )
     if not database_url:
         raise ValueError("DATABASE_URL is required for production")
     if len(approval_secret.encode()) < 32:
@@ -43,6 +62,16 @@ def create_production_app() -> FastAPI:
         settings.jira_email,
         jira_token,
     )
+    model_key = settings.model_api_key.get_secret_value()
+    chat_completer = None
+    if settings.model_name and model_key:
+        chat_completer = OpenAICompatibleAdapter(
+            base_url=settings.model_base_url,
+            api_key=model_key,
+            embedding_model=settings.embedding_model or settings.model_name,
+            dimensions=settings.embedding_dimensions,
+            chat_model=settings.model_name,
+        )
     app = create_app(
         settings=settings,
         dedupe=RedisIdempotencyStore(redis_client),
@@ -51,6 +80,7 @@ def create_production_app() -> FastAPI:
             jira_transport,
             RedisIdempotencyStore(redis_client),
         ),
+        jira_reader=jira_transport,
         auth_verifier=SupabaseJWKSVerifier(
             jwks_url=settings.supabase_jwks_url,
             issuer=settings.supabase_jwt_issuer,
@@ -61,10 +91,14 @@ def create_production_app() -> FastAPI:
         send_repository=PostgresSupportSendRepository(repositories),
         receipt_signer=ApprovalReceiptSigner(approval_secret.encode()),
         coding_runs=PostgresCodingRunRepository(repositories),
+        finance_runs=PostgresFinanceRunRepository(repositories),
+        chat_completer=chat_completer,
     )
     app.router.add_event_handler("startup", repositories.open)
     app.router.add_event_handler("shutdown", executor.close)
     app.router.add_event_handler("shutdown", repositories.close)
     app.router.add_event_handler("shutdown", jira_transport.close)
     app.router.add_event_handler("shutdown", redis_client.close)
+    if chat_completer is not None:
+        app.router.add_event_handler("shutdown", chat_completer.close)
     return app

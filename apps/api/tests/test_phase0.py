@@ -56,6 +56,45 @@ def test_rejects_missing_or_invalid_hmac() -> None:
         content=json.dumps(payload),
         headers={"x-hub-signature-256": "sha256=bad"},
     ).status_code == 401
+    assert client.post(
+        "/webhooks/jira",
+        content=json.dumps(payload),
+        headers={"x-hub-signature": "sha256=bad"},
+    ).status_code == 401
+
+
+def test_accepts_jira_cloud_x_hub_signature_header() -> None:
+    client, queue, _ = build_client()
+    payload = FIXTURES[0]["payload"]
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    response = client.post(
+        "/webhooks/jira",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-hub-signature": signature(body),
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ticketKey": "ENG-101", "deduped": False}
+    assert queue.items[0].ticket.key == "ENG-101"
+
+
+def test_rejects_conflicting_webhook_signature_headers() -> None:
+    client, queue, _ = build_client()
+    payload = FIXTURES[0]["payload"]
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    response = client.post(
+        "/webhooks/jira",
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "x-hub-signature": signature(body),
+            "x-hub-signature-256": "sha256=deadbeef",
+        },
+    )
+    assert response.status_code == 401
+    assert queue.items == []
 
 
 def test_webhook_verification_fails_closed_without_a_secret() -> None:

@@ -2,22 +2,30 @@
   "name": "allrounder-agent",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "engines": {
     "node": "22.x"
   },
   "workspaces": [
-    "packages/*",
     "apps/approval-ui"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
-    "test:coverage": "npm run test:coverage --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "dev:mastra": "mastra dev --dir src/mastra",
+    "studio": "mastra studio",
+    "lint": "tsc -p tsconfig.json --noEmit && npm run lint -w @allrounder/approval-ui",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json && npm run typecheck -w @allrounder/approval-ui",
+    "test": "vitest run && npm run test -w @allrounder/approval-ui",
+    "test:coverage": "vitest run --coverage",
+    "build": "npm run build --workspaces --if-present"
+  },
+  "dependencies": {
+    "@mastra/core": "^1.64.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@vitest/coverage-v8": "^3.0.4",
+    "mastra": "^1.27.3",
     "supabase": "^2.116.0",
     "typescript": "^5.7.3",
     "vitest": "^3.0.4"

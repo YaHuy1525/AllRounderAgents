@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
 import time
@@ -16,11 +17,13 @@ from pydantic import ValidationError
 
 from .approvals import ApprovalReceiptSigner
 from .auth import BearerVerifier, FakeBearerVerifier
+from .board_chat import ChatCompleter
 from .coding_runs import CodingRunRepository, InMemoryCodingRunRepository
 from .context import RequestContext
 from .dispatcher import DeterministicDispatcher, normalize_jira_payload
+from .finance_runs import FinanceRunRepository, InMemoryFinanceRunRepository
 from .idempotency import IdempotencyStore, MemoryIdempotencyStore
-from .jira import FakeJiraTransport, JiraTools
+from .jira import FakeJiraTransport, JiraIssueReader, JiraTools
 from .logging import configure_logging, get_logger
 from .queueing import MemoryQueue, TicketQueue
 from .repositories import (
@@ -40,6 +43,7 @@ def create_app(
     dedupe: IdempotencyStore | None = None,
     queue: TicketQueue | None = None,
     jira: JiraTools | None = None,
+    jira_reader: JiraIssueReader | None = None,
     dispatcher: DeterministicDispatcher | None = None,
     auth_verifier: BearerVerifier | None = None,
     approval_repository: ApprovalRepository | None = None,
@@ -47,6 +51,8 @@ def create_app(
     send_repository: SupportSendRepository | None = None,
     receipt_signer: ApprovalReceiptSigner | None = None,
     coding_runs: CodingRunRepository | None = None,
+    finance_runs: FinanceRunRepository | None = None,
+    chat_completer: ChatCompleter | None = None,
 ) -> FastAPI:
     config = settings or Settings()
     configure_logging(config.log_level)
@@ -54,6 +60,7 @@ def create_app(
     dedupe_store = dedupe or MemoryIdempotencyStore()
     ticket_queue = queue or MemoryQueue()
     jira_tools = jira or JiraTools(FakeJiraTransport(), MemoryIdempotencyStore())
+    board_reader = jira_reader or FakeJiraTransport()
     router = dispatcher or DeterministicDispatcher()
     app = FastAPI(title="AllRounderAgent API", version="0.1.0")
     app.add_middleware(
@@ -68,7 +75,7 @@ def create_app(
     @app.middleware("http")
     async def security_boundary(request: Request, call_next: Any) -> Any:
         now = time.monotonic()
-        key = request.client.host if request.client else "unknown"
+        key = _rate_limit_key(request, config.trusted_proxy_ips)
         bucket = [seen for seen in windows.get(key, []) if now - seen < 60]
         if key in windows:
             windows.move_to_end(key)
@@ -90,26 +97,57 @@ def create_app(
         )
         return response
 
+    from .chat_api import build_chat_router
+    from .jira_board_api import build_jira_board_router
     from .phase1_api import build_phase1_router
+    from .phase2_api import build_phase2_router
+    from .phase3_api import build_phase3_router
+
+    verifier = auth_verifier or FakeBearerVerifier({})
+    approvals = approval_repository or InMemoryApprovalRepository()
+    cases = case_repository or InMemoryCaseRepository()
+    sends = send_repository or InMemorySupportSendRepository()
+    signer = receipt_signer or _receipt_signer(config, secrets.token_bytes(32))
 
     app.include_router(
         build_phase1_router(
-            verifier=auth_verifier or FakeBearerVerifier({}),
-            approvals=approval_repository or InMemoryApprovalRepository(),
-            cases=case_repository or InMemoryCaseRepository(),
-            sends=send_repository or InMemorySupportSendRepository(),
-            signer=receipt_signer or _receipt_signer(config, secrets.token_bytes(32)),
+            verifier=verifier,
+            approvals=approvals,
+            cases=cases,
+            sends=sends,
+            signer=signer,
         )
     )
-
-    from .phase2_api import build_phase2_router
-
     app.include_router(
         build_phase2_router(
-            verifier=auth_verifier or FakeBearerVerifier({}),
+            verifier=verifier,
             runs=coding_runs or InMemoryCodingRunRepository(),
             repository_allowlist=config.github_repository_allowlist,
             base_branch=config.github_base_branch,
+        )
+    )
+    app.include_router(
+        build_phase3_router(
+            verifier=verifier,
+            runs=finance_runs or InMemoryFinanceRunRepository(),
+            approvals=approvals,
+            sends=sends,
+            signer=signer,
+        )
+    )
+    app.include_router(
+        build_jira_board_router(
+            verifier=verifier,
+            reader=board_reader,
+            default_project=config.jira_project_key,
+            tenant_project_allowlist=config.jira_tenant_project_allowlist,
+            jira_site=config.jira_base_url,
+        )
+    )
+    app.include_router(
+        build_chat_router(
+            verifier=verifier,
+            completer=chat_completer,
         )
     )
 
@@ -132,7 +170,7 @@ def create_app(
         body = await request.body()
         if len(body) > config.max_webhook_bytes:
             raise HTTPException(status.HTTP_413_CONTENT_TOO_LARGE, "Webhook payload too large")
-        _verify_signature(body, request.headers.get("x-hub-signature-256"), config)
+        _verify_signature(body, _webhook_signature_header(request), config)
         payload = _decode_payload(body)
         try:
             ticket = normalize_jira_payload(payload)
@@ -198,6 +236,14 @@ def create_app(
     return app
 
 
+def _webhook_signature_header(request: Request) -> str | None:
+    jira_header = request.headers.get("x-hub-signature")
+    legacy_header = request.headers.get("x-hub-signature-256")
+    if jira_header and legacy_header and jira_header != legacy_header:
+        return None
+    return jira_header or legacy_header
+
+
 def _verify_signature(body: bytes, supplied: str | None, settings: Settings) -> None:
     secret = settings.webhook_secret.get_secret_value()
     if not secret:
@@ -239,4 +285,15 @@ def _receipt_signer(settings: Settings, fallback: bytes) -> ApprovalReceiptSigne
         detail="APPROVAL_HMAC_SECRET is missing; receipts will not survive restart",
     )
     return ApprovalReceiptSigner(fallback)
+
+
+def _rate_limit_key(request: Request, trusted_proxy_ips: list[str]) -> str:
+    peer = request.client.host if request.client else "unknown"
+    if peer not in trusted_proxy_ips:
+        return peer
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0].strip()
+    try:
+        return str(ipaddress.ip_address(forwarded))
+    except ValueError:
+        return peer
 

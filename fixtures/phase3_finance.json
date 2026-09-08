@@ -1,0 +1,19 @@
+{
+  "period": "2026-08",
+  "currency": "USD",
+  "ledger": [
+    {"account": "1000", "amountCents": 10000, "currency": "USD", "externalRef": "INV-1"},
+    {"account": "1000", "amountCents": 2500, "currency": "USD", "externalRef": "INV-2"},
+    {"account": "2000", "amountCents": -5000, "currency": "USD", "externalRef": "PAY-1"}
+  ],
+  "bank": [
+    {"account": "1000", "amountCents": 10000, "currency": "USD", "externalRef": "INV-1"},
+    {"account": "1000", "amountCents": 2400, "currency": "USD", "externalRef": "INV-2"},
+    {"account": "1000", "amountCents": 3000, "currency": "USD", "externalRef": "DEP-9"}
+  ],
+  "expectedExceptions": [
+    {"type": "amount_mismatch", "externalRef": "INV-2", "specialist": "gl"},
+    {"type": "unmatched_ledger", "externalRef": "PAY-1", "specialist": "gl"},
+    {"type": "unmatched_bank", "externalRef": "DEP-9", "specialist": "treasury"}
+  ]
+}

@@ -19,7 +19,20 @@ from .contracts import (
 DOMAIN_TERMS: Mapping[Domain, frozenset[str]] = {
     Domain.CODE: frozenset({"bug", "code", "api", "compiler", "typescript", "build", "ci", "500"}),
     Domain.FINANCE: frozenset(
-        {"finance", "invoice", "ledger", "journal", "reconcile", "audit", "erp", "bank"}
+        {
+            "finance",
+            "invoice",
+            "ledger",
+            "journal",
+            "reconcile",
+            "reconciliation",
+            "audit",
+            "erp",
+            "bank",
+            "variance",
+            "treasury",
+            "unmatched",
+        }
     ),
     Domain.MARKETING: frozenset(
         {"marketing", "campaign", "brand", "newsletter", "social", "launch", "copy"}

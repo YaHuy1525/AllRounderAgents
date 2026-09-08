@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     database_url: SecretStr = SecretStr("")
     supabase_service_role_key: SecretStr = SecretStr("")
     jira_base_url: str = "https://example.atlassian.net"
+    jira_project_key: str = ""
     jira_email: str = ""
     jira_api_token: SecretStr = SecretStr("")
     log_level: str = "INFO"
@@ -20,6 +21,7 @@ class Settings(BaseSettings):
     supabase_jwt_issuer: str = ""
     supabase_jwt_audience: str = "authenticated"
     cors_allow_origins: list[str] = []
+    trusted_proxy_ips: list[str] = []
     rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
     model_base_url: str = "https://api.openai.com/v1"
     model_api_key: SecretStr = SecretStr("")
@@ -39,4 +41,5 @@ class Settings(BaseSettings):
     github_app_id: str = ""
     github_app_installation_id: str = ""
     github_app_private_key: SecretStr = SecretStr("")
+    jira_tenant_project_allowlist: dict[str, list[str]] = Field(default_factory=dict)
 

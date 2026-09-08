@@ -4,18 +4,171 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="referrer" content="no-referrer" />
-    <title>AllRounder Approvals</title>
+    <meta name="theme-color" content="#d9d9d9" />
+    <meta name="color-scheme" content="light" />
+    <title>AllRounder Jira Console</title>
   </head>
   <body>
-    <main>
-      <h1>Support approvals</h1>
-      <form id="login">
-        <label>Email <input id="email" type="email" required /></label>
-        <button type="submit">Send sign-in link</button>
+    <section id="loading-screen" class="gate-screen" aria-live="polite">
+      <p class="eyebrow">AllRounderAgent</p>
+      <h1>Restoring session</h1>
+      <p>Checking the cached sign-in…</p>
+    </section>
+
+    <section id="auth-screen" class="gate-screen" hidden>
+      <div class="auth-card">
+        <p class="eyebrow">AllRounderAgent</p>
+        <h1>Sign in to open the board</h1>
+        <p>Email sign-in links are turned off. Use your password. Hard-refresh this page if you still see the old “send link” form.</p>
+        <form id="login" class="login-form">
+          <label>
+            <span>Email</span>
+            <input id="email" type="email" placeholder="you@company.com" autocomplete="username" required />
+          </label>
+          <label>
+            <span>Password</span>
+            <input id="password" type="password" autocomplete="current-password" placeholder="Password" />
+          </label>
+          <label>
+            <span>One-time code</span>
+            <input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="Only if you already have a code" />
+          </label>
+          <label class="remember-row">
+            <input id="remember-email" type="checkbox" checked />
+            <span>Remember email on this device</span>
+          </label>
+          <button type="submit">Sign in</button>
+        </form>
+        <p id="auth-status" role="status">The Jira board stays locked until you sign in.</p>
+      </div>
+    </section>
+
+    <div id="app-shell" class="app-shell" hidden>
+      <aside class="rail" aria-label="Primary navigation">
+        <div class="brand-mark">A</div>
+        <button class="rail-button active" data-view="board" aria-label="Board">▦</button>
+        <button class="rail-button" data-view="approvals" aria-label="Approvals">✓</button>
+        <div class="rail-spacer"></div>
+        <button class="rail-button" data-view="settings" aria-label="Settings">⚙</button>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">AllRounderAgent</p>
+            <h1 id="workspace-title">Jira project console</h1>
+          </div>
+          <div class="session-meta">
+            <span id="session-email">Signed in</span>
+            <button id="sign-out" type="button">Sign out</button>
+          </div>
+        </header>
+
+        <nav class="tabs" aria-label="Workspace views">
+          <button class="tab active" data-view="board">Dashboard</button>
+          <button class="tab" data-view="approvals">Approvals</button>
+          <button class="tab" data-view="settings">Settings</button>
+        </nav>
+
+        <section id="board-view">
+          <div class="toolbar">
+            <label>
+              <span>Project</span>
+              <select id="project"></select>
+            </label>
+            <label>
+              <span>Board</span>
+              <select id="board-select"></select>
+            </label>
+            <label class="search-field">
+              <span>Search tickets</span>
+              <input id="search" type="search" placeholder="Key, title, type or label" />
+            </label>
+            <button id="refresh" type="button">Refresh Jira</button>
+          </div>
+
+          <div class="summary-grid" aria-label="Project summary">
+            <article><span>Total issues</span><strong id="total">0</strong></article>
+            <article><span>Progress</span><strong id="progress">0%</strong></article>
+            <article><span>Active work</span><strong id="active-count">0</strong></article>
+            <article><span>Last sync</span><strong id="last-sync">—</strong></article>
+          </div>
+
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Project board</p>
+              <h2 id="board-title">Jira issues</h2>
+            </div>
+            <p id="status" role="status">Loading Jira tickets…</p>
+          </div>
+          <section id="board" class="board" aria-live="polite"></section>
+        </section>
+
+        <section id="approvals-view" hidden>
+          <div class="section-heading">
+            <div><p class="eyebrow">Human gates</p><h2>Pending approvals</h2></div>
+          </div>
+          <section id="approvals" class="approval-list" aria-live="polite"></section>
+        </section>
+
+        <section id="settings-view" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h2>Jira connection</h2>
+            </div>
+            <p id="settings-status" role="status">Choose the Jira site, project, and board for this browser.</p>
+          </div>
+          <form id="settings-form" class="settings-form">
+            <label>
+              <span>Signed-in account</span>
+              <input id="settings-email" type="email" readonly />
+            </label>
+            <label>
+              <span>Jira site</span>
+              <input id="jira-site" type="url" readonly />
+            </label>
+            <label>
+              <span>Jira project</span>
+              <select id="settings-project"></select>
+            </label>
+            <label>
+              <span>Jira board</span>
+              <select id="settings-board"></select>
+            </label>
+            <div class="settings-actions">
+              <button type="submit">Save and open board</button>
+              <button id="reload-workspace" type="button">Reload from Jira</button>
+            </div>
+          </form>
+        </section>
+      </main>
+
+      <aside class="assistant-panel">
+        <div class="assistant-brand"><span>✦</span><strong>AllRounder</strong></div>
+        <div id="chat-log" class="chat-log" aria-live="polite">
+          <p class="chat-hint">Select a ticket for details, or ask about the board, sign-in, approvals, or finance posting.</p>
+        </div>
+        <form id="chat-form" class="assistant-input">
+          <label class="sr-only" for="chat-input">Message</label>
+          <textarea id="chat-input" placeholder="Ask about this project…" rows="4" maxlength="2000"></textarea>
+          <button id="chat-send" type="submit">Send</button>
+        </form>
+      </aside>
+    </div>
+    <dialog id="ticket-dialog" class="ticket-dialog">
+      <form method="dialog" class="ticket-window">
+        <header>
+          <div>
+            <p id="ticket-dialog-key" class="ticket-key"></p>
+            <h2 id="ticket-dialog-title"></h2>
+          </div>
+          <button type="submit" value="close">Close</button>
+        </header>
+        <dl id="ticket-dialog-facts"></dl>
+        <a id="ticket-dialog-jira" href="#" target="_blank" rel="noopener noreferrer">Open in Jira</a>
       </form>
-      <p id="status" role="status"></p>
-      <section id="approvals" aria-live="polite"></section>
-    </main>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
