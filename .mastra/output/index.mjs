@@ -24,7 +24,7 @@ import { AGENT_STREAM_TOPIC, DurableStepIds } from '@mastra/core/agent/durable';
 import { MASTRA_VERSIONS_KEY, mergeVersionOverrides } from '@mastra/core/di';
 import { MastraError as MastraError$1, ErrorDomain as ErrorDomain$1, ErrorCategory } from '@mastra/core/error';
 import { parseModelString, defaultGateways, PROVIDER_REGISTRY, EMBEDDING_MODELS, resolveModelConfig } from '@mastra/core/llm';
-import { createRequire } from 'module';
+import { createRequire as createRequire$1 } from 'module';
 import util, { isDeepStrictEqual } from 'util';
 import { MastraA2AError } from '@mastra/core/a2a';
 import * as crypto$2 from 'crypto';
@@ -47,6 +47,7 @@ import { tools } from './tools.mjs';
 import { Mastra } from '@mastra/core/mastra';
 import { createHash } from 'node:crypto';
 import { createStep, createWorkflow } from '@mastra/core/workflows';
+import { createRequire } from 'node:module';
 
 const DEEPSEEK_FLASH_MODEL = "deepseek/deepseek-v4-flash";
 const DEEPSEEK_FLASH_MODEL_CONFIG = {
@@ -1405,6 +1406,11 @@ function bodyObject(response) {
   }
   return response.body;
 }
+function aggregateCheckRuns(runs) {
+  if (runs.some((run) => typeof run === "object" && run !== null && "conclusion" in run && run.conclusion === "failure")) return "failure";
+  if (runs.some((run) => typeof run === "object" && run !== null && "status" in run && run.status !== "completed")) return "pending";
+  return "success";
+}
 function computePatchHash(files) {
   const fileManifest = files.map((file) => ({
     path: file.path,
@@ -1415,11 +1421,11 @@ function computePatchHash(files) {
   return createHash("sha256").update(JSON.stringify(fileManifest)).digest("hex");
 }
 class GitHubSourceReader {
-  constructor(transport, policy) {
-    this.transport = transport;
+  constructor(backend, policy) {
+    this.backend = backend;
     this.policy = policy;
   }
-  transport;
+  backend;
   policy;
   assertRepository(owner, repo, baseBranch) {
     if (!this.policy.repositories.includes(`${owner}/${repo}`)) {
@@ -1439,41 +1445,21 @@ class GitHubSourceReader {
   }
   async sourceSha(owner, repo, baseBranch) {
     this.assertRepository(owner, repo, baseBranch);
-    const response = bodyObject(await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
-      void 0,
-      this.policy.timeoutMs
-    ));
-    const object = response.object;
-    if (typeof object !== "object" || object === null || !("sha" in object) || typeof object.sha !== "string") throw new Error("Malformed GitHub ref response");
-    return object.sha;
+    return this.backend.headSha(owner, repo, baseBranch);
   }
   async content(owner, repo, path, sourceSha) {
     this.assertRepository(owner, repo, this.policy.baseBranch);
     this.assertPath(path);
-    const response = bodyObject(await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(sourceSha)}`,
-      void 0,
-      this.policy.timeoutMs
-    ));
-    if (typeof response.content !== "string" || typeof response.sha !== "string") {
-      throw new Error("Malformed GitHub contents response");
-    }
-    return {
-      content: Buffer.from(response.content.replace(/\s/g, ""), "base64").toString("utf8"),
-      sha: response.sha
-    };
+    return this.backend.fileContent(owner, repo, path, sourceSha);
   }
 }
 class GitHubWriter {
-  constructor(transport, policy, reader) {
-    this.transport = transport;
+  constructor(backend, policy, reader) {
+    this.backend = backend;
     this.policy = policy;
     this.reader = reader;
   }
-  transport;
+  backend;
   policy;
   reader;
   receipts = /* @__PURE__ */ new Map();
@@ -1524,9 +1510,112 @@ class GitHubWriter {
     }
     const actualSha = await this.reader.sourceSha(owner, repo, manifest.baseBranch);
     if (actualSha !== manifest.sourceSha) throw new StaleSourceError();
+    const { commitSha } = await this.backend.commitFiles(
+      owner,
+      repo,
+      manifest.branch,
+      title,
+      manifest.sourceSha,
+      files
+    );
+    const pull = await this.backend.openDraftPull(
+      owner,
+      repo,
+      manifest.branch,
+      manifest.baseBranch,
+      title,
+      body
+    );
+    const receipt = PullRequestReceiptSchema.parse({
+      url: pull.url,
+      number: pull.number,
+      draft: true,
+      branch: manifest.branch,
+      baseBranch: manifest.baseBranch,
+      sourceSha: manifest.sourceSha,
+      commitSha,
+      patchHash: manifest.patchHash,
+      replayed: false
+    });
+    this.receipts.set(key, receipt);
+    return receipt;
+  }
+  async findDurableReplay(owner, repo, manifest) {
+    const branchSha = await this.backend.branchHead(owner, repo, manifest.branch);
+    if (branchSha === void 0) return void 0;
+    const pulls = await this.backend.listOpenPulls(owner, repo, manifest.branch);
+    const matching = pulls.find((value) => value.draft && value.body.includes(`Patch hash: ${manifest.patchHash}`));
+    if (matching === void 0) {
+      throw new Error("Branch already exists without a matching idempotent Draft PR");
+    }
+    return PullRequestReceiptSchema.parse({
+      url: matching.url,
+      number: matching.number,
+      draft: true,
+      branch: manifest.branch,
+      baseBranch: manifest.baseBranch,
+      sourceSha: manifest.sourceSha,
+      commitSha: branchSha,
+      patchHash: manifest.patchHash,
+      replayed: true
+    });
+  }
+  async checks(owner, repo, commitSha) {
+    this.reader.assertRepository(owner, repo, this.policy.baseBranch);
+    const receipt = [...this.receipts.values()].find((value) => value.commitSha === commitSha);
+    return this.backend.checkRuns(owner, repo, commitSha, receipt?.number);
+  }
+}
+class RestGitHubBackend {
+  constructor(transport, policy) {
+    this.transport = transport;
+    this.policy = policy;
+  }
+  transport;
+  policy;
+  async headSha(owner, repo, branch) {
+    const response = bodyObject(await this.transport.request(
+      "GET",
+      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+      void 0,
+      this.policy.timeoutMs
+    ));
+    const object = response.object;
+    if (typeof object !== "object" || object === null || !("sha" in object) || typeof object.sha !== "string") throw new Error("Malformed GitHub ref response");
+    return object.sha;
+  }
+  async branchHead(owner, repo, branch) {
+    const response = await this.transport.request(
+      "GET",
+      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+      void 0,
+      this.policy.timeoutMs
+    );
+    if (response.status === 404) return void 0;
+    const parsed = bodyObject(response);
+    const object = parsed.object;
+    if (typeof object !== "object" || object === null || !("sha" in object) || typeof object.sha !== "string") throw new Error("Malformed GitHub branch response");
+    return object.sha;
+  }
+  async fileContent(owner, repo, path, refSha) {
+    const response = bodyObject(await this.transport.request(
+      "GET",
+      `/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(refSha)}`,
+      void 0,
+      this.policy.timeoutMs
+    ));
+    if (typeof response.content !== "string" || typeof response.sha !== "string") {
+      throw new Error("Malformed GitHub contents response");
+    }
+    return {
+      content: Buffer.from(response.content.replace(/\s/g, ""), "base64").toString("utf8"),
+      sha: response.sha
+    };
+  }
+  async commitFiles(owner, repo, branch, message, baseSha, files) {
     const commit = bodyObject(await this.transport.request(
       "GET",
-      `/repos/${owner}/${repo}/git/commits/${manifest.sourceSha}`,
+      `/repos/${owner}/${repo}/git/commits/${baseSha}`,
       void 0,
       this.policy.timeoutMs
     ));
@@ -1552,77 +1641,53 @@ class GitHubWriter {
     const createdCommit = bodyObject(await this.transport.request(
       "POST",
       `/repos/${owner}/${repo}/git/commits`,
-      { message: title, tree: newTree.sha, parents: [manifest.sourceSha] },
+      { message, tree: newTree.sha, parents: [baseSha] },
       this.policy.timeoutMs
     ));
     if (typeof createdCommit.sha !== "string") throw new Error("Malformed commit response");
     bodyObject(await this.transport.request(
       "POST",
       `/repos/${owner}/${repo}/git/refs`,
-      { ref: `refs/heads/${manifest.branch}`, sha: createdCommit.sha },
+      { ref: `refs/heads/${branch}`, sha: createdCommit.sha },
       this.policy.timeoutMs
     ));
+    return { commitSha: createdCommit.sha };
+  }
+  async openDraftPull(owner, repo, branch, baseBranch, title, body) {
     const pull = bodyObject(await this.transport.request(
       "POST",
       `/repos/${owner}/${repo}/pulls`,
-      { title, head: manifest.branch, base: manifest.baseBranch, body, draft: true },
+      { title, head: branch, base: baseBranch, body, draft: true },
       this.policy.timeoutMs
     ));
     if (typeof pull.html_url !== "string" || typeof pull.number !== "number") {
       throw new Error("Malformed pull request response");
     }
-    const receipt = PullRequestReceiptSchema.parse({
-      url: pull.html_url,
-      number: pull.number,
-      draft: true,
-      branch: manifest.branch,
-      baseBranch: manifest.baseBranch,
-      sourceSha: manifest.sourceSha,
-      commitSha: createdCommit.sha,
-      patchHash: manifest.patchHash,
-      replayed: false
-    });
-    this.receipts.set(key, receipt);
-    return receipt;
+    return { number: pull.number, url: pull.html_url };
   }
-  async findDurableReplay(owner, repo, manifest) {
-    const branchResponse = await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(manifest.branch)}`,
-      void 0,
-      this.policy.timeoutMs
-    );
-    if (branchResponse.status === 404) return void 0;
-    const branch = bodyObject(branchResponse);
-    const object = branch.object;
-    if (typeof object !== "object" || object === null || !("sha" in object) || typeof object.sha !== "string") throw new Error("Malformed GitHub branch response");
+  async listOpenPulls(owner, repo, branch) {
     const pulls = await this.transport.request(
       "GET",
-      `/repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${manifest.branch}`)}&state=open`,
+      `/repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open`,
       void 0,
       this.policy.timeoutMs
     );
     if (pulls.status < 200 || pulls.status >= 300 || !Array.isArray(pulls.body)) {
       throw new Error(`GitHub request failed (${pulls.status})`);
     }
-    const matching = pulls.body.find((value) => typeof value === "object" && value !== null && "body" in value && typeof value.body === "string" && "draft" in value && value.draft === true && value.body.includes(`Patch hash: ${manifest.patchHash}`));
-    if (typeof matching !== "object" || matching === null || !("html_url" in matching) || typeof matching.html_url !== "string" || !("number" in matching) || typeof matching.number !== "number") {
-      throw new Error("Branch already exists without a matching idempotent Draft PR");
-    }
-    return PullRequestReceiptSchema.parse({
-      url: matching.html_url,
-      number: matching.number,
-      draft: true,
-      branch: manifest.branch,
-      baseBranch: manifest.baseBranch,
-      sourceSha: manifest.sourceSha,
-      commitSha: object.sha,
-      patchHash: manifest.patchHash,
-      replayed: true
+    return pulls.body.map((value) => {
+      if (typeof value !== "object" || value === null || !("number" in value) || typeof value.number !== "number" || !("html_url" in value) || typeof value.html_url !== "string" || !("body" in value) || typeof value.body !== "string" || !("draft" in value) || typeof value.draft !== "boolean") {
+        throw new Error("Malformed pull request list response");
+      }
+      return {
+        number: value.number,
+        url: value.html_url,
+        body: value.body,
+        draft: value.draft
+      };
     });
   }
-  async checks(owner, repo, commitSha) {
-    this.reader.assertRepository(owner, repo, this.policy.baseBranch);
+  async checkRuns(owner, repo, commitSha, _pullNumber) {
     const response = bodyObject(await this.transport.request(
       "GET",
       `/repos/${owner}/${repo}/commits/${commitSha}/check-runs`,
@@ -1630,17 +1695,16 @@ class GitHubWriter {
       this.policy.timeoutMs
     ));
     const runs = Array.isArray(response.check_runs) ? response.check_runs : [];
-    if (runs.some((run) => typeof run === "object" && run !== null && "conclusion" in run && run.conclusion === "failure")) return "failure";
-    if (runs.some((run) => typeof run === "object" && run !== null && "status" in run && run.status !== "completed")) return "pending";
-    return "success";
+    return aggregateCheckRuns(runs);
   }
 }
 class GitHubRepositoryTools {
   reader;
   writer;
-  constructor(transport, policy, _tokenSeam) {
-    this.reader = new GitHubSourceReader(transport, policy);
-    this.writer = new GitHubWriter(transport, policy, this.reader);
+  constructor(backendOrTransport, policy) {
+    const backend = "headSha" in backendOrTransport ? backendOrTransport : new RestGitHubBackend(backendOrTransport, policy);
+    this.reader = new GitHubSourceReader(backend, policy);
+    this.writer = new GitHubWriter(backend, policy, this.reader);
   }
 }
 
@@ -2266,6 +2330,354 @@ function createAllRounderMastra(deps = {}) {
   });
 }
 
+const require$1 = createRequire(import.meta.url);
+const sdkClient = require$1("@modelcontextprotocol/sdk/client/index.js");
+const sdkAuth = require$1("@modelcontextprotocol/sdk/client/auth.js");
+const sdkStreamableHttp = require$1(
+  "@modelcontextprotocol/sdk/client/streamableHttp.js"
+);
+const Client = sdkClient.Client;
+const UnauthorizedError = sdkAuth.UnauthorizedError;
+const StreamableHTTPClientTransport = sdkStreamableHttp.StreamableHTTPClientTransport;
+
+const GITHUB_MCP_DEFAULT_URL = "https://api.githubcopilot.com/mcp/";
+class GitHubMcpError extends Error {
+  constructor(tool, message, cause) {
+    super(message);
+    this.tool = tool;
+    this.cause = cause;
+    this.name = "GitHubMcpError";
+  }
+  tool;
+  cause;
+}
+class SdkGitHubMcpSession {
+  constructor(serverUrl, token) {
+    this.serverUrl = serverUrl;
+    this.token = token;
+  }
+  serverUrl;
+  token;
+  client;
+  transport;
+  async connect() {
+    if (this.client !== void 0) return;
+    const client = new Client(
+      { name: "allrounder-coding-agent", version: "0.1.0" },
+      { capabilities: {} }
+    );
+    const transport = new StreamableHTTPClientTransport(
+      new URL(this.serverUrl),
+      this.token === void 0 || this.token === "" ? void 0 : { requestInit: { headers: { Authorization: `Bearer ${this.token}` } } }
+    );
+    this.client = client;
+    this.transport = transport;
+    try {
+      await client.connect(transport);
+    } catch (error) {
+      this.client = void 0;
+      this.transport = void 0;
+      if (error instanceof UnauthorizedError) {
+        throw new GitHubMcpError(
+          "connect",
+          "GitHub MCP authorization failed. Set GITHUB_MCP_TOKEN (or GITHUB_TOKEN) to a classic repo-scope PAT or a fine-grained token with Contents and Pull requests read/write, then verify with `node scripts/github-mcp-verify.mjs`.",
+          error
+        );
+      }
+      throw error;
+    }
+  }
+  async listTools() {
+    await this.connect();
+    const result = await this.client?.listTools();
+    return result?.tools.map((tool) => ({ name: tool.name })) ?? [];
+  }
+  async callTool(name, args) {
+    await this.connect();
+    const result = await this.client?.callTool({ name, arguments: args });
+    return result ?? {};
+  }
+  async close() {
+    const transport = this.transport;
+    this.client = void 0;
+    this.transport = void 0;
+    if (transport !== void 0) await transport.close();
+  }
+}
+function objectValue(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value : void 0;
+}
+function toolText(result) {
+  if (!Array.isArray(result.content)) return "";
+  return result.content.filter((part) => typeof part?.text === "string").map((part) => part.text).join("\n");
+}
+function resourceText(result) {
+  if (!Array.isArray(result.content)) return void 0;
+  for (const part of result.content) {
+    if (typeof part?.resource?.text === "string") return part.resource.text;
+  }
+  return void 0;
+}
+function metaSha(result) {
+  if (!Array.isArray(result.content)) return "";
+  for (const part of result.content) {
+    const match = typeof part?.text === "string" ? part.text.match(/SHA:\s*([0-9a-f]{40})/) : void 0;
+    if (match?.[1] !== void 0) return match[1];
+  }
+  return "";
+}
+function toolData(result) {
+  if (objectValue(result.structuredContent) !== void 0) return result.structuredContent;
+  const text = toolText(result);
+  if (text.trim() === "") return void 0;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+class McpGitHubBackend {
+  requiredTools = [
+    "get_commit",
+    "get_file_contents",
+    "push_files",
+    "create_pull_request",
+    "list_pull_requests"
+  ];
+  tools;
+  session;
+  closeSession = false;
+  constructor(opts) {
+    if (opts?.session !== void 0) {
+      this.session = opts.session;
+      return;
+    }
+    const token = opts?.token ?? process.env.GITHUB_MCP_TOKEN ?? process.env.GITHUB_TOKEN;
+    this.session = new SdkGitHubMcpSession(
+      opts?.serverUrl ?? process.env.GITHUB_MCP_URL ?? GITHUB_MCP_DEFAULT_URL,
+      token
+    );
+    this.closeSession = true;
+  }
+  async assertTools() {
+    if (this.tools !== void 0) return;
+    const tools = new Set((await this.session.listTools()).map((tool) => tool.name));
+    const missing = this.requiredTools.filter((name) => !tools.has(name));
+    if (missing.length > 0) {
+      throw new GitHubMcpError(
+        "connect",
+        `GitHub MCP server is missing required tools: ${missing.join(", ")}`
+      );
+    }
+    this.tools = tools;
+  }
+  async callRaw(tool, args, conflictIsStale = false) {
+    await this.assertTools();
+    let result;
+    try {
+      result = await this.session.callTool(tool, args);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/Unauthorized|401|invalid token|token.*expired/i.test(message)) {
+        throw new GitHubMcpError(
+          tool,
+          `GitHub MCP authorization failed: ${message}`,
+          error
+        );
+      }
+      if (conflictIsStale && /already exists|not fast-forward|fast-forward|reference/i.test(message)) {
+        throw new StaleSourceError();
+      }
+      throw new GitHubMcpError(tool, `GitHub MCP call failed: ${message}`, error);
+    }
+    if (result.isError === true) {
+      const message = toolText(result);
+      if (conflictIsStale && /already exists|fast-forward/i.test(message)) {
+        throw new StaleSourceError();
+      }
+      throw new GitHubMcpError(tool, message === "" ? "MCP tool reported an error" : message);
+    }
+    return result;
+  }
+  async call(tool, args, conflictIsStale = false) {
+    return toolData(await this.callRaw(tool, args, conflictIsStale));
+  }
+  responseObject(tool, data) {
+    const value = objectValue(data);
+    if (value === void 0) {
+      throw new GitHubMcpError(tool, "MCP tool returned a non-object payload");
+    }
+    return value;
+  }
+  async headSha(owner, repo, branch) {
+    const data = this.responseObject("get_commit", await this.call(
+      "get_commit",
+      { owner, repo, sha: branch }
+    ));
+    if (typeof data.sha !== "string") {
+      throw new GitHubMcpError("get_commit", "Malformed commit response");
+    }
+    return data.sha;
+  }
+  async branchHead(owner, repo, branch) {
+    try {
+      const data = this.responseObject("get_commit", await this.call(
+        "get_commit",
+        { owner, repo, sha: branch }
+      ));
+      return typeof data.sha === "string" ? data.sha : void 0;
+    } catch (error) {
+      if (error instanceof GitHubMcpError && /not found|no commit found|404|could not resolve/i.test(error.message)) {
+        return void 0;
+      }
+      throw error;
+    }
+  }
+  async fileContent(owner, repo, path, refSha) {
+    const result = await this.callRaw("get_file_contents", {
+      owner,
+      repo,
+      path,
+      sha: refSha
+    });
+    const structured = objectValue(result.structuredContent);
+    if (structured !== void 0) {
+      if (typeof structured.content !== "string") {
+        throw new GitHubMcpError("get_file_contents", "Malformed file contents response");
+      }
+      return {
+        content: decodeFileContent(structured.content),
+        sha: typeof structured.sha === "string" ? structured.sha : ""
+      };
+    }
+    const resource = resourceText(result);
+    if (resource !== void 0) {
+      return { content: resource, sha: metaSha(result) };
+    }
+    const data = toolData(result);
+    const value = objectValue(data);
+    if (value !== void 0) {
+      if (typeof value.content !== "string") {
+        throw new GitHubMcpError("get_file_contents", "Malformed file contents response");
+      }
+      return {
+        content: decodeFileContent(value.content),
+        sha: typeof value.sha === "string" ? value.sha : ""
+      };
+    }
+    if (typeof data === "string") {
+      return { content: decodeFileContent(data), sha: metaSha(result) };
+    }
+    throw new GitHubMcpError("get_file_contents", "MCP tool returned a non-object payload");
+  }
+  async commitFiles(owner, repo, branch, message, _baseSha, files) {
+    await this.call(
+      "push_files",
+      {
+        owner,
+        repo,
+        branch,
+        files: files.map((file) => ({ path: file.path, content: file.content })),
+        message
+      },
+      true
+    );
+    return { commitSha: await this.headSha(owner, repo, branch) };
+  }
+  async openDraftPull(owner, repo, branch, baseBranch, title, body) {
+    const data = this.responseObject("create_pull_request", await this.call(
+      "create_pull_request",
+      { owner, repo, title, body, head: branch, base: baseBranch, draft: true },
+      true
+    ));
+    const url = typeof data.url === "string" ? data.url : typeof data.html_url === "string" ? data.html_url : "";
+    let number = typeof data.number === "number" ? data.number : Number.NaN;
+    if (!Number.isInteger(number) || number <= 0) {
+      const match = /\/pull\/(\d+)\/?$/.exec(url);
+      if (match?.[1] === void 0 || url === "") {
+        throw new GitHubMcpError("create_pull_request", "Malformed pull request response");
+      }
+      number = Number(match[1]);
+    }
+    return { number, url };
+  }
+  async listOpenPulls(owner, repo, branch) {
+    const data = await this.call("list_pull_requests", {
+      owner,
+      repo,
+      state: "open",
+      head: `${owner}:${branch}`
+    });
+    const rawList = Array.isArray(data) ? data : this.responseObject("list_pull_requests", data)?.pulls;
+    if (!Array.isArray(rawList)) {
+      throw new GitHubMcpError("list_pull_requests", "Malformed pull request list response");
+    }
+    return rawList.map((entry) => {
+      const value = objectValue(entry);
+      if (value === void 0 || typeof value.number !== "number" || typeof value.html_url !== "string") {
+        throw new GitHubMcpError("list_pull_requests", "Malformed pull request list response");
+      }
+      return {
+        number: value.number,
+        url: value.html_url,
+        body: typeof value.body === "string" ? value.body : "",
+        draft: value.draft === true
+      };
+    });
+  }
+  async checkRuns(owner, repo, commitSha, pullNumber) {
+    await this.assertTools();
+    if (pullNumber === void 0) {
+      throw new GitHubMcpError(
+        "checkRuns",
+        "GitHub MCP check runs require the pull request number (writer apply must precede checks)"
+      );
+    }
+    const tools = this.tools ?? /* @__PURE__ */ new Set();
+    if (tools.has("get_pull_request_status")) {
+      const data = this.responseObject("get_pull_request_status", await this.call(
+        "get_pull_request_status",
+        { owner, repo, pull_number: pullNumber }
+      ));
+      return normalizeCheckPayload(data);
+    }
+    if (tools.has("pull_request_read")) {
+      const data = this.responseObject("pull_request_read", await this.call(
+        "pull_request_read",
+        { owner, repo, pullNumber, method: "get_check_runs" }
+      ));
+      return normalizeCheckPayload(data);
+    }
+    throw new GitHubMcpError(
+      "checkRuns",
+      "GitHub MCP server exposes neither get_pull_request_status nor pull_request_read"
+    );
+  }
+  async close() {
+    if (this.closeSession) await this.session.close();
+  }
+}
+function normalizeCheckPayload(data) {
+  if (typeof data.state === "string") {
+    if (data.state === "FAILURE") return "failure";
+    if (data.state === "PENDING") return "pending";
+    if (data.state === "SUCCESS") return "success";
+  }
+  const runs = Array.isArray(data.check_runs) ? data.check_runs : Array.isArray(data.runs) ? data.runs : [];
+  return aggregateCheckRuns(runs);
+}
+function decodeFileContent(value) {
+  const compact = value.replace(/\s/g, "");
+  if (compact.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(compact)) {
+    try {
+      const decoded = Buffer.from(compact, "base64").toString("utf8");
+      if (decoded.length > 0 || compact.length === 0) return decoded;
+    } catch {
+    }
+  }
+  return value;
+}
+
 function readStringArrayEnv(name) {
   const raw = process.env[name];
   if (raw === void 0 || raw.trim() === "") return void 0;
@@ -2285,9 +2697,8 @@ function readPositiveNumberEnv(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 function buildCodingDeps() {
-  const token = process.env.GITHUB_TOKEN?.trim();
   const repositories = readStringArrayEnv("GITHUB_REPOSITORY_ALLOWLIST");
-  if (token === void 0 || token === "" || repositories === void 0 || repositories.length === 0) {
+  if (repositories === void 0 || repositories.length === 0) {
     return void 0;
   }
   const policy = {
@@ -2300,12 +2711,26 @@ function buildCodingDeps() {
     maxPatchBytes: readPositiveNumberEnv("GITHUB_MAX_PATCH_BYTES", 25e4),
     timeoutMs: readPositiveNumberEnv("GITHUB_REQUEST_TIMEOUT_SECONDS", 10) * 1e3
   };
+  const access = process.env.GITHUB_ACCESS?.trim() || "mcp";
+  if (access === "mcp") {
+    const token2 = process.env.GITHUB_MCP_TOKEN?.trim() ?? process.env.GITHUB_TOKEN?.trim();
+    if (token2 === void 0 || token2 === "") {
+      console.warn(
+        "[mastra] GITHUB_ACCESS=mcp but neither GITHUB_MCP_TOKEN nor GITHUB_TOKEN is set; first write (apply) will fail with an authorization error."
+      );
+    }
+    return { github: new GitHubRepositoryTools(new McpGitHubBackend(), policy) };
+  }
+  const token = process.env.GITHUB_TOKEN?.trim();
+  if (token === void 0 || token === "") {
+    return void 0;
+  }
   return { github: new GitHubRepositoryTools(new FetchGitHubTransport(token), policy) };
 }
 const coding = buildCodingDeps();
 if (coding === void 0) {
   console.warn(
-    "[mastra] GITHUB_TOKEN and GITHUB_REPOSITORY_ALLOWLIST are not both set; codingFlow is not registered (financeFlow only)."
+    "[mastra] GITHUB_REPOSITORY_ALLOWLIST is not set, or GITHUB_ACCESS=rest without GITHUB_TOKEN; codingFlow is not registered (financeFlow only)."
   );
 }
 const mastra = createAllRounderMastra(coding === void 0 ? {} : { coding });
@@ -15983,7 +16408,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 	enumerable: true
 }) , mod));
 var __toCommonJS = (mod) => __hasOwnProp.call(mod, "module.exports") ? mod["module.exports"] : __copyProps(__defProp({}, "__esModule", { value: true }), mod);
-var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
+var __require = /* #__PURE__ */ (() => createRequire$1(import.meta.url))();
 
 //#region src/server/schemas/common.ts
 /**

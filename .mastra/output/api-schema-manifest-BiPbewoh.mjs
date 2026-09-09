@@ -44,6 +44,7 @@ import './tools.mjs';
 import '@mastra/core/mastra';
 import 'node:crypto';
 import '@mastra/core/workflows';
+import 'node:module';
 
 //#region src/server/server-adapter/api-schema-manifest.ts
 function convertSchema(schema) {

@@ -1,7 +1,12 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+// The SDK is loaded through mcp-sdk-loader: the Mastra dev bundler rewrites
+// static third-party import specifiers with OS path separators on Windows,
+// which Node cannot resolve (see the loader's comment).
+import {
+  Client,
+  StreamableHTTPClientTransport,
+  UnauthorizedError,
+} from "./mcp-sdk-loader.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import {
   StaleSourceError,

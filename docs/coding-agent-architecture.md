@@ -271,6 +271,14 @@ allowlisted — the actor may only declare these four.
 - Suspended approval runs are resumable through the workflow's suspend/resume
   primitives with `CodingApprovalSuspendPayload` / `CodingApprovalResumeSchema`
   (`approved` + receipt, or `rejected`/`expired`).
+- **Windows dev-bundler constraint (2026-09-10):** the Mastra dev bundler
+  rewrites static imports of third-party packages into specifiers rebuilt with
+  OS path separators (`@modelcontextprotocol/sdk\client\index.js`), which Node
+  rejects with `ERR_INVALID_MODULE_SPECIFIER` on boot. The MCP SDK is loaded
+  through `tools/mcp-sdk-loader.ts` (`createRequire` over the SDK's CJS build
+  keeps specifiers in plain strings the bundler never rewrites; same-named
+  value + `InstanceType` type exports keep tsc happy). Keep non-`@mastra` SDK
+  imports out of statically-bundled code; type-only imports are safe.
 
 ## 10. Security properties (by construction)
 
