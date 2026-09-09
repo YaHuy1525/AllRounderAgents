@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,6 +17,15 @@ class Settings(BaseSettings):
     jira_project_key: str = ""
     jira_email: str = ""
     jira_api_token: SecretStr = SecretStr("")
+    # Jira backend selection: "mcp" routes comment/transition/search through the
+    # Atlassian Rovo MCP server (org must enable API-token MCP access); "http"
+    # keeps the legacy read/write REST transport. Board listing always uses
+    # read-only REST GETs because Rovo has no agile-board tools.
+    jira_transport: Literal["http", "mcp"] = "mcp"
+    atlassian_mcp_url: str = "https://mcp.atlassian.com/v2/mcp"
+    # Optional site UUID for the Atlassian cloudId argument; when empty the site
+    # URL (jira_base_url) is sent, which the Rovo server resolves itself.
+    jira_cloud_id: str = ""
     log_level: str = "INFO"
     approval_hmac_secret: SecretStr = SecretStr("")
     supabase_jwks_url: str = ""

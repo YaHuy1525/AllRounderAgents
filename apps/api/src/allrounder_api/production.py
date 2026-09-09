@@ -10,6 +10,7 @@ from .coding_runs import PostgresCodingRunRepository
 from .finance_runs import PostgresFinanceRunRepository
 from .idempotency import RedisIdempotencyStore
 from .jira import HttpJiraTransport, JiraTools
+from .jira_mcp import McpJiraTransport
 from .knowledge import OpenAICompatibleAdapter
 from .persistence import PostgresTicketQueue, PsycopgExecutor
 from .repositories import (
@@ -57,11 +58,24 @@ def create_production_app() -> FastAPI:
     redis_client = Redis.from_url(settings.redis_url)
     executor = PsycopgExecutor(database_url)
     repositories = PostgresRepositories(database_url)
-    jira_transport = HttpJiraTransport(
-        settings.jira_base_url,
-        settings.jira_email,
-        jira_token,
-    )
+    jira_transport: HttpJiraTransport | McpJiraTransport
+    if settings.jira_transport == "mcp":
+        # MCP-native writes/search against the Rovo server (JIRA_TRANSPORT=mcp,
+        # the default); board listing stays on read-only REST GETs inside the
+        # transport. Requires API-token MCP access enabled by the org admin.
+        jira_transport = McpJiraTransport(
+            settings.jira_base_url,
+            settings.jira_email,
+            jira_token,
+            mcp_url=settings.atlassian_mcp_url,
+            cloud_id=settings.jira_cloud_id,
+        )
+    else:
+        jira_transport = HttpJiraTransport(
+            settings.jira_base_url,
+            settings.jira_email,
+            jira_token,
+        )
     model_key = settings.model_api_key.get_secret_value()
     chat_completer = None
     if settings.model_name and model_key:

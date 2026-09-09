@@ -7,6 +7,7 @@ from typing import TypedDict
 
 import httpx
 
+from .jira_mcp import McpJiraTransport
 from .settings import Settings
 
 
@@ -65,15 +66,53 @@ def _adf(text: str) -> dict[str, object]:
     }
 
 
-def main() -> int:
-    settings = Settings()
-    base_url = settings.jira_base_url.rstrip("/")
-    email = settings.jira_email
-    token = settings.jira_api_token.get_secret_value()
-    project = settings.jira_project_key
-    if not base_url or not email or not token or not project:
-        print("jira_env_missing", file=sys.stderr)
+def _seed_via_mcp(
+    settings: Settings,
+    base_url: str,
+    email: str,
+    token: str,
+    project: str,
+) -> int:
+    """MCP path: dedupe + create tickets through the Rovo server."""
+    transport = McpJiraTransport(
+        base_url,
+        email,
+        token,
+        mcp_url=settings.atlassian_mcp_url,
+        cloud_id=settings.jira_cloud_id,
+    )
+    try:
+        created: list[str] = []
+        for ticket in TICKETS:
+            existing = transport.search_jql(
+                f'project = "{project}" AND summary ~ "{ticket["summary"]}"',
+                1,
+            )
+            if existing:
+                key = existing[0].key
+                created.append(key)
+                print(f"{key} exists")
+                continue
+            key = transport.create_issue(
+                project,
+                ticket["summary"],
+                issue_type="Task",
+                labels=list(ticket["labels"]),
+                description=ticket["description"],
+            )
+            created.append(key)
+            print(key)
+        print("created=" + ",".join(created))
+        return 0
+    except httpx.HTTPError as error:
+        print(f"mcp_seed_failed {error}", file=sys.stderr)
         return 1
+    finally:
+        transport.close()
+
+
+def _seed_via_rest(base_url: str, email: str, token: str, project: str) -> int:
+    """Legacy REST path: seed tickets over the Jira REST API (ADF bodies)."""
     created: list[str] = []
     with httpx.Client(
         base_url=base_url,
@@ -122,6 +161,20 @@ def main() -> int:
             print(key)
     print("created=" + ",".join(created))
     return 0
+
+
+def main() -> int:
+    settings = Settings()
+    base_url = settings.jira_base_url.rstrip("/")
+    email = settings.jira_email
+    token = settings.jira_api_token.get_secret_value()
+    project = settings.jira_project_key
+    if not base_url or not email or not token or not project:
+        print("jira_env_missing", file=sys.stderr)
+        return 1
+    if settings.jira_transport == "mcp":
+        return _seed_via_mcp(settings, base_url, email, token, project)
+    return _seed_via_rest(base_url, email, token, project)
 
 
 if __name__ == "__main__":

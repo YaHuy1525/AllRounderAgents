@@ -23,6 +23,45 @@ export interface GitHubTransport {
   ): Promise<GitHubResponse>;
 }
 
+/**
+ * Host-agnostic Git host operations. `RestGitHubBackend` speaks the GitHub
+ * REST sequence verbatim; `McpGitHubBackend` (mcp.ts) maps the same
+ * operations onto the GitHub MCP server. Reader/writer policy logic lives
+ * above this seam, so the flow's deterministic gates are backend-agnostic.
+ */
+export interface GitHubBackend {
+  headSha(owner: string, repo: string, branch: string): Promise<string>;
+  branchHead(owner: string, repo: string, branch: string): Promise<string | undefined>;
+  fileContent(
+    owner: string,
+    repo: string,
+    path: string,
+    refSha: string,
+  ): Promise<{ content: string; sha: string }>;
+  commitFiles(
+    owner: string,
+    repo: string,
+    branch: string,
+    message: string,
+    baseSha: string,
+    files: PatchFile[],
+  ): Promise<{ commitSha: string }>;
+  openDraftPull(
+    owner: string,
+    repo: string,
+    branch: string,
+    baseBranch: string,
+    title: string,
+    body: string,
+  ): Promise<{ number: number; url: string }>;
+  listOpenPulls(
+    owner: string,
+    repo: string,
+    branch: string,
+  ): Promise<Array<{ number: number; url: string; body: string; draft: boolean }>>;
+  checkRuns(owner: string, repo: string, commitSha: string, pullNumber?: number): Promise<CheckStatus>;
+}
+
 export interface GitHubPolicy {
   repositories: string[];
   baseBranch: string;
@@ -106,6 +145,14 @@ function bodyObject(response: GitHubResponse): Record<string, unknown> {
   return response.body as Record<string, unknown>;
 }
 
+export function aggregateCheckRuns(runs: unknown[]): CheckStatus {
+  if (runs.some((run) => typeof run === "object" && run !== null
+    && "conclusion" in run && run.conclusion === "failure")) return "failure";
+  if (runs.some((run) => typeof run === "object" && run !== null
+    && "status" in run && run.status !== "completed")) return "pending";
+  return "success";
+}
+
 export interface PatchFileManifestEntry {
   path: string;
   sha256: string;
@@ -130,7 +177,7 @@ export function computePatchHash(files: PatchFile[]): string {
 
 export class GitHubSourceReader {
   constructor(
-    private readonly transport: GitHubTransport,
+    private readonly backend: GitHubBackend,
     private readonly policy: GitHubPolicy,
   ) {}
 
@@ -156,16 +203,7 @@ export class GitHubSourceReader {
 
   async sourceSha(owner: string, repo: string, baseBranch: string): Promise<string> {
     this.assertRepository(owner, repo, baseBranch);
-    const response = bodyObject(await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
-      undefined,
-      this.policy.timeoutMs,
-    ));
-    const object = response.object;
-    if (typeof object !== "object" || object === null || !("sha" in object)
-      || typeof object.sha !== "string") throw new Error("Malformed GitHub ref response");
-    return object.sha;
+    return this.backend.headSha(owner, repo, baseBranch);
   }
 
   async content(
@@ -176,19 +214,7 @@ export class GitHubSourceReader {
   ): Promise<{ content: string; sha: string }> {
     this.assertRepository(owner, repo, this.policy.baseBranch);
     this.assertPath(path);
-    const response = bodyObject(await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(sourceSha)}`,
-      undefined,
-      this.policy.timeoutMs,
-    ));
-    if (typeof response.content !== "string" || typeof response.sha !== "string") {
-      throw new Error("Malformed GitHub contents response");
-    }
-    return {
-      content: Buffer.from(response.content.replace(/\s/g, ""), "base64").toString("utf8"),
-      sha: response.sha,
-    };
+    return this.backend.fileContent(owner, repo, path, sourceSha);
   }
 }
 
@@ -196,7 +222,7 @@ export class GitHubWriter {
   private readonly receipts = new Map<string, PullRequestReceipt>();
 
   constructor(
-    private readonly transport: GitHubTransport,
+    private readonly backend: GitHubBackend,
     private readonly policy: GitHubPolicy,
     private readonly reader: GitHubSourceReader,
   ) {}
@@ -265,9 +291,141 @@ export class GitHubWriter {
 
     const actualSha = await this.reader.sourceSha(owner, repo, manifest.baseBranch);
     if (actualSha !== manifest.sourceSha) throw new StaleSourceError();
+    const { commitSha } = await this.backend.commitFiles(
+      owner,
+      repo,
+      manifest.branch,
+      title,
+      manifest.sourceSha,
+      files,
+    );
+    const pull = await this.backend.openDraftPull(
+      owner,
+      repo,
+      manifest.branch,
+      manifest.baseBranch,
+      title,
+      body,
+    );
+    const receipt = PullRequestReceiptSchema.parse({
+      url: pull.url,
+      number: pull.number,
+      draft: true,
+      branch: manifest.branch,
+      baseBranch: manifest.baseBranch,
+      sourceSha: manifest.sourceSha,
+      commitSha,
+      patchHash: manifest.patchHash,
+      replayed: false,
+    });
+    this.receipts.set(key, receipt);
+    return receipt;
+  }
+
+  private async findDurableReplay(
+    owner: string,
+    repo: string,
+    manifest: PreviewManifest,
+  ): Promise<PullRequestReceipt | undefined> {
+    const branchSha = await this.backend.branchHead(owner, repo, manifest.branch);
+    if (branchSha === undefined) return undefined;
+    const pulls = await this.backend.listOpenPulls(owner, repo, manifest.branch);
+    const matching = pulls.find((value) =>
+      value.draft && value.body.includes(`Patch hash: ${manifest.patchHash}`));
+    if (matching === undefined) {
+      throw new Error("Branch already exists without a matching idempotent Draft PR");
+    }
+    return PullRequestReceiptSchema.parse({
+      url: matching.url,
+      number: matching.number,
+      draft: true,
+      branch: manifest.branch,
+      baseBranch: manifest.baseBranch,
+      sourceSha: manifest.sourceSha,
+      commitSha: branchSha,
+      patchHash: manifest.patchHash,
+      replayed: true,
+    });
+  }
+
+  async checks(owner: string, repo: string, commitSha: string): Promise<CheckStatus> {
+    this.reader.assertRepository(owner, repo, this.policy.baseBranch);
+    const receipt = [...this.receipts.values()].find((value) => value.commitSha === commitSha);
+    return this.backend.checkRuns(owner, repo, commitSha, receipt?.number);
+  }
+}
+
+/**
+ * REST backend: the exact GitHub API sequence the flow used before the MCP
+ * migration, moved behind the `GitHubBackend` seam (blobs -> tree on the
+ * base commit -> commit with the pinned parent -> branch ref -> draft PR).
+ */
+export class RestGitHubBackend implements GitHubBackend {
+  constructor(
+    private readonly transport: GitHubTransport,
+    private readonly policy: GitHubPolicy,
+  ) {}
+
+  async headSha(owner: string, repo: string, branch: string): Promise<string> {
+    const response = bodyObject(await this.transport.request(
+      "GET",
+      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+      undefined,
+      this.policy.timeoutMs,
+    ));
+    const object = response.object;
+    if (typeof object !== "object" || object === null || !("sha" in object)
+      || typeof object.sha !== "string") throw new Error("Malformed GitHub ref response");
+    return object.sha;
+  }
+
+  async branchHead(owner: string, repo: string, branch: string): Promise<string | undefined> {
+    const response = await this.transport.request(
+      "GET",
+      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
+      undefined,
+      this.policy.timeoutMs,
+    );
+    if (response.status === 404) return undefined;
+    const parsed = bodyObject(response);
+    const object = parsed.object;
+    if (typeof object !== "object" || object === null || !("sha" in object)
+      || typeof object.sha !== "string") throw new Error("Malformed GitHub branch response");
+    return object.sha;
+  }
+
+  async fileContent(
+    owner: string,
+    repo: string,
+    path: string,
+    refSha: string,
+  ): Promise<{ content: string; sha: string }> {
+    const response = bodyObject(await this.transport.request(
+      "GET",
+      `/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(refSha)}`,
+      undefined,
+      this.policy.timeoutMs,
+    ));
+    if (typeof response.content !== "string" || typeof response.sha !== "string") {
+      throw new Error("Malformed GitHub contents response");
+    }
+    return {
+      content: Buffer.from(response.content.replace(/\s/g, ""), "base64").toString("utf8"),
+      sha: response.sha,
+    };
+  }
+
+  async commitFiles(
+    owner: string,
+    repo: string,
+    branch: string,
+    message: string,
+    baseSha: string,
+    files: PatchFile[],
+  ): Promise<{ commitSha: string }> {
     const commit = bodyObject(await this.transport.request(
       "GET",
-      `/repos/${owner}/${repo}/git/commits/${manifest.sourceSha}`,
+      `/repos/${owner}/${repo}/git/commits/${baseSha}`,
       undefined,
       this.policy.timeoutMs,
     ));
@@ -295,90 +453,76 @@ export class GitHubWriter {
     const createdCommit = bodyObject(await this.transport.request(
       "POST",
       `/repos/${owner}/${repo}/git/commits`,
-      { message: title, tree: newTree.sha, parents: [manifest.sourceSha] },
+      { message, tree: newTree.sha, parents: [baseSha] },
       this.policy.timeoutMs,
     ));
     if (typeof createdCommit.sha !== "string") throw new Error("Malformed commit response");
     bodyObject(await this.transport.request(
       "POST",
       `/repos/${owner}/${repo}/git/refs`,
-      { ref: `refs/heads/${manifest.branch}`, sha: createdCommit.sha },
+      { ref: `refs/heads/${branch}`, sha: createdCommit.sha },
       this.policy.timeoutMs,
     ));
+    return { commitSha: createdCommit.sha };
+  }
+
+  async openDraftPull(
+    owner: string,
+    repo: string,
+    branch: string,
+    baseBranch: string,
+    title: string,
+    body: string,
+  ): Promise<{ number: number; url: string }> {
     const pull = bodyObject(await this.transport.request(
       "POST",
       `/repos/${owner}/${repo}/pulls`,
-      { title, head: manifest.branch, base: manifest.baseBranch, body, draft: true },
+      { title, head: branch, base: baseBranch, body, draft: true },
       this.policy.timeoutMs,
     ));
     if (typeof pull.html_url !== "string" || typeof pull.number !== "number") {
       throw new Error("Malformed pull request response");
     }
-    const receipt = PullRequestReceiptSchema.parse({
-      url: pull.html_url,
-      number: pull.number,
-      draft: true,
-      branch: manifest.branch,
-      baseBranch: manifest.baseBranch,
-      sourceSha: manifest.sourceSha,
-      commitSha: createdCommit.sha,
-      patchHash: manifest.patchHash,
-      replayed: false,
-    });
-    this.receipts.set(key, receipt);
-    return receipt;
+    return { number: pull.number, url: pull.html_url };
   }
 
-  private async findDurableReplay(
+  async listOpenPulls(
     owner: string,
     repo: string,
-    manifest: PreviewManifest,
-  ): Promise<PullRequestReceipt | undefined> {
-    const branchResponse = await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(manifest.branch)}`,
-      undefined,
-      this.policy.timeoutMs,
-    );
-    if (branchResponse.status === 404) return undefined;
-    const branch = bodyObject(branchResponse);
-    const object = branch.object;
-    if (typeof object !== "object" || object === null || !("sha" in object)
-      || typeof object.sha !== "string") throw new Error("Malformed GitHub branch response");
+    branch: string,
+  ): Promise<Array<{ number: number; url: string; body: string; draft: boolean }>> {
     const pulls = await this.transport.request(
       "GET",
-      `/repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${manifest.branch}`)}&state=open`,
+      `/repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open`,
       undefined,
       this.policy.timeoutMs,
     );
     if (pulls.status < 200 || pulls.status >= 300 || !Array.isArray(pulls.body)) {
       throw new Error(`GitHub request failed (${pulls.status})`);
     }
-    const matching = pulls.body.find((value) =>
-      typeof value === "object" && value !== null
-      && "body" in value && typeof value.body === "string"
-      && "draft" in value && value.draft === true
-      && value.body.includes(`Patch hash: ${manifest.patchHash}`));
-    if (typeof matching !== "object" || matching === null
-      || !("html_url" in matching) || typeof matching.html_url !== "string"
-      || !("number" in matching) || typeof matching.number !== "number") {
-      throw new Error("Branch already exists without a matching idempotent Draft PR");
-    }
-    return PullRequestReceiptSchema.parse({
-      url: matching.html_url,
-      number: matching.number,
-      draft: true,
-      branch: manifest.branch,
-      baseBranch: manifest.baseBranch,
-      sourceSha: manifest.sourceSha,
-      commitSha: object.sha,
-      patchHash: manifest.patchHash,
-      replayed: true,
+    return pulls.body.map((value) => {
+      if (typeof value !== "object" || value === null
+        || !("number" in value) || typeof value.number !== "number"
+        || !("html_url" in value) || typeof value.html_url !== "string"
+        || !("body" in value) || typeof value.body !== "string"
+        || !("draft" in value) || typeof value.draft !== "boolean") {
+        throw new Error("Malformed pull request list response");
+      }
+      return {
+        number: value.number,
+        url: value.html_url,
+        body: value.body,
+        draft: value.draft,
+      };
     });
   }
 
-  async checks(owner: string, repo: string, commitSha: string): Promise<CheckStatus> {
-    this.reader.assertRepository(owner, repo, this.policy.baseBranch);
+  async checkRuns(
+    owner: string,
+    repo: string,
+    commitSha: string,
+    _pullNumber?: number,
+  ): Promise<CheckStatus> {
     const response = bodyObject(await this.transport.request(
       "GET",
       `/repos/${owner}/${repo}/commits/${commitSha}/check-runs`,
@@ -386,11 +530,7 @@ export class GitHubWriter {
       this.policy.timeoutMs,
     ));
     const runs = Array.isArray(response.check_runs) ? response.check_runs : [];
-    if (runs.some((run) => typeof run === "object" && run !== null
-      && "conclusion" in run && run.conclusion === "failure")) return "failure";
-    if (runs.some((run) => typeof run === "object" && run !== null
-      && "status" in run && run.status !== "completed")) return "pending";
-    return "success";
+    return aggregateCheckRuns(runs);
   }
 }
 
@@ -398,9 +538,14 @@ export class GitHubRepositoryTools {
   readonly reader: GitHubSourceReader;
   readonly writer: GitHubWriter;
 
-  constructor(transport: GitHubTransport, policy: GitHubPolicy, _tokenSeam?: string) {
-    this.reader = new GitHubSourceReader(transport, policy);
-    this.writer = new GitHubWriter(transport, policy, this.reader);
+  constructor(transport: GitHubTransport, policy: GitHubPolicy, _tokenSeam?: string);
+  constructor(backend: GitHubBackend, policy: GitHubPolicy);
+  constructor(backendOrTransport: GitHubTransport | GitHubBackend, policy: GitHubPolicy) {
+    const backend = "headSha" in backendOrTransport
+      ? backendOrTransport
+      : new RestGitHubBackend(backendOrTransport, policy);
+    this.reader = new GitHubSourceReader(backend, policy);
+    this.writer = new GitHubWriter(backend, policy, this.reader);
   }
 }
 
