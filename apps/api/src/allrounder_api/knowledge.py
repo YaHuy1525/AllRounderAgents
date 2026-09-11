@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -10,6 +12,8 @@ import httpx
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+from .resilience import retry_async
 
 
 class EmptyRetrievalError(LookupError):
@@ -108,6 +112,36 @@ class DeterministicEmbeddingProvider:
         return vectors
 
 
+def _sse_line_delta(line: str) -> tuple[bool, str] | None:
+    """Decode one SSE line: (True, "") is the terminal marker, (False, text) a delta."""
+    if not line.startswith("data:"):
+        return None
+    payload = line[5:].strip()
+    if not payload:
+        return None
+    if payload == "[DONE]":
+        return (True, "")
+    try:
+        value = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict):
+        return None
+    choices = value.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first = choices[0]
+    if not isinstance(first, dict):
+        return None
+    delta = first.get("delta")
+    if not isinstance(delta, dict):
+        return None
+    content = delta.get("content")
+    if isinstance(content, str) and content:
+        return (False, content)
+    return None
+
+
 class OpenAICompatibleAdapter:
     """Provider-neutral adapter for OpenAI-compatible embedding and chat endpoints."""
 
@@ -143,16 +177,47 @@ class OpenAICompatibleAdapter:
         )
         return str(payload["choices"][0]["message"]["content"])
 
+    async def stream(self, system: str, user: str) -> AsyncIterator[str]:
+        """Yield incremental chat deltas from the provider's SSE stream."""
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        body = {
+            "model": self.chat_model,
+            "temperature": 0,
+            "stream": True,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        async with self._client.stream(
+            "POST", f"{self._base_url}/chat/completions", json=body, headers=headers
+        ) as response:
+            if response.status_code >= 400:
+                await response.aread()
+                response.raise_for_status()
+            async for line in response.aiter_lines():
+                parsed = _sse_line_delta(line)
+                if parsed is None:
+                    continue
+                done, delta = parsed
+                if done:
+                    break
+                yield delta
+
     async def _post(self, path: str, body: dict[str, object]) -> dict[str, Any]:
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        response = await self._client.post(
-            f"{self._base_url}{path}", json=body, headers=headers
-        )
-        response.raise_for_status()
-        value = response.json()
-        if not isinstance(value, dict):
-            raise ValueError("Provider returned an invalid response")
-        return value
+
+        async def send() -> dict[str, Any]:
+            response = await self._client.post(
+                f"{self._base_url}{path}", json=body, headers=headers
+            )
+            response.raise_for_status()
+            value = response.json()
+            if not isinstance(value, dict):
+                raise ValueError("Provider returned an invalid response")
+            return value
+
+        return await retry_async(send)
 
     async def close(self) -> None:
         if self._owns_client:

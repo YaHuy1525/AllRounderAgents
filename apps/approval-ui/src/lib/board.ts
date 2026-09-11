@@ -11,14 +11,13 @@ export type JiraIssue = {
   browse_url: string;
 };
 
-export type BoardColumnId = "backlog" | "todo" | "ready" | "progress" | "done";
+export type BoardColumnId = "blocked" | "open" | "progress" | "review";
 
 export const BOARD_COLUMNS: ReadonlyArray<{ id: BoardColumnId; label: string }> = [
-  { id: "backlog", label: "Backlog" },
-  { id: "todo", label: "To Do" },
-  { id: "ready", label: "Ready for Dev" },
+  { id: "blocked", label: "Blocked" },
+  { id: "open", label: "Open" },
   { id: "progress", label: "In Progress" },
-  { id: "done", label: "Done" },
+  { id: "review", label: "Review" },
 ];
 
 export function safeBrowseUrl(value: string): string {
@@ -30,15 +29,26 @@ export function safeBrowseUrl(value: string): string {
   }
 }
 
+export function isCompletedStatus(status: string): boolean {
+  const normalized = status.trim().toLowerCase();
+  return ["done", "closed", "resolved", "complete"].some((token) => normalized.includes(token));
+}
+
 export function columnForStatus(status: string): BoardColumnId {
   const normalized = status.trim().toLowerCase();
-  if (normalized.includes("done") || normalized.includes("closed") || normalized.includes("resolved")) {
-    return "done";
+  if (normalized.includes("block")) return "blocked";
+  if (normalized.includes("review")) return "review";
+  if (
+    normalized.includes("progress") ||
+    normalized.includes("doing") ||
+    normalized.includes("in development")
+  ) {
+    return "progress";
   }
-  if (normalized.includes("progress") || normalized.includes("review")) return "progress";
-  if (normalized.includes("ready") || normalized.includes("selected")) return "ready";
-  if (normalized === "to do" || normalized === "todo" || normalized.includes("open")) return "todo";
-  return "backlog";
+  // The four-column sprint board keeps finished work visible in the terminal
+  // column instead of dropping it from the board entirely.
+  if (isCompletedStatus(normalized)) return "review";
+  return "open";
 }
 
 export function groupIssues(
@@ -46,11 +56,10 @@ export function groupIssues(
   query = "",
 ): Record<BoardColumnId, JiraIssue[]> {
   const groups: Record<BoardColumnId, JiraIssue[]> = {
-    backlog: [],
-    todo: [],
-    ready: [],
+    blocked: [],
+    open: [],
     progress: [],
-    done: [],
+    review: [],
   };
   const needle = query.trim().toLowerCase();
   for (const issue of issues) {
@@ -96,7 +105,7 @@ export function boardStats(issues: JiraIssue[]): {
   progress: number;
   active: number;
 } {
-  const completed = issues.filter((issue) => columnForStatus(issue.status) === "done").length;
+  const completed = issues.filter((issue) => isCompletedStatus(issue.status)).length;
   const inProgress = issues.filter((issue) => columnForStatus(issue.status) === "progress").length;
   return {
     total: issues.length,

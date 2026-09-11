@@ -9,6 +9,7 @@ import httpx
 
 from .context import RequestContext
 from .idempotency import IdempotencyStore
+from .resilience import retry_sync
 
 JIRA_PROJECT_KEY_PATTERN = r"^[A-Z][A-Z0-9_]{0,19}$"
 JIRA_TICKET_KEY_PATTERN = r"^[A-Z][A-Z0-9_]{0,19}-[1-9][0-9]{0,9}$"
@@ -95,7 +96,8 @@ class HttpJiraTransport:
 
     def add_comment(self, ticket_key: str, body: str) -> None:
         _validate_ticket_key(ticket_key)
-        response = self._client.post(
+        self._request(
+            "POST",
             f"/rest/api/3/issue/{ticket_key}/comment",
             json={
                 "body": {
@@ -110,20 +112,20 @@ class HttpJiraTransport:
                 }
             },
         )
-        response.raise_for_status()
 
     def transition(self, ticket_key: str, transition: str) -> None:
         _validate_ticket_key(ticket_key)
-        response = self._client.post(
+        self._request(
+            "POST",
             f"/rest/api/3/issue/{ticket_key}/transitions",
             json={"transition": {"id": transition}},
         )
-        response.raise_for_status()
 
     def search_issues(self, project: str, max_results: int) -> list[JiraBoardIssue]:
         if re.fullmatch(JIRA_PROJECT_KEY_PATTERN, project) is None:
             raise ValueError("Invalid Jira project key")
-        response = self._client.get(
+        response = self._request(
+            "GET",
             "/rest/api/3/search/jql",
             params={
                 "jql": f'project = "{project}" ORDER BY rank ASC, updated DESC',
@@ -133,7 +135,6 @@ class HttpJiraTransport:
                 ),
             },
         )
-        response.raise_for_status()
         payload = response.json()
         raw_issues = payload.get("issues", []) if isinstance(payload, dict) else []
         return [
@@ -148,8 +149,7 @@ class HttpJiraTransport:
         params: dict[str, str | int] = {"maxResults": 50}
         if project is not None:
             params["projectKeyOrId"] = project
-        response = self._client.get("/rest/agile/1.0/board", params=params)
-        response.raise_for_status()
+        response = self._request("GET", "/rest/agile/1.0/board", params=params)
         payload = response.json()
         raw_boards = payload.get("values", []) if isinstance(payload, dict) else []
         return [
@@ -161,13 +161,13 @@ class HttpJiraTransport:
     def search_board_issues(self, board_id: int, max_results: int) -> list[JiraBoardIssue]:
         if board_id < 1:
             raise ValueError("Invalid Jira board id")
-        meta = self._client.get(f"/rest/agile/1.0/board/{board_id}")
-        meta.raise_for_status()
+        meta = self._request("GET", f"/rest/agile/1.0/board/{board_id}")
         payload = meta.json()
         board = self._parse_board(payload if isinstance(payload, dict) else {})
         if board is None:
             return []
-        response = self._client.get(
+        response = self._request(
+            "GET",
             f"/rest/agile/1.0/board/{board_id}/issue",
             params={
                 "maxResults": max_results,
@@ -176,7 +176,6 @@ class HttpJiraTransport:
                 ),
             },
         )
-        response.raise_for_status()
         payload = response.json()
         raw_issues = payload.get("issues", []) if isinstance(payload, dict) else []
         return [
@@ -184,6 +183,16 @@ class HttpJiraTransport:
             for raw in raw_issues
             if isinstance(raw, dict) and (issue := self._parse_board_issue(raw, board.project))
         ]
+
+    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        """Send one logical request with bounded retries for transient failures."""
+
+        def send() -> httpx.Response:
+            response = self._client.request(method, path, **kwargs)
+            response.raise_for_status()
+            return response
+
+        return retry_sync(send)
 
     def _parse_board(self, raw: dict[str, Any]) -> JiraBoardSummary | None:
         board_id = raw.get("id")

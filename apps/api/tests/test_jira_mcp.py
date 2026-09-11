@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
 from allrounder_api.jira import JiraBoardIssue, JiraBoardSummary
-from allrounder_api.jira_mcp import McpJiraError, McpJiraTransport, McpToolResult
+from allrounder_api.jira_mcp import (
+    McpJiraError,
+    McpJiraTransport,
+    McpJiraUnavailable,
+    McpToolResult,
+)
 
 SITE = "https://example.atlassian.net"
 
@@ -118,7 +124,20 @@ def test_mcp_writes_reject_untrusted_ticket_keys() -> None:
     assert session.calls == []
 
 
-def test_mcp_error_payload_surfaces_as_http_error() -> None:
+def test_mcp_error_subclasses_http_error() -> None:
+    # The board router maps httpx.HTTPError onto 502 responses; keep the
+    # transport error hierarchy compatible with that catch-all.
+    assert issubclass(McpJiraUnavailable, McpJiraError)
+    assert issubclass(McpJiraError, httpx.HTTPError)
+
+
+def test_mcp_tool_rejection_degrades_to_rest_fallback() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(201, json={})
+
     session = FakeMcpSession(
         [
             McpToolResult(
@@ -128,31 +147,127 @@ def test_mcp_error_payload_surfaces_as_http_error() -> None:
             )
         ]
     )
-    client = transport(session)
+    rest_client = httpx.Client(base_url=SITE, transport=httpx.MockTransport(handler))
+    client = McpJiraTransport(
+        SITE, "user@example.com", "token", client=rest_client, session=session
+    )
     try:
-        with pytest.raises(McpJiraError) as excinfo:
+        client.add_comment("ENG-42", "hello")  # falls back instead of raising
+        client.transition("ENG-42", "31")  # degraded: skips MCP entirely
+    finally:
+        client.close()
+        rest_client.close()
+
+    assert seen == [
+        f"{SITE}/rest/api/3/issue/ENG-42/comment",
+        f"{SITE}/rest/api/3/issue/ENG-42/transitions",
+    ]
+    assert len(session.calls) == 1
+
+
+def test_rest_fallback_failure_surfaces_as_http_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"errorMessages": ["Unauthorized"]})
+
+    session = FakeMcpSession(
+        [
+            McpToolResult(
+                payload={"message": "session token is missing the scope claim"},
+                text="",
+                is_error=True,
+            )
+        ]
+    )
+    rest_client = httpx.Client(base_url=SITE, transport=httpx.MockTransport(handler))
+    client = McpJiraTransport(
+        SITE, "user@example.com", "token", client=rest_client, session=session
+    )
+    try:
+        with pytest.raises(httpx.HTTPError):
             client.add_comment("ENG-42", "hello")
     finally:
         client.close()
-    assert isinstance(excinfo.value, httpx.HTTPError)
-    assert "permission" in str(excinfo.value)
+        rest_client.close()
 
 
-def test_mcp_session_failure_is_wrapped() -> None:
+def test_mcp_session_failure_degrades_to_rest() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(201, json={})
+
     class BoomSession(FakeMcpSession):
         async def call_tool(self, name: str, arguments: dict[str, Any]) -> McpToolResult:
             await super().call_tool(name, arguments)
             raise RuntimeError("connection reset")
 
     session = BoomSession()
-    client = transport(session)
+    rest_client = httpx.Client(base_url=SITE, transport=httpx.MockTransport(handler))
+    client = McpJiraTransport(
+        SITE, "user@example.com", "token", client=rest_client, session=session
+    )
     try:
-        with pytest.raises(McpJiraError) as excinfo:
-            client.add_comment("ENG-42", "hello")
+        client.add_comment("ENG-42", "hello")  # wrapped as MCP failure, then REST
     finally:
         client.close()
-    assert isinstance(excinfo.value, httpx.HTTPError)
-    assert "connection reset" in str(excinfo.value)
+        rest_client.close()
+
+    assert seen == [f"{SITE}/rest/api/3/issue/ENG-42/comment"]
+
+
+def test_mcp_timeout_degrades_to_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("allrounder_api.jira_mcp._MCP_CALL_TIMEOUT", 0.05)
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"issues": []})
+
+    class HangingSession(FakeMcpSession):
+        async def call_tool(self, name: str, arguments: dict[str, Any]) -> McpToolResult:
+            self.calls.append((name, dict(arguments)))
+            await asyncio.sleep(1)
+            raise AssertionError("unreachable")
+
+    session = HangingSession()
+    rest_client = httpx.Client(base_url=SITE, transport=httpx.MockTransport(handler))
+    client = McpJiraTransport(
+        SITE, "user@example.com", "token", client=rest_client, session=session
+    )
+    try:
+        first = client.search_issues("SCRUM", 10)
+        second = client.search_issues("SCRUM", 10)  # degraded: straight to REST
+    finally:
+        client.close()
+        rest_client.close()
+
+    assert first == [] and second == []
+    assert len(session.calls) == 2  # first search retried once before degrading
+    assert len(seen) == 2
+    assert all("/rest/api/3/search/jql" in url for url in seen)
+
+
+def test_mcp_transient_failure_retries_once_before_degrading() -> None:
+    class FlakySession(FakeMcpSession):
+        async def call_tool(self, name: str, arguments: dict[str, Any]) -> McpToolResult:
+            self.calls.append((name, dict(arguments)))
+            if len(self.calls) == 1:
+                raise RuntimeError("connection reset")
+            return McpToolResult(payload=None, text="", is_error=False)
+
+    session = FlakySession()
+    client = transport(session)
+    try:
+        client.add_comment("ENG-42", "hello")
+    finally:
+        client.close()
+
+    assert [name for name, _ in session.calls] == [
+        "addOrEditJiraIssueComment",
+        "addOrEditJiraIssueComment",
+    ]
+    assert client._degraded_to_rest is False
 
 
 def test_mcp_search_parses_evidence_rows_with_fallbacks() -> None:

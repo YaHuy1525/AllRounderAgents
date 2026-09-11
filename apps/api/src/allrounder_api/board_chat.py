@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
-from typing import Protocol
+from collections.abc import AsyncIterator, Mapping
+from typing import Protocol, runtime_checkable
 
 from .jira import JIRA_TICKET_KEY_PATTERN
 
@@ -24,6 +24,13 @@ APP_GUIDE = "\n".join(
 
 class ChatCompleter(Protocol):
     async def complete(self, system: str, user: str) -> str: ...
+
+
+@runtime_checkable
+class ChatStreamer(Protocol):
+    """Optional streaming capability; adapters implement it alongside ChatCompleter."""
+
+    def stream(self, system: str, user: str) -> AsyncIterator[str]: ...
 
 
 def sanitize_tickets(raw: object) -> list[dict[str, str]]:

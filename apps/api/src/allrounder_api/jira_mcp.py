@@ -11,6 +11,11 @@ over the official Atlassian Rovo MCP server instead of the Jira REST API:
 - board listing stays on read-only REST GETs (HttpJiraTransport) because the
   Rovo server is issue-centric and exposes no agile-board tools.
 
+MCP-first with a documented REST fallback: when the first MCP call fails or
+times out (for example the org has not enabled API-token MCP access), the
+transport logs a warning and serves every later Jira operation from the REST
+paths for the rest of the process.
+
 The official ``mcp`` Python SDK is asyncio-only, so the transport owns a
 dedicated event-loop thread and sync callers (FastAPI worker threads) bridge
 with ``run_coroutine_threadsafe`` - the call-site signatures stay unchanged.
@@ -25,6 +30,8 @@ import json
 import re
 import threading
 from collections.abc import Coroutine
+from concurrent.futures import Future
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, TypeVar
@@ -38,6 +45,8 @@ from .jira import (
     JiraBoardIssue,
     JiraBoardSummary,
 )
+from .logging import get_logger
+from .resilience import retry_sync
 
 DEFAULT_ATLASSIAN_MCP_URL = "https://mcp.atlassian.com/v2/mcp"
 
@@ -55,6 +64,17 @@ REQUIRED_MCP_TOOLS: frozenset[str] = frozenset(
 _ISSUE_VIEW = "evidence"
 _PAGE_LIMIT = 100
 
+# Bound on a single MCP tool call. The SDK's stream read window is deliberately
+# long (it must outlive slow responses), so the transport enforces its own
+# ceiling and degrades to REST when the server does not answer in time.
+_MCP_CALL_TIMEOUT = 20.0
+
+# One retry (two attempts) bounds the latency added in front of the sticky
+# REST degradation: a hung server costs 2 x _MCP_CALL_TIMEOUT, not 3 x.
+_MCP_ATTEMPTS = 2
+
+logger = get_logger()
+
 
 class McpJiraError(httpx.HTTPError):
     """The Rovo MCP server rejected or could not serve an operation.
@@ -62,6 +82,19 @@ class McpJiraError(httpx.HTTPError):
     Subclasses httpx.HTTPError so existing error handling (board router 502
     mapping, tool-call catch-alls) keeps working unchanged.
     """
+
+
+class McpJiraUnavailable(McpJiraError):
+    """The MCP endpoint could not be reached or did not answer in time.
+
+    Distinct from a tool-level rejection so callers can tell "MCP is not
+    usable here" from "MCP refused this request".
+    """
+
+
+def _is_mcp_unavailable(error: BaseException) -> bool:
+    """Retry transport-level MCP failures; tool rejections degrade immediately."""
+    return isinstance(error, McpJiraUnavailable)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +117,12 @@ class JiraMcpSession(Protocol):
 def _basic_auth(email: str, api_token: str) -> str:
     credentials = f"{email}:{api_token}".encode()
     return "Basic " + base64.b64encode(credentials).decode()
+
+
+def _settle_future(future: Future[Any]) -> None:
+    """Consume a future's late outcome so asyncio logs no unretrieved error."""
+    if not future.cancelled():
+        future.exception()
 
 
 def _unwrap_data(payload: Any) -> Any:
@@ -189,7 +228,8 @@ class McpJiraTransport:
     """Jira transport routing writes and issue search over the Rovo MCP server.
 
     Sync facade over the asyncio SDK session: a dedicated event-loop thread is
-    started lazily on the first MCP call and stopped by :meth:`close`.
+    started lazily on the first MCP call and stopped by :meth:`close`. On the
+    first MCP failure the transport degrades to the REST paths below.
     """
 
     def __init__(
@@ -213,22 +253,37 @@ class McpJiraTransport:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._closed = False
+        # Set on the first failed MCP call; the process then stays on the
+        # documented REST fallback so requests never hang on a dead server.
+        self._degraded_to_rest = False
 
     # -- JiraTransport ----------------------------------------------------
 
     def add_comment(self, ticket_key: str, body: str) -> None:
         self._validate_ticket_key(ticket_key)
-        self._call_tool(
-            "addOrEditJiraIssueComment",
-            {
-                "cloudId": self._cloud_id,
-                "issueIdOrKey": ticket_key,
-                "commentBody": body,
-            },
-        )
+        if self._degraded_to_rest:
+            self._rest.add_comment(ticket_key, body)
+            return
+        try:
+            self._call_tool(
+                "addOrEditJiraIssueComment",
+                {
+                    "cloudId": self._cloud_id,
+                    "issueIdOrKey": ticket_key,
+                    "commentBody": body,
+                },
+            )
+        except McpJiraError as error:
+            # MCP-first: fall back to the documented REST write path so a site
+            # without API-token MCP access keeps working.
+            self._degrade_to_rest("add_comment", error)
+            self._rest.add_comment(ticket_key, body)
 
     def transition(self, ticket_key: str, transition: str) -> None:
         self._validate_ticket_key(ticket_key)
+        if self._degraded_to_rest:
+            self._rest.transition(ticket_key, transition)
+            return
         arguments: dict[str, Any] = {
             "cloudId": self._cloud_id,
             "issueIdOrKey": ticket_key,
@@ -239,15 +294,25 @@ class McpJiraTransport:
             arguments["transitionId"] = transition
         else:
             arguments["transitionName"] = transition
-        self._call_tool("transitionJiraIssue", arguments)
+        try:
+            self._call_tool("transitionJiraIssue", arguments)
+        except McpJiraError as error:
+            self._degrade_to_rest("transition", error)
+            self._rest.transition(ticket_key, transition)
 
     # -- JiraIssueReader --------------------------------------------------
 
     def search_issues(self, project: str, max_results: int) -> list[JiraBoardIssue]:
         if re.fullmatch(JIRA_PROJECT_KEY_PATTERN, project) is None:
             raise ValueError("Invalid Jira project key")
+        if self._degraded_to_rest:
+            return self._rest.search_issues(project, max_results)
         jql = f'project = "{project}" ORDER BY rank ASC, updated DESC'
-        return self.search_jql(jql, max_results)
+        try:
+            return self.search_jql(jql, max_results)
+        except McpJiraError as error:
+            self._degrade_to_rest("search_issues", error)
+            return self._rest.search_issues(project, max_results)
 
     def list_boards(self, project: str | None) -> list[JiraBoardSummary]:
         # Read-only REST fallback (D5): Rovo exposes no agile-board tools.
@@ -352,13 +417,37 @@ class McpJiraTransport:
         if re.fullmatch(JIRA_TICKET_KEY_PATTERN, ticket_key) is None:
             raise ValueError("Invalid Jira ticket key")
 
+    def _degrade_to_rest(self, operation: str, error: Exception) -> None:
+        """Pin this process to the REST fallback after the first MCP failure."""
+        with self._lock:
+            first_failure = not self._degraded_to_rest
+            self._degraded_to_rest = True
+        if first_failure:
+            logger.warning(
+                "jira_mcp_unavailable_using_rest_fallback",
+                operation=operation,
+                error=str(error),
+            )
+
     def _call_tool(self, name: str, arguments: dict[str, Any]) -> McpToolResult:
-        try:
-            result = self._run(self._session.call_tool(name, arguments))
-        except McpJiraError:
-            raise
-        except Exception as error:
-            raise McpJiraError(f"Jira MCP {name} call failed: {error}") from error
+        def invoke() -> McpToolResult:
+            try:
+                return self._run(
+                    self._session.call_tool(name, arguments),
+                    timeout=_MCP_CALL_TIMEOUT,
+                )
+            except McpJiraError:
+                raise
+            except Exception as error:
+                raise McpJiraUnavailable(
+                    f"Jira MCP {name} call failed: {error}"
+                ) from error
+
+        # Bounded retry for transport-level failures only (timeouts, connection
+        # errors); tool-level rejections degrade straight to REST below.
+        result = retry_sync(
+            invoke, attempts=_MCP_ATTEMPTS, should_retry=_is_mcp_unavailable
+        )
         if result.is_error:
             message = f"Jira MCP {name} failed"
             if isinstance(result.payload, dict) and isinstance(
@@ -370,7 +459,7 @@ class McpJiraTransport:
             raise McpJiraError(message)
         return result
 
-    def _run(self, coro: Coroutine[Any, Any, _T]) -> _T:
+    def _run(self, coro: Coroutine[Any, Any, _T], timeout: float | None = None) -> _T:
         with self._lock:
             if self._loop is None:
                 self._loop = asyncio.new_event_loop()
@@ -381,7 +470,18 @@ class McpJiraTransport:
                 )
                 self._thread.start()
             loop = self._loop
-        return asyncio.run_coroutine_threadsafe(coro, loop).result()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        if timeout is None:
+            return future.result()
+        try:
+            return future.result(timeout)
+        except FutureTimeoutError as error:
+            # The abandoned coroutine keeps running on the loop thread; settle
+            # its eventual outcome without blocking this caller.
+            future.add_done_callback(_settle_future)
+            raise McpJiraUnavailable(
+                f"Jira MCP call timed out after {timeout:g}s"
+            ) from error
 
     def _parse_issue(self, raw: dict[str, Any]) -> JiraBoardIssue | None:
         """Evidence-view row mapping, mirroring HttpJiraTransport field parsing."""

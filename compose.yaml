@@ -36,9 +36,9 @@ services:
       context: .
       dockerfile: apps/approval-ui/Dockerfile
       args:
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
-        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
-        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_SUPABASE_URL: ${VITE_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_API_URL: ${VITE_API_URL:-http://localhost:8000}
     ports:
       - "3000:8080"
     depends_on:
@@ -46,5 +46,34 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    restart: unless-stopped
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+
+  grafana:
+    image: grafana/grafana:13.2.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   redis-data:
+  prometheus-data:
+  grafana-data:

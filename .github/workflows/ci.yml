@@ -24,6 +24,8 @@ jobs:
         run: python -m mypy
       - name: Test with coverage
         run: python -m pytest --cov --cov-report=term-missing
+      - name: Golden ticket gate
+        run: python scripts/golden-eval.py
 
   typescript:
     runs-on: ubuntu-latest

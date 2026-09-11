@@ -9,6 +9,10 @@ dist/
 coverage/
 *.tsbuildinfo
 
+# Next.js build output (approval UI)
+.next/
+apps/approval-ui/out/
+
 # Mastra generated artifacts (keep .mastra/bundler-config.mjs tracked)
 .mastra/output/
 .mastra/.build/

@@ -77,6 +77,14 @@ class SupportSendReceipt:
     sent_at: datetime
 
 
+@dataclass(frozen=True)
+class FeedbackRecord:
+    tenant_id: str
+    message_sha256: str
+    rating: str
+    reason: str | None = None
+
+
 class CaseRepository(Protocol):
     async def create(self, case: CaseRecord) -> CaseRecord: ...
     async def append_event(
@@ -113,6 +121,10 @@ class SupportSendRepository(Protocol):
     async def send_once(
         self, idempotency_key: str, case_id: str, ticket_key: str, body: str
     ) -> SupportSendReceipt: ...
+
+
+class FeedbackRepository(Protocol):
+    async def store(self, feedback: FeedbackRecord) -> None: ...
 
 
 class InMemoryCaseRepository:
@@ -237,6 +249,24 @@ class InMemorySupportSendRepository:
         )
         self.sent[idempotency_key] = receipt
         return receipt
+
+
+class InMemoryFeedbackRepository:
+    """In-process feedback store; mirrors the Postgres redaction of free text."""
+
+    def __init__(self) -> None:
+        self.entries: list[FeedbackRecord] = []
+
+    async def store(self, feedback: FeedbackRecord) -> None:
+        reason = str(redact(feedback.reason)) if feedback.reason is not None else None
+        self.entries.append(
+            FeedbackRecord(
+                tenant_id=feedback.tenant_id,
+                message_sha256=feedback.message_sha256,
+                rating=feedback.rating,
+                reason=reason,
+            )
+        )
 
 
 class PostgresRepositories:
@@ -392,6 +422,20 @@ class PostgresRepositories:
             row = await cursor.fetchone()
         if row is None:
             raise ValueError("Receipt already consumed")
+
+    async def store_feedback(self, feedback: FeedbackRecord) -> None:
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                insert into public.chat_feedback
+                  (tenant_id, message_sha256, rating, reason)
+                values (%s, %s, %s, %s)
+                """,
+                (
+                    feedback.tenant_id, feedback.message_sha256, feedback.rating,
+                    str(redact(feedback.reason)) if feedback.reason is not None else None,
+                ),
+            )
 
 
 class PostgresCaseRepository:
@@ -562,6 +606,14 @@ class PostgresSupportSendRepository:
         self, idempotency_key: str, case_id: str, ticket_key: str, body: str
     ) -> SupportSendReceipt:
         return await self._database.send_once(idempotency_key, case_id, ticket_key, body)
+
+
+class PostgresFeedbackRepository:
+    def __init__(self, database: PostgresRepositories) -> None:
+        self._database = database
+
+    async def store(self, feedback: FeedbackRecord) -> None:
+        await self._database.store_feedback(feedback)
 
 
 def _approval_from_row(row: dict[str, Any]) -> ApprovalRecord:

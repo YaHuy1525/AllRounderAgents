@@ -44,14 +44,19 @@ apps/
   api/                  Python 3.12 FastAPI serving plane (allrounder_api):
                         webhooks, auth, dispatcher, approvals, coding/finance/support
                         runs, Jira transports (Rovo MCP + REST), Supabase persistence
-  approval-ui/          Minimal TypeScript SPA (Vite): Jira board + approval queue
+  approval-ui/          Next.js (App Router) console, statically exported (out/):
+                        Jira board + approval queue
 src/mastra/             Mastra agent plane: agents (14 across 5 lanes), flows,
                         GitHub MCP/REST tools, dev host instance (instance.ts)
 contracts/jsonschema/   Canonical Pydantic JSON Schemas: ticket, risk-score,
                         triage-verdict, evidence-pack
-supabase/migrations/    6 ordered SQL migrations: foundation → phase 3 finance
+supabase/migrations/    7 ordered SQL migrations: foundation → phase 3 finance → chat feedback
 fixtures/               Shared payloads used by Python and TypeScript parity tests
-scripts/                Developer/verification helpers (MCP connectivity checks, …)
+evals/                  Golden routing cases replayed by scripts/golden-eval.py (CI gate)
+ops/                    Compose ops stack: Prometheus scrape config + Grafana
+                        provisioning and the chat-stream dashboard
+scripts/                Developer/verification helpers: golden-eval, loadtest/k6-chat.js,
+                        MCP connectivity checks, …
 docs/                   Architecture reference, incl. the third-party call register
 ```
 
@@ -139,9 +144,11 @@ Supabase Postgres connection string), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY
 `JIRA_CLOUD_ID` block, `MODEL_*`, `DEEPSEEK_API_KEY`, `EMBEDDING_MODEL`,
 `EMBEDDING_DIMENSIONS=1536`, and the `GITHUB_*` block.
 
-**Browser-safe** (only these three, plus documented `NEXT_PUBLIC_*` equivalents):
-`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_API_URL`. The approval UI never uses
-the service-role key.
+**Browser-safe** (only these three): `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
+`VITE_API_URL`. `next.config.ts` bridges them to `NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `NEXT_PUBLIC_API_URL` for the browser bundle, so the
+root `.env` stays the single source of truth. The approval UI never uses the service-role
+key.
 
 `MODEL_NAME`, `MODEL_BASE_URL`, `EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS=1536` pin
 provider behavior and the migration's vector shape; keep them unchanged until a deliberate
@@ -232,9 +239,12 @@ uvicorn allrounder_api.production:create_production_app --factory --app-dir apps
 ```
 
 The production factory wires Redis deduplication, `PostgresTicketQueue` over the direct
-`DATABASE_URL`, Supabase JWKS bearer verification, durable repositories, and the
-configured Jira transport. Tests inject in-memory fakes, so the suite needs no Jira,
-Supabase, Redis, model, or GitHub credentials.
+`DATABASE_URL`, Supabase JWKS bearer verification, durable repositories, Redis-backed
+rate limiting (falling back to in-process enforcement when Redis is unhealthy),
+Prometheus metrics, and the configured Jira transport. Start it from the repository root:
+settings load `.env` relative to the working directory, so another CWD silently drops
+browser-facing configuration such as `CORS_ALLOW_ORIGINS`. Tests inject in-memory
+fakes, so the suite needs no Jira, Supabase, Redis, model, or GitHub credentials.
 
 Run the Mastra agent plane (Studio at the printed URL):
 
@@ -243,13 +253,15 @@ npm run dev:mastra     # mastra dev --dir src/mastra  (loads .env, registers fin
 npm run studio         # standalone Mastra Studio
 ```
 
-Run the approval UI separately:
+Run the approval UI separately (Next.js dev server pinned to `http://localhost:5173`, the
+CORS-allowed origin):
 
 ```powershell
 npm run dev -w @allrounder/approval-ui
 ```
 
-The UI uses Supabase magic-link auth and sends the access token as a bearer token. It
+The UI uses Supabase password auth (email sign-in links are turned off; a pasted
+one-time code is accepted when present) and sends the access token as a bearer token. It
 shows the Jira board (Backlog, To Do, Ready for Dev, In Progress, Done; links open in
 Jira) and the approval queue. Set `JIRA_PROJECT_KEY` and
 `JIRA_TENANT_PROJECT_ALLOWLIST`, then use **Refresh Jira** to load up to 100 issues via
@@ -262,14 +274,22 @@ ingress/load-balancer IPs whose `X-Forwarded-For` the API may trust.
 ## API surface
 
 All endpoints below `/approvals`, `/coding`, `/finance`, `/jira`, and `/chat` require a
-Supabase bearer token with tenant roles from signed `app_metadata`. The API adds
-security headers, per-IP rate limiting (per `TRUSTED_PROXY_IPS`), and no-store caching.
+Supabase bearer token with tenant roles from signed `app_metadata`; `/health` and
+`/metrics` stay unauthenticated. The API adds security headers, per-IP rate limiting
+(Redis fixed window in production, in-process sliding window otherwise; a JSON `429` body
+plus a `Retry-After` header in seconds when exceeded), and no-store caching. Outbound
+Jira, MCP, and model calls retry transient
+failures (transport errors and HTTP 429/5xx) with full-jitter backoff and honor
+`Retry-After` up to 5 s.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | POST | `/webhooks/jira` | Jira webhook entry: HMAC verification, dedupe, triage/pre-flight, enqueue + comment receipt (`deduped` on replay) |
 | GET | `/health` | Liveness |
+| GET | `/metrics` | Prometheus exposition: request/webhook counters, gate and approval decisions, chat answer sources and a `chat_first_token_seconds` TTFT histogram |
 | POST | `/chat` | Chat completion through the model router |
+| POST | `/chat/stream` | Same chat request streamed as SSE (`data:` JSON delta frames + a terminal `done` frame carrying `source` and `interrupted`) |
+| POST | `/chat/feedback` | Rate a reply (`up`/`down`/`report`) by client-computed `messageSha256` with an optional ≤ 200-char reason; message text is never stored |
 | GET | `/jira/workspace` | Tenant-scoped project/board visibility (board UI) |
 | GET | `/jira/issues` | Up to 100 issues via backend Jira credentials (board UI) |
 | POST | `/coding/runs` | Start a coding run (RCA → patch → Draft PR) |
@@ -293,6 +313,7 @@ started as runs and only execute through their gates.
 python -m ruff check apps/api
 python -m mypy                      # strict; packages allrounder_api
 python -m pytest                    # offline; coverage gate ≥ 80 % (fail_under)
+python scripts/golden-eval.py       # 12 golden routing cases; also a CI job step
 npm run typecheck                   # tsc root + test config + approval-ui
 npm test                            # vitest (src/mastra lanes) + approval-ui tests
 npm run test:coverage
@@ -311,8 +332,11 @@ npx vitest run src/mastra
 
 ## Docker
 
-The Compose stack runs the FastAPI service, the static UI, and Redis; Supabase stays
-hosted. Populate `.env`, apply the Supabase migrations, then:
+The Compose stack runs the FastAPI service, the static UI, Redis, and an ops pair:
+Prometheus (~15 s scrape of `api:8000/metrics`) and Grafana with a provisioned
+datasource plus the **AllRounder chat and API health** dashboard (`chat-stream`); both
+read `ops/` config and keep state in named volumes. Supabase stays hosted. Populate
+`.env`, apply the Supabase migrations, then:
 
 ```powershell
 docker compose build
@@ -320,10 +344,28 @@ docker compose up -d
 docker compose ps
 ```
 
-Open the UI at `http://localhost:3000` and the health endpoint at
-`http://localhost:8000/health`. The UI image receives only the `VITE_*` build arguments;
-backend secrets remain in the API container at runtime. Stop with `docker compose down`;
-add `--volumes` only when you intentionally want to delete Redis state.
+Open the UI at `http://localhost:3000`, the health endpoint at
+`http://localhost:8000/health`, Prometheus at `http://localhost:9090`, and Grafana at
+`http://localhost:3001` (admin login from `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`,
+defaulting to `admin` / `admin` for local use). The UI image receives only the
+browser-safe `NEXT_PUBLIC_*` build arguments (mapped from the root `VITE_*` values in
+`compose.yaml`); backend secrets remain in the API container at runtime. Stop with
+`docker compose down`; add `--volumes` only when you intentionally want to delete Redis,
+Prometheus, or Grafana state.
+
+## Load testing & evals
+
+Chat load tests use k6 (`scripts/loadtest/k6-chat.js`, see the
+[loadtest README](scripts/loadtest/README.md)): `chat` / `stream` / `mixed` flows, with
+thresholds on failure rate, p95 latency, and checks; `429`s are expected traffic and are
+validated for a numeric `Retry-After` instead of failing the run. Server-side TTFT
+(`chat_first_token_seconds`, split by `source`) shows on `/metrics` and in the Grafana
+dashboard while a run is in flight.
+
+Routing golden cases live in `evals/golden_tickets.jsonl` (12 pinned domain + gate
+expectations, including refuse and low-confidence escalation). Replay them with
+`python scripts/golden-eval.py`; CI runs the same script as the **Golden ticket gate**
+step.
 
 ## Documentation
 
@@ -340,7 +382,9 @@ add `--volumes` only when you intentionally want to delete Redis state.
   offline test suites; the Python suite and the Mastra lane tests are credential-free.
 - The coding and finance lanes execute end to end in tests and scripts; live model-driven
   runs need a real `DEEPSEEK_API_KEY`/`MODEL_API_KEY` (currently a placeholder) — the
-  deterministic engines and approval/evidence plumbing run without it.
+  deterministic engines and approval/evidence plumbing run without it. Model wiring is
+  OpenAI-compatible (`MODEL_BASE_URL`), so pointing it at a local server (Ollama `/v1`,
+  vLLM) exercises `/chat` and `/chat/stream` end to end without an external key.
 - The marketing lane has agents and contracts but no workflow yet.
 - Board listing always uses read-only REST (Rovo MCP exposes no agile-board tools);
   legacy `JIRA_TRANSPORT=http` and `GITHUB_ACCESS=rest` fallbacks remain tested options.

@@ -8,19 +8,19 @@ RUN npm ci --workspace @allrounder/approval-ui --include-workspace-root
 
 COPY apps/approval-ui ./apps/approval-ui
 
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
-ARG VITE_API_URL=http://localhost:8000
-ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
-    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
-    VITE_API_URL=$VITE_API_URL
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
+    NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
 RUN npm run build --workspace @allrounder/approval-ui
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 
 COPY apps/approval-ui/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=builder /app/apps/approval-ui/dist /usr/share/nginx/html
+COPY --from=builder /app/apps/approval-ui/out /usr/share/nginx/html
 
 EXPOSE 8080
 

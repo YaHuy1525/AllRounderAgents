@@ -12,10 +12,13 @@ from .idempotency import RedisIdempotencyStore
 from .jira import HttpJiraTransport, JiraTools
 from .jira_mcp import McpJiraTransport
 from .knowledge import OpenAICompatibleAdapter
+from .metrics import MetricsRegistry
 from .persistence import PostgresTicketQueue, PsycopgExecutor
+from .rate_limit import RedisRateLimiter
 from .repositories import (
     PostgresApprovalRepository,
     PostgresCaseRepository,
+    PostgresFeedbackRepository,
     PostgresRepositories,
     PostgresSupportSendRepository,
 )
@@ -103,10 +106,13 @@ def create_production_app() -> FastAPI:
         approval_repository=PostgresApprovalRepository(repositories),
         case_repository=PostgresCaseRepository(repositories),
         send_repository=PostgresSupportSendRepository(repositories),
+        feedback_repository=PostgresFeedbackRepository(repositories),
         receipt_signer=ApprovalReceiptSigner(approval_secret.encode()),
         coding_runs=PostgresCodingRunRepository(repositories),
         finance_runs=PostgresFinanceRunRepository(repositories),
         chat_completer=chat_completer,
+        metrics=MetricsRegistry(),
+        rate_limiter=RedisRateLimiter(redis_client, settings.rate_limit_per_minute),
     )
     app.router.add_event_handler("startup", repositories.open)
     app.router.add_event_handler("shutdown", executor.close)

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .approvals import ApprovalReceiptSigner, ReceiptError, action_hash
 from .auth import AuthenticationError, BearerVerifier, Principal
 from .logging import get_logger
+from .metrics import MetricsRegistry
 from .repositories import (
     ApprovalRecord,
     ApprovalRepository,
@@ -69,7 +70,7 @@ class SupportSend(ApiModel):
 def build_phase1_router(
     *, verifier: BearerVerifier, approvals: ApprovalRepository,
     cases: CaseRepository, sends: SupportSendRepository,
-    signer: ApprovalReceiptSigner,
+    signer: ApprovalReceiptSigner, metrics: MetricsRegistry | None = None,
 ) -> APIRouter:
     router = APIRouter()
     support = SupportService()
@@ -140,6 +141,9 @@ def build_phase1_router(
             raise HTTPException(
                 status.HTTP_409_CONFLICT, "Approval is no longer pending"
             ) from error
+        if metrics is not None:
+            metrics.record_gate_decision(decided.scope)
+            metrics.record_approval_decision(request.decision)
         response = _approval_dict(decided)
         if decided.decision == "approved":
             response["receipt"] = signer.issue(

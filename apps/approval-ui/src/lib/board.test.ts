@@ -50,18 +50,28 @@ const issues: JiraIssue[] = [
 ];
 
 describe("Jira board model", () => {
-  it("maps common Jira statuses into stable columns", () => {
-    expect(columnForStatus("Selected for Development")).toBe("ready");
-    expect(columnForStatus("Code Review")).toBe("progress");
-    expect(columnForStatus("Resolved")).toBe("done");
-    expect(columnForStatus("Unknown custom status")).toBe("backlog");
+  it("maps common Jira statuses into the four console columns", () => {
+    expect(columnForStatus("Blocked")).toBe("blocked");
+    expect(columnForStatus("Selected for Development")).toBe("open");
+    expect(columnForStatus("In Progress")).toBe("progress");
+    expect(columnForStatus("Code Review")).toBe("review");
+    expect(columnForStatus("Resolved")).toBe("review");
+    expect(columnForStatus("Unknown custom status")).toBe("open");
   });
 
   it("groups and filters issues without mutating them", () => {
     const grouped = groupIssues(issues, "api");
     expect(grouped.progress.map((issue) => issue.key)).toEqual(["ENG-2"]);
-    expect(grouped.todo).toEqual([]);
+    expect(grouped.open).toEqual([]);
+    expect(grouped.blocked).toEqual([]);
+    expect(grouped.review).toEqual([]);
     expect(issues).toHaveLength(3);
+  });
+
+  it("keeps finished work visible in the terminal review column", () => {
+    const grouped = groupIssues(issues);
+    expect(grouped.open.map((issue) => issue.key)).toEqual(["ENG-1"]);
+    expect(grouped.review.map((issue) => issue.key)).toEqual(["ENG-3"]);
   });
 
   it("computes board summary metrics", () => {

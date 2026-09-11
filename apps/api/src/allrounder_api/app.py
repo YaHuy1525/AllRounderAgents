@@ -7,12 +7,11 @@ import ipaddress
 import json
 import secrets
 import time
-from collections import OrderedDict
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 
 from .approvals import ApprovalReceiptSigner
@@ -25,12 +24,16 @@ from .finance_runs import FinanceRunRepository, InMemoryFinanceRunRepository
 from .idempotency import IdempotencyStore, MemoryIdempotencyStore
 from .jira import FakeJiraTransport, JiraIssueReader, JiraTools
 from .logging import configure_logging, get_logger
+from .metrics import METRICS_CONTENT_TYPE, MetricsRegistry
 from .queueing import MemoryQueue, TicketQueue
+from .rate_limit import WINDOW_SECONDS, InMemoryRateLimiter, RateLimiter
 from .repositories import (
     ApprovalRepository,
     CaseRepository,
+    FeedbackRepository,
     InMemoryApprovalRepository,
     InMemoryCaseRepository,
+    InMemoryFeedbackRepository,
     InMemorySupportSendRepository,
     SupportSendRepository,
 )
@@ -49,10 +52,13 @@ def create_app(
     approval_repository: ApprovalRepository | None = None,
     case_repository: CaseRepository | None = None,
     send_repository: SupportSendRepository | None = None,
+    feedback_repository: FeedbackRepository | None = None,
     receipt_signer: ApprovalReceiptSigner | None = None,
     coding_runs: CodingRunRepository | None = None,
     finance_runs: FinanceRunRepository | None = None,
     chat_completer: ChatCompleter | None = None,
+    metrics: MetricsRegistry | None = None,
+    rate_limiter: RateLimiter | None = None,
 ) -> FastAPI:
     config = settings or Settings()
     configure_logging(config.log_level)
@@ -70,23 +76,26 @@ def create_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
-    windows: OrderedDict[str, list[float]] = OrderedDict()
+    limiter = rate_limiter or InMemoryRateLimiter(config.rate_limit_per_minute)
 
     @app.middleware("http")
     async def security_boundary(request: Request, call_next: Any) -> Any:
-        now = time.monotonic()
+        started = time.perf_counter()
         key = _rate_limit_key(request, config.trusted_proxy_ips)
-        bucket = [seen for seen in windows.get(key, []) if now - seen < 60]
-        if key in windows:
-            windows.move_to_end(key)
-        if len(bucket) >= config.rate_limit_per_minute:
+        if not limiter.allow(key):
             response = JSONResponse({"detail": "Too many requests"}, status_code=429)
+            response.headers["Retry-After"] = str(WINDOW_SECONDS)
         else:
-            bucket.append(now)
-            windows[key] = bucket
-            while len(windows) > 10_000:
-                windows.popitem(last=False)
             response = await call_next(request)
+        if metrics is not None:
+            route = request.scope.get("route")
+            route_path = getattr(route, "path", None)
+            metrics.record_request(
+                request.method,
+                route_path if isinstance(route_path, str) else "unmatched",
+                response.status_code,
+                time.perf_counter() - started,
+            )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -107,6 +116,7 @@ def create_app(
     approvals = approval_repository or InMemoryApprovalRepository()
     cases = case_repository or InMemoryCaseRepository()
     sends = send_repository or InMemorySupportSendRepository()
+    feedback = feedback_repository or InMemoryFeedbackRepository()
     signer = receipt_signer or _receipt_signer(config, secrets.token_bytes(32))
 
     app.include_router(
@@ -116,6 +126,7 @@ def create_app(
             cases=cases,
             sends=sends,
             signer=signer,
+            metrics=metrics,
         )
     )
     app.include_router(
@@ -148,12 +159,19 @@ def create_app(
         build_chat_router(
             verifier=verifier,
             completer=chat_completer,
+            feedback=feedback,
+            metrics=metrics,
         )
     )
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics")
+    def metrics_exposition() -> Response:
+        content = metrics.render() if metrics is not None else b""
+        return Response(content, media_type=METRICS_CONTENT_TYPE)
 
     @app.post("/webhooks/jira")
     async def jira_webhook(request: Request) -> dict[str, str | bool]:
@@ -180,6 +198,8 @@ def create_app(
             ) from error
         context = RequestContext.for_webhook(ticket.event_id)
         if not dedupe_store.claim(ticket.event_id, config.dedupe_ttl_seconds):
+            if metrics is not None:
+                metrics.record_webhook(deduped=True)
             logger.info(
                 "jira_webhook_deduped",
                 request_id=context.request_id,
@@ -188,6 +208,8 @@ def create_app(
             )
             return {"ticketKey": ticket.key, "deduped": True}
 
+        if metrics is not None:
+            metrics.record_webhook(deduped=False)
         routed = router.dispatch(ticket)
         try:
             await asyncio.to_thread(ticket_queue.enqueue, routed)
