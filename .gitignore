@@ -44,3 +44,5 @@ temp/
 # Supabase local-only state
 supabase/.branches/
 supabase/.temp/
+/docs
+/apps/api/tests

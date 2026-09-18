@@ -4,7 +4,7 @@ import type { Agent } from "@mastra/core/agent";
 import { RequestContext } from "@mastra/core/request-context";
 
 import { createAllRounderMastra } from "../mastra.js";
-import { DEEPSEEK_FLASH_MODEL } from "../shared/model.js";
+import { DEFAULT_AGENT_MODEL } from "../shared/model.js";
 import { MemorySandboxLedger } from "./finance/workflow.js";
 import { allRounderAgents } from "./registry.js";
 import { createScriptedAgent, formatAgentScript } from "./script.js";
@@ -14,7 +14,19 @@ import { programmingInvestigatorScenarios } from "./programming/agents/scripts.j
 import { actorAgent, investigatorAgent, validatorAgent } from "./programming/agents/index.js";
 import { marketingBrandScenarios } from "./marketing/agents/scripts.js";
 import { supportDrafterScenarios } from "./support/agents/scripts.js";
+import { featurePlannerScenarios } from "./features/agents/scripts.js";
+import { FeaturePlanOutputSchema } from "./features/contracts.js";
+import {
+  dependencyEngineerScenarios,
+  dependencyRepairScenarios,
+} from "./dependencies/agents/scripts.js";
+import {
+  DependencyAssessmentOutputSchema,
+  DependencyRepairSuggestionSchema,
+} from "./dependencies/contracts.js";
 import { SpecialistFindingSchema } from "./finance/contracts.js";
+import { hrGuardrailScenarios } from "./screening/agents/scripts.js";
+import { GuardrailOutputSchema } from "./screening/contracts.js";
 import { TriageVerdictSchema } from "../shared/contracts.js";
 import { RootCauseAnalysisSchema } from "./programming/contracts.js";
 
@@ -25,11 +37,11 @@ async function agentInstructions(agent: Agent): Promise<string> {
 }
 
 describe("Mastra scripted agents", () => {
-  it("pins every agent to deepseek-v4-flash", () => {
+  it("pins every agent to the OpenRouter workflow model", () => {
     const agents = Object.values(allRounderAgents());
     expect(agents.length).toBeGreaterThanOrEqual(14);
     for (const agent of agents) {
-      expect(agent.model).toMatchObject({ id: DEEPSEEK_FLASH_MODEL });
+      expect(agent.model).toMatchObject({ id: DEFAULT_AGENT_MODEL });
     }
   });
 
@@ -53,10 +65,23 @@ describe("Mastra scripted agents", () => {
     expect(preflight.gate).toBe("approval");
     const brand = marketingBrandScenarios[0]!.expectedOutput as { allowed: boolean };
     expect(brand.allowed).toBe(false);
+    const guardrail = GuardrailOutputSchema.parse(hrGuardrailScenarios[1]!.expectedOutput);
+    expect(guardrail.allowed).toBe(false);
+    expect(guardrail.flags.map((flag) => flag.candidateId)).toEqual(["C-3003", "C-3002"]);
     const draft = supportDrafterScenarios[0]!.expectedOutput as {
       citations: Array<{ sourceId: string }>;
     };
     expect(draft.citations[0]?.sourceId).toBe("kb-refunds");
+    expect(FeaturePlanOutputSchema.parse(featurePlannerScenarios[0]!.expectedOutput).areas).toContain(
+      "ui",
+    );
+    const assessment = DependencyAssessmentOutputSchema.parse(
+      dependencyEngineerScenarios[0]!.expectedOutput,
+    );
+    expect(assessment.groups.map((group) => group.id)).toEqual(["patch", "major"]);
+    expect(
+      DependencyRepairSuggestionSchema.parse(dependencyRepairScenarios[0]!.expectedOutput).suggestion,
+    ).toContain("Regenerate the lockfile");
   });
 
   it("registers the agents on the Mastra instance", () => {
@@ -64,6 +89,12 @@ describe("Mastra scripted agents", () => {
     expect(mastra.getAgent("financeGl").id).toBe("finance-gl");
     expect(mastra.getAgent("dispatcherTriage").id).toBe("dispatcher-triage");
     expect(mastra.getAgent("programmingInvestigator").id).toBe("programming-investigator");
+    expect(mastra.getAgent("issuesAnalyst").id).toBe("issue-analyst");
+    expect(mastra.getAgent("featuresPlanner").id).toBe("feature-planner");
+    expect(mastra.getAgent("featuresEngineer").id).toBe("feature-engineer");
+    expect(mastra.getAgent("dependenciesEngineer").id).toBe("dependency-engineer");
+    expect(mastra.getAgent("dependenciesRepair").id).toBe("dependency-repair");
+    expect(mastra.getAgent("screeningGuardrail").id).toBe("hr-guardrail");
   });
 
   it("formats a followable script from scenarios", () => {

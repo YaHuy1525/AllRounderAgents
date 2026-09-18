@@ -1,0 +1,25 @@
+{"id":"leave-working-days-holidays","lane":"leave","engine":"leave.workingDaysBetween","args":["2026-11-23","2026-11-27",["2026-11-26","2026-11-27"]],"expected":3}
+{"id":"leave-working-days-weekend","lane":"leave","engine":"leave.workingDaysBetween","args":["2026-10-12","2026-10-18",[]],"expected":5}
+{"id":"leave-notice-days","lane":"leave","engine":"leave.noticeDays","args":["2026-10-12","2026-09-12T09:00:00.000Z"],"expected":29}
+{"id":"leave-request-id","lane":"leave","engine":"leave.requestIdFor","args":[{"employeeId":"E-1001","leaveType":"annual","startDate":"2026-10-12","endDate":"2026-10-16"}],"expected":"LR-648A355D"}
+{"id":"leave-lock-target","lane":"leave","engine":"leave.leaveTarget","args":["LR-648A355D"],"expected":"leave:LR-648A355D"}
+{"id":"leave-policy-check-clean","lane":"leave","engine":"leaveFlow:policy-check","input":{"employeeId":"E-1001","leaveType":"annual","startDate":"2026-10-12","endDate":"2026-10-16"},"expect":{"workingDays":5,"balanceBefore":14,"balanceAfter":9,"verdict":"ok"}}
+{"id":"leave-policy-check-blackout","lane":"leave","engine":"leaveFlow:policy-check","input":{"employeeId":"E-1001","leaveType":"annual","startDate":"2026-12-22","endDate":"2026-12-24"},"expect":{"workingDays":3,"verdict":"exception_required","blackoutHits":["Year-end close (2026-12-21 to 2026-12-31)"]}}
+{"id":"onboarding-onboarding-id","lane":"onboarding","engine":"onboarding.onboardingIdFor","args":[{"fullName":"Nora Ellison","roleTitle":"Data Engineer","department":"Engineering","startDate":"2026-10-05"}],"expected":"OB-66D84D89"}
+{"id":"onboarding-employee-id","lane":"onboarding","engine":"onboarding.employeeIdFor","args":["OB-66D84D89"],"expected":"E-14C8D5"}
+{"id":"onboarding-provisions-high-engineering","lane":"onboarding","engine":"onboarding.provisionAccounts","args":["high","Engineering"],"expected":["aws","github","jira","okta","slack","workday"]}
+{"id":"onboarding-provisions-low-people","lane":"onboarding","engine":"onboarding.provisionAccounts","args":["low","People"],"expected":["hr-console","okta","slack","workday","zendesk"]}
+{"id":"onboarding-duplicate-scoring","lane":"onboarding","engine":"onboardingFlow:verify","input":{"fullName":"Jordan Avery","roleTitle":"Data Engineer","department":"Engineering","location":"Austin","startDate":"2026-10-05","managerId":"E-1002"},"expect":{"candidates.0.employeeId":"E-1001","candidates.0.label":"J. A.","candidates.0.matchScore":1,"candidates.0.matchedOn":["full name","department"],"manualReview.required":true,"manualReview.items.0.checkId":"duplicate-screening"}}
+{"id":"offboarding-offboarding-id","lane":"offboarding","engine":"offboarding.offboardingIdFor","args":[{"employeeId":"E-1005","lastDay":"2026-10-30"}],"expected":"OF-CFDEE3E6"}
+{"id":"offboarding-blast-score-aws-high","lane":"offboarding","engine":"offboarding.blastScoreFor","args":["aws","high"],"expected":65}
+{"id":"offboarding-blast-score-okta-low","lane":"offboarding","engine":"offboarding.blastScoreFor","args":["okta","low"],"expected":40}
+{"id":"offboarding-blast-tier-medium","lane":"offboarding","engine":"offboarding.blastTierFor","args":[40],"expected":"medium"}
+{"id":"offboarding-blast-tier-low","lane":"offboarding","engine":"offboarding.blastTierFor","args":[24],"expected":"low"}
+{"id":"offboarding-access-audit-plan","lane":"offboarding","engine":"offboardingFlow:access-audit","input":{"employeeId":"E-1005","lastDay":"2026-10-30","reason":"Resignation - relocating to a new city."},"expect":{"accessTier":"high","entries.0.system":"banking","entries.0.blastRadius":"high","entries.0.riskScore":75,"entries.4.system":"slack","entries.4.riskScore":20,"risks.0.id":"high-blast","risks.0.tier":"high","risks.0.detail":"3 system(s) require explicit per-item approval: banking, erp, payroll."}}
+{"id":"screening-rubric-verdicts","lane":"screening","engine":"screeningFlow:screen","input":{"requisitionId":"REQ-2001"},"expect":{"candidates.0.candidateId":"C-3001","candidates.0.score":90,"candidates.1.score":55,"candidates.1.mustHaveMisses":["TypeScript"],"totalFlags":2}}
+{"id":"hr-help-query-terms","lane":"hr-help","engine":"hrhelp.queryTerms","args":["How much parental leave can a primary caregiver take?"],"expected":["how","much","parental","leave","can","primary","caregiver","take"]}
+{"id":"hr-help-term-boundary-match","lane":"hr-help","engine":"hrhelp.matchesTerm","args":["We budget for leave treats","budget"],"expected":true}
+{"id":"hr-help-term-boundary-miss","lane":"hr-help","engine":"hrhelp.matchesTerm","args":["We budget for leave treats","get"],"expected":false}
+{"id":"hr-help-answer-id","lane":"hr-help","engine":"hrhelp.answerIdFor","args":["case-eval-1","HR-42"],"expected":"HA-2F0A1CD2"}
+{"id":"hr-help-lock-target","lane":"hr-help","engine":"hrhelp.hrHelpTarget","args":["HR-42"],"expected":"hr-help:HR-42"}
+{"id":"hr-help-retrieval","lane":"hr-help","engine":"hrHelpFlow:retrieve","input":{"question":"How much parental leave do primary caregivers get?"},"expect":{"matchedTerms":["parental","leave","primary"],"staleCount":0,"passages.0.sourceId":"hr_policy/leave-and-time-off.md","passages.0.score":0.43}}

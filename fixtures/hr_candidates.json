@@ -1,0 +1,164 @@
+{
+  "requisitions": [
+    {
+      "requisitionId": "REQ-2001",
+      "roleTitle": "Senior Frontend Engineer",
+      "department": "Engineering",
+      "location": "Remote (EU)",
+      "seniority": "senior",
+      "interviewers": ["E-1001", "E-1002"],
+      "criteria": [
+        {
+          "id": "react-depth",
+          "label": "React depth",
+          "weight": 30,
+          "mustHave": true,
+          "detail": "Ships and reviews production React; comfortable with modern server components."
+        },
+        {
+          "id": "typescript",
+          "label": "TypeScript",
+          "weight": 25,
+          "mustHave": true,
+          "detail": "Strong typing discipline in strict mode across a real codebase."
+        },
+        {
+          "id": "testing",
+          "label": "Testing discipline",
+          "weight": 20,
+          "mustHave": false,
+          "detail": "Automated tests around UI behaviour, not just snapshots."
+        },
+        {
+          "id": "design-systems",
+          "label": "Design systems",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Contributes to shared component libraries and design tokens."
+        },
+        {
+          "id": "mentoring",
+          "label": "Mentoring",
+          "weight": 10,
+          "mustHave": false,
+          "detail": "Grows engineers through structured review and pairing."
+        }
+      ]
+    }
+  ],
+  "candidates": [
+    {
+      "candidateId": "C-3001",
+      "fullName": "Ines Varga",
+      "requisitionId": "REQ-2001",
+      "headline": "Staff engineer, 9 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-3001",
+          "span": "83-140",
+          "criterionId": "react-depth",
+          "strength": "strong",
+          "text": "Led the migration of the billing console to React 19 with server components."
+        },
+        {
+          "sourceId": "cv:C-3001",
+          "span": "152-198",
+          "criterionId": "typescript",
+          "strength": "strong",
+          "text": "Maintains a strict TypeScript monorepo with enforced type coverage."
+        },
+        {
+          "sourceId": "screen-call:C-3001",
+          "span": "12-96",
+          "criterionId": "testing",
+          "strength": "weak",
+          "text": "Writes tests when the schedule allows; no coverage targets mentioned."
+        },
+        {
+          "sourceId": "cv:C-3001",
+          "span": "204-260",
+          "criterionId": "design-systems",
+          "strength": "strong",
+          "text": "Owned the shared component library used by four product teams."
+        },
+        {
+          "sourceId": "screen-call:C-3001",
+          "span": "108-172",
+          "criterionId": "mentoring",
+          "strength": "strong",
+          "text": "Mentored four engineers through weekly review sessions and pairing."
+        }
+      ],
+      "notes": ["Panel availability confirmed for the week after next."]
+    },
+    {
+      "candidateId": "C-3002",
+      "fullName": "Bruno Costa",
+      "requisitionId": "REQ-2001",
+      "headline": "Senior engineer, 7 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-3002",
+          "span": "40-92",
+          "criterionId": "react-depth",
+          "strength": "strong",
+          "text": "Built a real-time operations dashboard in React with custom hooks."
+        },
+        {
+          "sourceId": "cv:C-3002",
+          "span": "150-208",
+          "criterionId": "testing",
+          "strength": "strong",
+          "text": "Introduced Playwright coverage for the checkout flow."
+        },
+        {
+          "sourceId": "screen-call:C-3002",
+          "span": "20-88",
+          "criterionId": "mentoring",
+          "strength": "weak",
+          "text": "Occasionally pairs with junior engineers when asked."
+        }
+      ],
+      "notes": ["Interviewer note: would be a great culture fit for the Friday drinks crowd."]
+    },
+    {
+      "candidateId": "C-3003",
+      "fullName": "Hana Suzuki",
+      "requisitionId": "REQ-2001",
+      "headline": "Senior engineer, 8 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-3003",
+          "span": "64-120",
+          "criterionId": "react-depth",
+          "strength": "strong",
+          "text": "Leads the React guild and reviews component architecture across teams."
+        },
+        {
+          "sourceId": "cv:C-3003",
+          "span": "132-184",
+          "criterionId": "typescript",
+          "strength": "strong",
+          "text": "Converted the legacy frontend to strict TypeScript over two quarters."
+        },
+        {
+          "sourceId": "cv:C-3003",
+          "span": "196-240",
+          "criterionId": "testing",
+          "strength": "strong",
+          "text": "Owns the visual regression and unit test strategy for the storefront."
+        },
+        {
+          "sourceId": "screen-call:C-3003",
+          "span": "30-104",
+          "criterionId": "design-systems",
+          "strength": "weak",
+          "text": "Contributed a few tokens; mostly consumed the library rather than owning it."
+        }
+      ],
+      "notes": [
+        "Screening note: around 40 years old; plenty of runway before retirement, worth fast-tracking."
+      ]
+    }
+  ]
+}

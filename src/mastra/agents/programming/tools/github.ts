@@ -190,9 +190,16 @@ export class GitHubSourceReader {
     }
   }
 
+  /** Non-throwing form of `assertPath`; listing callers filter candidates with it. */
+  allowsPath(path: string): boolean {
+    return (
+      !this.policy.denyPaths.some((glob) => globMatches(path, glob)) &&
+      this.policy.allowPaths.some((glob) => globMatches(path, glob))
+    );
+  }
+
   assertPath(path: string): void {
-    if (this.policy.denyPaths.some((glob) => globMatches(path, glob))
-      || !this.policy.allowPaths.some((glob) => globMatches(path, glob))) {
+    if (!this.allowsPath(path)) {
       throw new RepositoryPolicyError("path_denied", `Path denied: ${path}`);
     }
   }

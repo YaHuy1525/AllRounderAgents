@@ -200,6 +200,10 @@ async def test_case_redaction_rollup_and_send_idempotency() -> None:
         await cases.append_event(
             "case-1", actor="agent", kind="bad", payload={"costUsdMicro": -1}
         )
+    with pytest.raises(ValueError):
+        await cases.append_event(
+            "case-1", actor="run-service", kind="bad-actor", payload={}
+        )
 
 
 @pytest.mark.asyncio
@@ -334,3 +338,44 @@ async def test_support_service_requires_citations_and_escalates_empty() -> None:
     service = SupportService()
     assert service.validate_draft("claim", []).escalate is True
     assert service.validate_draft("claim [doc:0-5]", [{"sourceId": "doc", "span": "0-5"}]).valid
+
+
+def test_open_case_endpoint_is_idempotent_and_role_gated() -> None:
+    from allrounder_api.app import create_app
+    from allrounder_api.settings import Settings
+
+    verifier = FakeBearerVerifier(
+        {
+            "agent-token": Principal(
+                subject="user-1", tenant_id="tenant-a",
+                roles=frozenset({"agent", "viewer"}),
+            ),
+            "viewer-token": Principal(
+                subject="user-2", tenant_id="tenant-a", roles=frozenset({"viewer"})
+            ),
+        }
+    )
+    app = create_app(
+        settings=Settings(webhook_secret="test"),
+        auth_verifier=verifier,
+    )
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer agent-token"}
+
+    opened = client.post("/cases", headers=headers, json={"ticketKey": "SUP-2"})
+    assert opened.status_code == 200, opened.text
+    body = opened.json()
+    assert body["created"] is True
+    assert body["status"] == "open"
+    again = client.post("/cases", headers=headers, json={"ticketKey": "SUP-2"})
+    assert again.status_code == 200
+    assert again.json() == {**body, "created": False}
+    status_body = client.get("/tickets/SUP-2/status", headers=headers)
+    assert status_body.status_code == 200
+    assert status_body.json()["caseId"] == body["caseId"]
+    assert client.post(
+        "/cases",
+        headers={"Authorization": "Bearer viewer-token"},
+        json={"ticketKey": "SUP-3"},
+    ).status_code == 403
+    assert client.post("/cases", headers=headers, json={"ticketKey": "nope"}).status_code == 422

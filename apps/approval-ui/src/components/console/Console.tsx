@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiError, api, apiUrl } from "@/lib/api";
-import { chooseSignInMethod, signInStatusMessage, type SignInMethod } from "@/lib/auth";
+import { chooseSignInMethod, readStoredSession, signInStatusMessage, type SignInMethod } from "@/lib/auth";
 import { compactTickets, type JiraIssue } from "@/lib/board";
 import type { Approval, SessionInfo, Workspace } from "@/lib/models";
 import {
@@ -18,14 +18,16 @@ import {
   type JiraPrefs,
   type UiPrefs,
 } from "@/lib/prefs";
-import { getSupabaseClient } from "@/lib/supabase";
+import { AUTH_STORAGE_KEY, getSupabaseClient } from "@/lib/supabase";
 import {
   closeTab,
   DASHBOARD_TAB,
   ensureDashboard,
+  loadTabState,
   openNewTab,
   openSingletonTab,
   openTicketTab,
+  saveTabState,
   type Tab,
   type TicketRef,
 } from "@/lib/tabs";
@@ -71,6 +73,9 @@ const BOARD_STATUS_COPY: Record<number, string> = {
   502: "Jira is temporarily unavailable.",
   503: "The Jira project is not configured.",
 };
+
+/** How long the restore gate waits for the auth client before falling back to the persisted session. */
+const SESSION_RESTORE_TIMEOUT_MS = 4000;
 
 function sessionFrom(
   email: string,
@@ -122,7 +127,7 @@ export function Console() {
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("Loading Jira tickets…");
   const [settingsStatus, setSettingsStatus] = useState(
-    "Choose the Jira site, project, and board for this browser.",
+    "Choose the Jira project and board for this browser — the Dashboard shows one board at a time.",
   );
   const [boardTitle, setBoardTitle] = useState("Jira issues");
   const [lastSync, setLastSync] = useState("—");
@@ -153,6 +158,7 @@ export function Console() {
   const activeTabIdRef = useRef(activeTabId);
   activeTabIdRef.current = activeTabId;
   const historyRef = useRef<HTMLDivElement>(null);
+  const sessionRestoredRef = useRef(false);
 
   const applyPrefs = useCallback((next: JiraPrefs): JiraPrefs => {
     const saved = savePrefs(window.localStorage, next);
@@ -281,6 +287,15 @@ export function Console() {
     setEmail(loaded.email);
     setRemember(Boolean(loaded.email));
     setUiPrefs(loadUiPrefs(window.localStorage));
+    // Restore the tab strip so returning to this page (reload, discarded
+    // tab, new browser session) lands on the tab the user was working on.
+    const savedTabs = loadTabState(window.localStorage);
+    if (savedTabs !== null) {
+      tabsRef.current = savedTabs.tabs;
+      setTabs(savedTabs.tabs);
+      activeTabIdRef.current = savedTabs.activeTabId;
+      setActiveTabId(savedTabs.activeTabId);
+    }
     const client = getSupabaseClient();
     if (!client) return;
     const { data } = client.auth.onAuthStateChange((event, session) => {
@@ -293,12 +308,17 @@ export function Console() {
           session?.expires_at ?? null,
         ),
       );
+      sessionRestoredRef.current = true;
+      setSessionRestored(true);
       if (session && rememberRef.current) {
         applyPrefs({ ...prefsRef.current, email: nextEmail || prefsRef.current.email });
       }
-      setSessionRestored(true);
       if (session && event !== "TOKEN_REFRESHED") {
-        focusDashboard();
+        // Never force the dashboard here: the auth client emits SIGNED_IN on
+        // every session recovery (page load, tab return, cross-tab sync), so
+        // focusing it would discard the tab the user was working on. Sign-out
+        // resets the strip below, which keeps fresh sign-ins landing on the
+        // dashboard.
         void Promise.all([loadBoard(), loadApprovals()]);
       }
       if (!session) {
@@ -310,10 +330,44 @@ export function Console() {
         activeTabIdRef.current = DASHBOARD_TAB.id;
       }
     });
+    // Safety valve: the auth client normally answers from local storage in
+    // milliseconds, but a stalled token refresh or a cross-tab lock wait can
+    // leave it pending forever — which used to strand this screen on
+    // "Restoring session". Settle the gate from the persisted snapshot when no
+    // auth event arrived in time; a stale snapshot self-corrects on the first
+    // 401 once the real session resolves.
+    const restoreTimer = window.setTimeout(() => {
+      if (sessionRestoredRef.current) return;
+      sessionRestoredRef.current = true;
+      setSessionRestored(true);
+      const stored = readStoredSession(window.localStorage, AUTH_STORAGE_KEY);
+      const nextEmail = stored?.email ?? "";
+      setSignedInEmail(nextEmail);
+      setSession(stored ? sessionFrom(nextEmail, stored.appMetadata, stored.expiresAt) : null);
+      if (stored && rememberRef.current) {
+        applyPrefs({ ...prefsRef.current, email: nextEmail || prefsRef.current.email });
+      }
+      if (stored) {
+        void Promise.all([loadBoard(), loadApprovals()]);
+      } else {
+        setIssues([]);
+        setApprovals([]);
+        setTabs([DASHBOARD_TAB]);
+        tabsRef.current = [DASHBOARD_TAB];
+        setActiveTabId(DASHBOARD_TAB.id);
+        activeTabIdRef.current = DASHBOARD_TAB.id;
+      }
+    }, SESSION_RESTORE_TIMEOUT_MS);
     return () => {
+      window.clearTimeout(restoreTimer);
       data.subscription.unsubscribe();
     };
-  }, [applyPrefs, focusDashboard, loadApprovals, loadBoard]);
+  }, [applyPrefs, loadApprovals, loadBoard]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    saveTabState(window.localStorage, { tabs, activeTabId });
+  }, [mounted, tabs, activeTabId]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = uiPrefs.theme;
@@ -403,49 +457,6 @@ export function Console() {
     const input = document.getElementById("chat-input");
     if (input instanceof HTMLTextAreaElement) input.focus();
   }
-
-  function openBoardFromNewTab(project: string, boardId: number | null): void {
-    const boards = workspaceRef.current.boards.filter((board) => board.project === project);
-    const chosen =
-      boardId !== null && boards.some((board) => board.id === boardId)
-        ? boardId
-        : (boards[0]?.id ?? null);
-    applyPrefs({
-      ...prefsRef.current,
-      project,
-      boardId: chosen,
-      boardName: boards.find((board) => board.id === chosen)?.name ?? "",
-    });
-    focusDashboard();
-    void loadBoard();
-  }
-
-  const changeProject = useCallback(
-    (project: string): void => {
-      const boards = workspaceRef.current.boards.filter((board) => board.project === project);
-      applyPrefs({
-        ...prefsRef.current,
-        project,
-        boardId: boards[0]?.id ?? null,
-        boardName: boards[0]?.name ?? "",
-      });
-      void loadBoard();
-    },
-    [applyPrefs, loadBoard],
-  );
-
-  const changeBoard = useCallback(
-    (boardId: string): void => {
-      applyPrefs({
-        ...prefsRef.current,
-        boardId: boardId ? Number(boardId) : null,
-        boardName:
-          workspaceRef.current.boards.find((board) => String(board.id) === boardId)?.name ?? "",
-      });
-      void loadBoard();
-    },
-    [applyPrefs, loadBoard],
-  );
 
   const changeSettingsProject = useCallback(
     (project: string): void => {
@@ -818,7 +829,6 @@ export function Console() {
             <div className="view-area">
               {activeTab.kind === "dashboard" && (
                 <BoardView
-                  workspace={workspace}
                   prefs={prefs}
                   issues={issues}
                   boardTitle={boardTitle}
@@ -828,8 +838,6 @@ export function Console() {
                   search={search}
                   activeTicketKey={activeTicketKey}
                   onSearchChange={setSearch}
-                  onProjectChange={changeProject}
-                  onBoardChange={changeBoard}
                   onRefresh={() => void loadBoard()}
                   onOpenDetails={openTicket}
                 />
@@ -877,7 +885,7 @@ export function Console() {
               )}
 
               {activeTab.kind === "new" && (
-                <NewTabView workspace={workspace} prefs={prefs} onOpenBoard={openBoardFromNewTab} />
+                <NewTabView issues={issues} status={status} onOpenTicket={openTicket} />
               )}
             </div>
           </main>

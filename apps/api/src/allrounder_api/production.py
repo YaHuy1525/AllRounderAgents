@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from redis import Redis
+from redis.asyncio import Redis as AsyncRedis
 
 from .app import create_app
 from .approvals import ApprovalReceiptSigner
@@ -19,9 +20,11 @@ from .repositories import (
     PostgresApprovalRepository,
     PostgresCaseRepository,
     PostgresFeedbackRepository,
+    PostgresGithubAccountRepository,
     PostgresRepositories,
     PostgresSupportSendRepository,
 )
+from .runs import RunServiceConfig, build_redis_run_service
 from .settings import Settings
 
 
@@ -59,8 +62,13 @@ def create_production_app() -> FastAPI:
         raise ValueError("APPROVAL_HMAC_SECRET must contain at least 32 bytes")
 
     redis_client = Redis.from_url(settings.redis_url)
+    redis_async_client = AsyncRedis.from_url(settings.redis_url)
     executor = PsycopgExecutor(database_url)
     repositories = PostgresRepositories(database_url)
+    signer = ApprovalReceiptSigner(approval_secret.encode())
+    metrics = MetricsRegistry()
+    approval_repository = PostgresApprovalRepository(repositories)
+    case_repository = PostgresCaseRepository(repositories)
     jira_transport: HttpJiraTransport | McpJiraTransport
     if settings.jira_transport == "mcp":
         # MCP-native writes/search against the Rovo server (JIRA_TRANSPORT=mcp,
@@ -103,22 +111,45 @@ def create_production_app() -> FastAPI:
             issuer=settings.supabase_jwt_issuer,
             audience=settings.supabase_jwt_audience,
         ),
-        approval_repository=PostgresApprovalRepository(repositories),
-        case_repository=PostgresCaseRepository(repositories),
+        approval_repository=approval_repository,
+        case_repository=case_repository,
         send_repository=PostgresSupportSendRepository(repositories),
         feedback_repository=PostgresFeedbackRepository(repositories),
-        receipt_signer=ApprovalReceiptSigner(approval_secret.encode()),
+        receipt_signer=signer,
         coding_runs=PostgresCodingRunRepository(repositories),
         finance_runs=PostgresFinanceRunRepository(repositories),
+        github_accounts=PostgresGithubAccountRepository(repositories),
         chat_completer=chat_completer,
-        metrics=MetricsRegistry(),
+        metrics=metrics,
         rate_limiter=RedisRateLimiter(redis_client, settings.rate_limit_per_minute),
+        runs_service=build_redis_run_service(
+            client=redis_client,
+            events_client=redis_async_client,
+            signer=signer,
+            approvals=approval_repository,
+            cases=case_repository,
+            mastra_base_url=settings.mastra_base_url,
+            mastra_timeout_seconds=settings.mastra_request_timeout_seconds,
+            max_concurrent=settings.runs_max_concurrent,
+            max_concurrent_applies=settings.runs_max_concurrent_applies,
+            config=RunServiceConfig(
+                lock_ttl_seconds=settings.runs_lock_ttl_seconds,
+                receipt_ttl_seconds=settings.runs_receipt_ttl_seconds,
+                max_run_seconds=settings.runs_max_seconds,
+                max_regenerations_per_step=settings.runs_max_regenerations_per_step,
+            ),
+            metrics=metrics,
+            registry_ttl_seconds=settings.runs_registry_ttl_seconds,
+            receipt_ttl_seconds=settings.runs_receipt_ttl_seconds,
+            event_ttl_seconds=settings.runs_registry_ttl_seconds,
+        ),
     )
     app.router.add_event_handler("startup", repositories.open)
     app.router.add_event_handler("shutdown", executor.close)
     app.router.add_event_handler("shutdown", repositories.close)
     app.router.add_event_handler("shutdown", jira_transport.close)
     app.router.add_event_handler("shutdown", redis_client.close)
+    app.router.add_event_handler("shutdown", redis_async_client.aclose)
     if chat_completer is not None:
         app.router.add_event_handler("shutdown", chat_completer.close)
     return app

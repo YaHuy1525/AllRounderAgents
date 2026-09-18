@@ -29,6 +29,7 @@ class ApprovalReceiptClaims:
     scope: str
     decision: str
     expires_at: str
+    run_id: str | None = None
 
 
 class ApprovalReceiptSigner:
@@ -47,6 +48,7 @@ class ApprovalReceiptSigner:
     def issue(
         self, *, approval_id: str, case_id: str, action: dict[str, object],
         approver: str, scope: str, decision: str, expires_at: datetime,
+        run_id: str | None = None,
     ) -> str:
         if decision != "approved":
             raise ReceiptError("Only approved decisions can produce receipts")
@@ -59,6 +61,7 @@ class ApprovalReceiptSigner:
             scope=scope,
             decision=decision,
             expires_at=expires_at.astimezone(UTC).isoformat(),
+            run_id=run_id,
         )
         payload = json.dumps(asdict(claims), sort_keys=True, separators=(",", ":")).encode()
         signature = hmac.new(self._secret, payload, hashlib.sha256).digest()
@@ -67,6 +70,7 @@ class ApprovalReceiptSigner:
     def validate(
         self, token: str, *, approval_id: str, case_id: str,
         action: dict[str, object], scope: str, now: datetime | None = None,
+        run_id: str | None = None,
     ) -> ApprovalReceiptClaims:
         try:
             encoded_payload, encoded_signature = token.split(".", 1)
@@ -85,6 +89,7 @@ class ApprovalReceiptSigner:
             hmac.compare_digest(claims.action_hash, action_hash(action)),
             hmac.compare_digest(claims.scope, scope),
             hmac.compare_digest(claims.decision, "approved"),
+            run_id is None or hmac.compare_digest(claims.run_id or "", run_id),
         )
         if not all(checks):
             raise ReceiptError("Invalid receipt")

@@ -4,12 +4,35 @@ import {
   closeTab,
   DASHBOARD_TAB,
   ensureDashboard,
+  loadTabState,
   openNewTab,
   openSingletonTab,
   openTicketTab,
+  saveTabState,
   shortSummary,
   ticketTabTitle,
+  type Tab,
 } from "./tabs.js";
+
+class MemoryStorage {
+  private readonly values = new Map<string, string>();
+
+  getItem(key: string): string | null {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string): void {
+    this.values.set(key, value);
+  }
+}
+
+const TICKET_TAB: Tab = {
+  id: "ticket:ENG-42",
+  kind: "ticket",
+  title: "ENG-42 - Fix the refund flow",
+  ticketKey: "ENG-42",
+  ticketSummary: "Fix the refund flow",
+};
 
 describe("console tabs", () => {
   it("keeps the dashboard as the anchored first tab", () => {
@@ -81,5 +104,66 @@ describe("console tabs", () => {
     expect(shortSummary("a\n b   c")).toBe("a b c");
     expect(shortSummary("x".repeat(200))).toHaveLength(42);
     expect(ticketTabTitle({ key: "ENG-1", summary: "Short" })).toBe("ENG-1 - Short");
+  });
+});
+
+describe("open tab persistence", () => {
+  it("returns null when nothing is stored", () => {
+    expect(loadTabState(new MemoryStorage())).toBeNull();
+  });
+
+  it("round-trips the tab strip and active tab", () => {
+    const storage = new MemoryStorage();
+    saveTabState(storage, { tabs: [DASHBOARD_TAB, TICKET_TAB], activeTabId: TICKET_TAB.id });
+    expect(loadTabState(storage)).toEqual({
+      tabs: [DASHBOARD_TAB, TICKET_TAB],
+      activeTabId: TICKET_TAB.id,
+    });
+  });
+
+  it("re-anchors the dashboard and drops an unknown active tab", () => {
+    const storage = new MemoryStorage();
+    saveTabState(storage, { tabs: [TICKET_TAB], activeTabId: "nope" });
+    expect(loadTabState(storage)).toEqual({
+      tabs: [DASHBOARD_TAB, TICKET_TAB],
+      activeTabId: DASHBOARD_TAB.id,
+    });
+  });
+
+  it("drops invalid entries but keeps the valid ones", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      "allrounder.tabs.v1",
+      JSON.stringify({
+        tabs: [
+          { id: "dashboard", kind: "dashboard", title: "Dashboard" },
+          { id: "evil", kind: "not-a-kind", title: "Nope" },
+          { id: "", kind: "docs", title: "No id" },
+          "junk",
+        ],
+        activeTabId: "docs",
+      }),
+    );
+    expect(loadTabState(storage)).toEqual({
+      tabs: [DASHBOARD_TAB],
+      activeTabId: DASHBOARD_TAB.id,
+    });
+  });
+
+  it("deduplicates repeated tab ids and falls back on corrupt JSON", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      "allrounder.tabs.v1",
+      JSON.stringify({
+        tabs: [DASHBOARD_TAB, { ...DASHBOARD_TAB }, { ...TICKET_TAB }],
+        activeTabId: TICKET_TAB.id,
+      }),
+    );
+    expect(loadTabState(storage)).toEqual({
+      tabs: [DASHBOARD_TAB, TICKET_TAB],
+      activeTabId: TICKET_TAB.id,
+    });
+    storage.setItem("allrounder.tabs.v1", "{not json");
+    expect(loadTabState(storage)).toBeNull();
   });
 });

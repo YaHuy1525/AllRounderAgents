@@ -41,6 +41,17 @@ class CaseEvent:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+# Mirrors the case_events_actor_check constraint from the Phase 1 migration so
+# in-memory runs reject unknown actors the same way Postgres does.
+CASE_EVENT_ACTORS: frozenset[str] = frozenset({"agent", "human", "system"})
+
+
+def _check_case_event_actor(actor: str) -> None:
+    if actor not in CASE_EVENT_ACTORS:
+        allowed = ", ".join(sorted(CASE_EVENT_ACTORS))
+        raise ValueError(f"actor must be one of {allowed}")
+
+
 @dataclass
 class CaseRecord:
     id: str
@@ -85,6 +96,20 @@ class FeedbackRecord:
     reason: str | None = None
 
 
+@dataclass
+class GithubAccountRecord:
+    """A console-registered GitHub identity. The token is write-only from
+    the browser: list endpoints return a hint, never the secret."""
+
+    id: str
+    tenant_id: str
+    label: str
+    token: str
+    username: str = ""
+    is_default: bool = False
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
 class CaseRepository(Protocol):
     async def create(self, case: CaseRecord) -> CaseRecord: ...
     async def append_event(
@@ -127,6 +152,14 @@ class FeedbackRepository(Protocol):
     async def store(self, feedback: FeedbackRecord) -> None: ...
 
 
+class GithubAccountRepository(Protocol):
+    async def list(self, tenant_id: str) -> list[GithubAccountRecord]: ...
+    async def get(self, account_id: str, tenant_id: str) -> GithubAccountRecord: ...
+    async def create(self, account: GithubAccountRecord) -> GithubAccountRecord: ...
+    async def delete(self, account_id: str, tenant_id: str) -> None: ...
+    async def set_default(self, account_id: str, tenant_id: str) -> GithubAccountRecord: ...
+
+
 class InMemoryCaseRepository:
     def __init__(self) -> None:
         self._cases: dict[str, CaseRecord] = {}
@@ -144,6 +177,7 @@ class InMemoryCaseRepository:
         case = self._cases.get(case_id)
         if case is None:
             raise KeyError("Case not found")
+        _check_case_event_actor(actor)
         safe = redact(payload)
         if not isinstance(safe, dict):
             raise TypeError("Event payload must be an object")
@@ -269,6 +303,62 @@ class InMemoryFeedbackRepository:
         )
 
 
+class InMemoryGithubAccountRepository:
+    def __init__(self) -> None:
+        self._accounts: dict[str, GithubAccountRecord] = {}
+
+    async def list(self, tenant_id: str) -> list[GithubAccountRecord]:
+        rows = [
+            deepcopy(account)
+            for account in self._accounts.values()
+            if account.tenant_id == tenant_id
+        ]
+        rows.sort(key=lambda account: (not account.is_default, account.created_at, account.id))
+        return rows
+
+    async def get(self, account_id: str, tenant_id: str) -> GithubAccountRecord:
+        account = self._accounts.get(account_id)
+        if account is None or account.tenant_id != tenant_id:
+            raise KeyError("GitHub account not found")
+        return deepcopy(account)
+
+    async def create(self, account: GithubAccountRecord) -> GithubAccountRecord:
+        if account.id in self._accounts:
+            raise ValueError("GitHub account already exists")
+        for existing in self._accounts.values():
+            if (
+                existing.tenant_id == account.tenant_id
+                and existing.label.lower() == account.label.lower()
+            ):
+                raise ValueError("GitHub account label already exists")
+        first = not any(
+            existing.tenant_id == account.tenant_id for existing in self._accounts.values()
+        )
+        safe = deepcopy(account)
+        safe.is_default = account.is_default or first
+        self._accounts[safe.id] = safe
+        return deepcopy(safe)
+
+    async def delete(self, account_id: str, tenant_id: str) -> None:
+        account = await self.get(account_id, tenant_id)
+        del self._accounts[account_id]
+        if not account.is_default:
+            return
+        remaining = [
+            item for item in self._accounts.values() if item.tenant_id == tenant_id
+        ]
+        if remaining:
+            oldest = min(remaining, key=lambda item: (item.created_at, item.id))
+            oldest.is_default = True
+
+    async def set_default(self, account_id: str, tenant_id: str) -> GithubAccountRecord:
+        await self.get(account_id, tenant_id)
+        for existing in self._accounts.values():
+            if existing.tenant_id == tenant_id:
+                existing.is_default = existing.id == account_id
+        return deepcopy(self._accounts[account_id])
+
+
 class PostgresRepositories:
     """Parameterized async repositories over the Supabase direct Postgres URL."""
 
@@ -304,6 +394,7 @@ class PostgresRepositories:
     async def append_case_event(
         self, case_id: str, *, actor: str, kind: str, payload: dict[str, object]
     ) -> None:
+        _check_case_event_actor(actor)
         safe = redact(payload)
         if not isinstance(safe, dict):
             raise TypeError("Event payload must be an object")
@@ -436,6 +527,107 @@ class PostgresRepositories:
                     str(redact(feedback.reason)) if feedback.reason is not None else None,
                 ),
             )
+
+    async def list_github_accounts(self, tenant_id: str) -> list[GithubAccountRecord]:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select id, tenant_id, label, username, token, is_default, created_at
+                from public.github_accounts
+                where tenant_id = %s
+                order by is_default desc, created_at, id
+                """,
+                (tenant_id,),
+            )
+            rows = await cursor.fetchall()
+        return [_github_account_from_row(row) for row in rows]
+
+    async def get_github_account(self, account_id: str, tenant_id: str) -> GithubAccountRecord:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select id, tenant_id, label, username, token, is_default, created_at
+                from public.github_accounts
+                where id = %s and tenant_id = %s
+                """,
+                (account_id, tenant_id),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("GitHub account not found")
+        return _github_account_from_row(row)
+
+    async def create_github_account(self, account: GithubAccountRecord) -> GithubAccountRecord:
+        async with self.pool.connection() as connection, connection.transaction():
+            cursor = await connection.execute(
+                """
+                select id from public.github_accounts
+                where tenant_id = %s and lower(label) = lower(%s)
+                """,
+                (account.tenant_id, account.label),
+            )
+            if await cursor.fetchone() is not None:
+                raise ValueError("GitHub account label already exists")
+            cursor = await connection.execute(
+                "select id from public.github_accounts where tenant_id = %s limit 1",
+                (account.tenant_id,),
+            )
+            is_default = account.is_default or await cursor.fetchone() is None
+            await connection.execute(
+                """
+                insert into public.github_accounts
+                  (id, tenant_id, label, username, token, is_default, created_at)
+                values (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    account.id, account.tenant_id, account.label, account.username,
+                    account.token, is_default, account.created_at,
+                ),
+            )
+        stored = deepcopy(account)
+        stored.is_default = is_default
+        return stored
+
+    async def delete_github_account(self, account_id: str, tenant_id: str) -> None:
+        async with self.pool.connection() as connection, connection.transaction():
+            cursor = await connection.execute(
+                """
+                delete from public.github_accounts
+                where id = %s and tenant_id = %s
+                returning is_default
+                """,
+                (account_id, tenant_id),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise KeyError("GitHub account not found")
+            if bool(row["is_default"]):
+                await connection.execute(
+                    """
+                    update public.github_accounts set is_default = true
+                    where id = (
+                        select id from public.github_accounts
+                        where tenant_id = %s order by created_at, id limit 1
+                    )
+                    """,
+                    (tenant_id,),
+                )
+
+    async def set_default_github_account(
+        self, account_id: str, tenant_id: str
+    ) -> GithubAccountRecord:
+        async with self.pool.connection() as connection, connection.transaction():
+            cursor = await connection.execute(
+                "select id from public.github_accounts where id = %s and tenant_id = %s",
+                (account_id, tenant_id),
+            )
+            if await cursor.fetchone() is None:
+                raise KeyError("GitHub account not found")
+            await connection.execute(
+                "update public.github_accounts set is_default = (id = %s) where tenant_id = %s",
+                (account_id, tenant_id),
+            )
+        return await self.get_github_account(account_id, tenant_id)
 
 
 class PostgresCaseRepository:
@@ -614,6 +806,34 @@ class PostgresFeedbackRepository:
 
     async def store(self, feedback: FeedbackRecord) -> None:
         await self._database.store_feedback(feedback)
+
+
+class PostgresGithubAccountRepository:
+    def __init__(self, database: PostgresRepositories) -> None:
+        self._database = database
+
+    async def list(self, tenant_id: str) -> list[GithubAccountRecord]:
+        return await self._database.list_github_accounts(tenant_id)
+
+    async def get(self, account_id: str, tenant_id: str) -> GithubAccountRecord:
+        return await self._database.get_github_account(account_id, tenant_id)
+
+    async def create(self, account: GithubAccountRecord) -> GithubAccountRecord:
+        return await self._database.create_github_account(account)
+
+    async def delete(self, account_id: str, tenant_id: str) -> None:
+        await self._database.delete_github_account(account_id, tenant_id)
+
+    async def set_default(self, account_id: str, tenant_id: str) -> GithubAccountRecord:
+        return await self._database.set_default_github_account(account_id, tenant_id)
+
+
+def _github_account_from_row(row: dict[str, Any]) -> GithubAccountRecord:
+    return GithubAccountRecord(
+        id=str(row["id"]), tenant_id=str(row["tenant_id"]), label=str(row["label"]),
+        username=str(row["username"]), token=str(row["token"]),
+        is_default=bool(row["is_default"]), created_at=row["created_at"],
+    )
 
 
 def _approval_from_row(row: dict[str, Any]) -> ApprovalRecord:

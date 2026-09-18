@@ -1,5 +1,30 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+export const AUTH_STORAGE_KEY = "allrounder-auth";
+
+/**
+ * Auth requests must never hang forever: a stalled token refresh blocks the
+ * client's initialization (and every getSession() caller) until the network
+ * stack gives up. Aborting converts the stall into the retryable network
+ * error the auth client already knows how to recover from.
+ */
+const AUTH_FETCH_TIMEOUT_MS = 15_000;
+
+function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const external = init?.signal ?? null;
+  const abort = (): void => controller.abort();
+  const timer = setTimeout(abort, AUTH_FETCH_TIMEOUT_MS);
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener("abort", abort);
+  }
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+    external?.removeEventListener("abort", abort);
+  });
+}
+
 let cached: SupabaseClient | null | undefined;
 
 /**
@@ -19,8 +44,9 @@ export function getSupabaseClient(): SupabaseClient | null {
               persistSession: true,
               autoRefreshToken: true,
               detectSessionInUrl: true,
-              storageKey: "allrounder-auth",
+              storageKey: AUTH_STORAGE_KEY,
             },
+            global: { fetch: fetchWithTimeout },
           })
         : null;
   }

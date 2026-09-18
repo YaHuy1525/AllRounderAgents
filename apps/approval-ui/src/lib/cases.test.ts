@@ -6,6 +6,7 @@ import {
   formatCost,
   inferLane,
   laneForDomain,
+  laneForWorkflow,
   stepStates,
   stepsForLane,
   type CaseEvent,
@@ -40,6 +41,274 @@ describe("lane step plans", () => {
     expect(inferLane({ summary: "Fix repo patch", labels: [] })).toBe("coding");
     expect(inferLane({ summary: "Reconcile the ledger", labels: [] })).toBe("finance");
     expect(inferLane({ summary: "Something else", labels: [] })).toBe("generic");
+  });
+});
+
+describe("review lane", () => {
+  it("follows the review run definition step order", () => {
+    const ids = stepsForLane("review").map((step) => step.id);
+    expect(ids).toEqual(["select-pr", "review-options", "ai-review", "complete"]);
+  });
+
+  it("maps only shipped workflows onto the review lane", () => {
+    expect(laneForWorkflow("review")).toBe("review");
+    expect(laneForWorkflow("support")).toBeNull();
+    expect(laneForWorkflow("review-follow-up")).toBeNull();
+  });
+});
+
+describe("issue resolution lane", () => {
+  it("follows the issues run definition step order", () => {
+    const ids = stepsForLane("issues").map((step) => step.id);
+    expect(ids).toEqual(["issue-selection", "analysis", "implementation", "complete"]);
+  });
+
+  it("maps the issues workflow onto the issues lane", () => {
+    expect(laneForWorkflow("issues")).toBe("issues");
+    expect(laneForWorkflow("review")).toBe("review");
+    expect(laneForWorkflow("issues-follow-up")).toBeNull();
+  });
+
+  it("marks executed issue steps done and the next open step current", () => {
+    const events = [
+      withKind("case.created"),
+      withKind("issue.selected"),
+      withKind("affected.files.identified"),
+      withKind("patch.applied"),
+    ];
+    const states = stepStates(stepsForLane("issues"), events, true);
+    expect(states).toEqual(["done", "done", "done", "current"]);
+  });
+
+  it("keeps every issue step future before a run exists", () => {
+    const states = stepStates(stepsForLane("issues"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+});
+
+describe("feature implementation lane", () => {
+  it("follows the features run definition step order", () => {
+    const ids = stepsForLane("features").map((step) => step.id);
+    expect(ids).toEqual(["feature-selection", "scope-design", "implementation", "complete"]);
+  });
+
+  it("maps the features workflow onto the features lane", () => {
+    expect(laneForWorkflow("features")).toBe("features");
+    expect(laneForWorkflow("issues")).toBe("issues");
+    expect(laneForWorkflow("features-follow-up")).toBeNull();
+  });
+
+  it("marks executed feature steps done and the next open step current", () => {
+    const events = [
+      withKind("feature.selected"),
+      withKind("scope.defined"),
+      withKind("patch.applied"),
+    ];
+    const states = stepStates(stepsForLane("features"), events, true);
+    expect(states).toEqual(["done", "done", "done", "current"]);
+  });
+
+  it("keeps every feature step future before a run exists", () => {
+    const states = stepStates(stepsForLane("features"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+});
+
+describe("dependency update lane", () => {
+  it("follows the dependencies run definition step order", () => {
+    const ids = stepsForLane("dependencies").map((step) => step.id);
+    expect(ids).toEqual(["scan", "group", "apply", "validate", "merge"]);
+  });
+
+  it("maps the dependencies workflow onto the dependencies lane", () => {
+    expect(laneForWorkflow("dependencies")).toBe("dependencies");
+    expect(laneForWorkflow("features")).toBe("features");
+    expect(laneForWorkflow("dependencies-follow-up")).toBeNull();
+  });
+
+  it("keeps every dependency step future before a run exists", () => {
+    const states = stepStates(stepsForLane("dependencies"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+});
+
+describe("accessibility audit lane", () => {
+  it("follows the accessibility run definition step order", () => {
+    const ids = stepsForLane("accessibility").map((step) => step.id);
+    expect(ids).toEqual(["crawl", "violations", "fix", "re-scan"]);
+  });
+
+  it("maps the accessibility workflow onto the accessibility lane", () => {
+    expect(laneForWorkflow("accessibility")).toBe("accessibility");
+    expect(laneForWorkflow("dependencies")).toBe("dependencies");
+    expect(laneForWorkflow("accessibility-follow-up")).toBeNull();
+  });
+
+  it("keeps every accessibility step future before a run exists", () => {
+    const states = stepStates(stepsForLane("accessibility"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+});
+
+describe("vendor onboarding lane", () => {
+  it("follows the vendors run definition step order", () => {
+    const ids = stepsForLane("vendors").map((step) => step.id);
+    expect(ids).toEqual(["collect", "verify", "risk-score", "approve", "create"]);
+  });
+
+  it("maps the vendors workflow onto the vendors lane", () => {
+    expect(laneForWorkflow("vendors")).toBe("vendors");
+    expect(laneForWorkflow("accessibility")).toBe("accessibility");
+    expect(laneForWorkflow("vendors-follow-up")).toBeNull();
+  });
+
+  it("maps vendor domains and ticket text onto the vendors lane", () => {
+    expect(laneForDomain("vendor")).toBe("vendors");
+    expect(laneForDomain("vendor-onboarding")).toBe("vendors");
+    expect(inferLane({ summary: "Onboard a new vendor", labels: [] })).toBe("vendors");
+    expect(inferLane({ summary: "Invoice from a vendor", labels: [] })).toBe("vendors");
+  });
+
+  it("keeps every vendor step future before a run exists", () => {
+    const states = stepStates(stepsForLane("vendors"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+
+  it("marks collected and verified steps done with the risk score current", () => {
+    const events = [withKind("vendor.collect.completed"), withKind("vendor.verify.completed")];
+    const states = stepStates(stepsForLane("vendors"), events, true);
+    expect(states).toEqual(["done", "done", "current", "future", "future"]);
+  });
+});
+
+describe("leave lane", () => {
+  it("follows the leave run definition step order", () => {
+    const ids = stepsForLane("leave").map((step) => step.id);
+    expect(ids).toEqual(["intake", "policy-check", "approve", "apply"]);
+  });
+
+  it("maps the leave workflow onto the leave lane", () => {
+    expect(laneForWorkflow("leave")).toBe("leave");
+    expect(laneForWorkflow("vendors")).toBe("vendors");
+    expect(laneForWorkflow("leave-follow-up")).toBeNull();
+  });
+
+  it("keeps every leave step future before a run exists", () => {
+    const states = stepStates(stepsForLane("leave"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+
+  it("marks the intake done with the policy check current", () => {
+    const states = stepStates(stepsForLane("leave"), [withKind("leave.intake.completed")], true);
+    expect(states).toEqual(["done", "current", "future", "future"]);
+  });
+});
+
+describe("new-hire onboarding lane", () => {
+  it("follows the onboarding run definition step order", () => {
+    const ids = stepsForLane("onboarding").map((step) => step.id);
+    expect(ids).toEqual(["collect", "verify", "risk-score", "approve", "provision"]);
+  });
+
+  it("maps the onboarding workflow onto the onboarding lane", () => {
+    expect(laneForWorkflow("onboarding")).toBe("onboarding");
+    expect(laneForWorkflow("leave")).toBe("leave");
+    expect(laneForWorkflow("onboarding-follow-up")).toBeNull();
+  });
+
+  it("keeps every onboarding step future before a run exists", () => {
+    const states = stepStates(stepsForLane("onboarding"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+
+  it("marks collected and verified steps done with the risk score current", () => {
+    const events = [
+      withKind("onboarding.collect.completed"),
+      withKind("onboarding.verify.completed"),
+    ];
+    const states = stepStates(stepsForLane("onboarding"), events, true);
+    expect(states).toEqual(["done", "done", "current", "future", "future"]);
+  });
+});
+
+describe("employee offboarding lane", () => {
+  it("follows the offboarding run definition step order", () => {
+    const ids = stepsForLane("offboarding").map((step) => step.id);
+    expect(ids).toEqual(["intake", "access-audit", "approve", "revoke", "attest"]);
+  });
+
+  it("maps the offboarding workflow onto the offboarding lane", () => {
+    expect(laneForWorkflow("offboarding")).toBe("offboarding");
+    expect(laneForWorkflow("onboarding")).toBe("onboarding");
+    expect(laneForWorkflow("offboarding-follow-up")).toBeNull();
+  });
+
+  it("keeps every offboarding step future before a run exists", () => {
+    const states = stepStates(stepsForLane("offboarding"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+
+  it("marks intake and audit done with the approval gate current", () => {
+    const events = [
+      withKind("offboarding.intake.completed"),
+      withKind("offboarding.audit.completed"),
+    ];
+    const states = stepStates(stepsForLane("offboarding"), events, true);
+    expect(states).toEqual(["done", "done", "current", "future", "future"]);
+  });
+});
+
+describe("candidate screening lane", () => {
+  it("follows the screening run definition step order", () => {
+    const ids = stepsForLane("screening").map((step) => step.id);
+    expect(ids).toEqual(["requisition", "screen", "shortlist", "schedule"]);
+  });
+
+  it("maps the screening workflow onto the screening lane", () => {
+    expect(laneForWorkflow("screening")).toBe("screening");
+    expect(laneForWorkflow("offboarding")).toBe("offboarding");
+    expect(laneForWorkflow("screening-follow-up")).toBeNull();
+  });
+
+  it("keeps every screening step future before a run exists", () => {
+    const states = stepStates(stepsForLane("screening"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+
+  it("marks requisition and screen done with the shortlist current", () => {
+    const events = [
+      withKind("screening.requisition.completed"),
+      withKind("screening.screen.completed"),
+    ];
+    const states = stepStates(stepsForLane("screening"), events, true);
+    expect(states).toEqual(["done", "done", "current", "future"]);
+  });
+});
+
+describe("hr help lane", () => {
+  it("follows the hr-help run definition step order", () => {
+    const ids = stepsForLane("hr-help").map((step) => step.id);
+    expect(ids).toEqual(["intake", "retrieve", "draft", "approve", "send"]);
+  });
+
+  it("maps the hr-help workflow onto the hr-help lane", () => {
+    expect(laneForWorkflow("hr-help")).toBe("hr-help");
+    expect(laneForWorkflow("screening")).toBe("screening");
+    expect(laneForWorkflow("hr-help-follow-up")).toBeNull();
+  });
+
+  it("keeps every hr-help step future before a run exists", () => {
+    const states = stepStates(stepsForLane("hr-help"), [], false);
+    expect(states.every((state) => state === "future")).toBe(true);
+  });
+
+  it("marks intake and retrieve done with the draft current", () => {
+    const events = [
+      withKind("hr-help.intake.completed"),
+      withKind("hr-help.retrieve.completed"),
+    ];
+    const states = stepStates(stepsForLane("hr-help"), events, true);
+    expect(states).toEqual(["done", "done", "current", "future", "future"]);
   });
 });
 

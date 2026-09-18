@@ -1,13 +1,11 @@
 import type { JiraIssue } from "@/lib/board";
 import { BOARD_COLUMNS, boardStats, groupIssues } from "@/lib/board";
-import type { Workspace } from "@/lib/models";
 import type { JiraPrefs } from "@/lib/prefs";
 
 import { IconRefresh } from "./icons";
 import { TicketCard } from "./TicketCard";
 
 type BoardViewProps = {
-  workspace: Workspace;
   prefs: JiraPrefs;
   issues: JiraIssue[];
   boardTitle: string;
@@ -17,19 +15,18 @@ type BoardViewProps = {
   search: string;
   activeTicketKey?: string;
   onSearchChange: (value: string) => void;
-  onProjectChange: (project: string) => void;
-  onBoardChange: (boardId: string) => void;
   onRefresh: () => void;
   onOpenDetails: (issue: JiraIssue) => void;
 };
 
 /**
- * View A — the sprint board on the Dashboard tab. Filters and stats sit in
- * one row, the sprint header carries the project/board/sprint labels, and the
- * kanban renders the four console columns with dashed empty placeholders.
+ * View A — the sprint board on the Dashboard tab. One board at a time: the
+ * filters and stats sit in one row, the sprint header carries the
+ * project/board/sprint labels, and the kanban renders the four console
+ * columns with dashed empty placeholders. Switching the Jira project or
+ * board lives in Settings.
  */
 export function BoardView({
-  workspace,
   prefs,
   issues,
   boardTitle,
@@ -39,19 +36,9 @@ export function BoardView({
   search,
   activeTicketKey,
   onSearchChange,
-  onProjectChange,
-  onBoardChange,
   onRefresh,
   onOpenDetails,
 }: BoardViewProps) {
-  const project = prefs.project || workspace.projects[0] || "";
-  const boards = workspace.boards.filter((board) => board.project === project);
-  const boardValue =
-    prefs.boardId !== null && boards.some((board) => board.id === prefs.boardId)
-      ? String(prefs.boardId)
-      : boards[0]
-        ? String(boards[0].id)
-        : "";
   const grouped = groupIssues(issues, search);
   const stats = boardStats(issues);
 
@@ -59,42 +46,6 @@ export function BoardView({
     <section id="board-view">
       <div className="filter-row">
         <span className="filter-label">Jira</span>
-        <label>
-          <span>Project</span>
-          <select
-            id="project"
-            value={project}
-            onChange={(event) => onProjectChange(event.target.value)}
-          >
-            {workspace.projects.length === 0 ? (
-              <option value="">None available</option>
-            ) : (
-              workspace.projects.map((key) => (
-                <option key={key} value={key}>
-                  {key}
-                </option>
-              ))
-            )}
-          </select>
-        </label>
-        <label>
-          <span>Board</span>
-          <select
-            id="board-select"
-            value={boardValue}
-            onChange={(event) => onBoardChange(event.target.value)}
-          >
-            {boards.length === 0 ? (
-              <option value="">None available</option>
-            ) : (
-              boards.map((board) => (
-                <option key={board.id} value={String(board.id)}>
-                  {board.name}
-                </option>
-              ))
-            )}
-          </select>
-        </label>
         <label className="search-field">
           <span>Search tickets</span>
           <input
@@ -135,7 +86,7 @@ export function BoardView({
           <h2 id="board-title">{boardTitle}</h2>
           <p className="sprint-meta">
             <span>
-              Project <strong>{project || "—"}</strong>
+              Project <strong>{prefs.project || "—"}</strong>
             </span>
             <span>
               Board <strong>{prefs.boardName || "—"}</strong>

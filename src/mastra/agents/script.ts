@@ -1,6 +1,6 @@
 import { Agent } from "@mastra/core/agent";
 
-import { DEEPSEEK_FLASH_MODEL_CONFIG } from "../shared/model.js";
+import { DEFAULT_AGENT_MODEL_CONFIG } from "../shared/model.js";
 
 export interface AgentScenario<TInput = unknown, TOutput = unknown> {
   readonly name: string;
@@ -43,7 +43,8 @@ interface LaneAgentConfig {
 
 /**
  * Shared agent wiring for every AllRounder lane:
- * - DeepSeek v4-flash model (single source of truth in shared/model.ts).
+ * - OpenRouter `nex-agi/nex-n2.5-pro:free` model (single source of truth in
+ *   shared/model.ts).
  * - Zero-temperature generate/stream options for deterministic, analytical
  *   output (v1.64 names these `*Legacy`; `generate()` merges them).
  * - Instructions resolved at run time so hosts can inject a `promptOverride`
@@ -54,7 +55,7 @@ function createLaneAgent(config: LaneAgentConfig): Agent {
     id: config.id,
     name: config.name,
     ...(config.description === undefined ? {} : { description: config.description }),
-    model: DEEPSEEK_FLASH_MODEL_CONFIG,
+    model: DEFAULT_AGENT_MODEL_CONFIG,
     defaultGenerateOptionsLegacy: { temperature: 0 },
     defaultStreamOptionsLegacy: { temperature: 0 },
     instructions: async ({ requestContext }) => {

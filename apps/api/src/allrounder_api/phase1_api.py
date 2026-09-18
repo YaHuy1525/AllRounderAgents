@@ -16,6 +16,7 @@ from .metrics import MetricsRegistry
 from .repositories import (
     ApprovalRecord,
     ApprovalRepository,
+    CaseRecord,
     CaseRepository,
     SupportSendRepository,
 )
@@ -57,6 +58,10 @@ class SupportDraft(ApiModel):
     ticket_key: str = Field(pattern=r"^[A-Z][A-Z0-9_]*-\d+$")
     draft: str = Field(min_length=1, max_length=20_000)
     citations: list[CitationInput] = Field(max_length=100)
+
+
+class CaseOpen(ApiModel):
+    ticket_key: str = Field(pattern=r"^[A-Z][A-Z0-9_]*-\d+$")
 
 
 class SupportSend(ApiModel):
@@ -178,6 +183,31 @@ def build_phase1_router(
             }
         except KeyError as error:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Resource not found") from error
+
+    @router.post("/cases")
+    async def open_case(
+        request: CaseOpen, identity: Principal = Depends(principal)
+    ) -> dict[str, object]:
+        require_role(identity, "agent", "admin")
+        try:
+            existing = await cases.get_by_ticket(request.ticket_key, identity.tenant_id)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            return {
+                "caseId": existing.id, "ticketKey": existing.ticket_key,
+                "status": existing.status, "created": False,
+            }
+        case = await cases.create(
+            CaseRecord(
+                id=str(uuid4()), tenant_id=identity.tenant_id,
+                ticket_key=request.ticket_key, domain="unknown", status="open",
+            )
+        )
+        return {
+            "caseId": case.id, "ticketKey": case.ticket_key,
+            "status": case.status, "created": True,
+        }
 
     @router.post("/support/drafts/start")
     async def start_support_draft(

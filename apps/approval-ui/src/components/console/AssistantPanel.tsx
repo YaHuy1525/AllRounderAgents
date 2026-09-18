@@ -14,6 +14,7 @@ import {
 } from "@/lib/chat";
 
 import { IconClose } from "./icons";
+import { Markdown } from "./Markdown";
 import { TICKET_DRAG_TYPE } from "./TicketCard";
 
 type ChatMessage = { role: "user" | "assistant"; body: string; source?: string };
@@ -137,7 +138,7 @@ export function AssistantPanel({
         ) : (
           messages.map((message, index) => (
             <article key={`${index}-${message.role}`} className={`chat-row chat-${message.role}`}>
-              <p>{message.body}</p>
+              <Markdown text={message.body} />
               {message.source ? <span className="chat-source">{message.source}</span> : null}
             </article>
           ))

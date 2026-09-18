@@ -1,0 +1,114 @@
+{
+  "employees": [
+    {
+      "employeeId": "E-1001",
+      "fullName": "Jordan Avery",
+      "roleTitle": "Platform Engineer",
+      "department": "Engineering",
+      "managerId": "E-1002",
+      "location": "Austin",
+      "accessTier": "high",
+      "systems": ["okta", "github", "aws", "jira", "slack"],
+      "status": "active",
+      "startDate": "2024-03-04",
+      "leaveBalanceDays": 14
+    },
+    {
+      "employeeId": "E-1002",
+      "fullName": "Priya Raman",
+      "roleTitle": "Engineering Manager",
+      "department": "Engineering",
+      "managerId": "E-1008",
+      "location": "Austin",
+      "accessTier": "medium",
+      "systems": ["okta", "github", "jira", "aws", "slack"],
+      "status": "active",
+      "startDate": "2022-06-13",
+      "leaveBalanceDays": 9
+    },
+    {
+      "employeeId": "E-1003",
+      "fullName": "Sam Okafor",
+      "roleTitle": "Support Specialist",
+      "department": "Operations",
+      "managerId": "E-1007",
+      "location": "Lisbon",
+      "accessTier": "low",
+      "systems": ["okta", "zendesk", "slack"],
+      "status": "active",
+      "startDate": "2025-01-20",
+      "leaveBalanceDays": 11
+    },
+    {
+      "employeeId": "E-1004",
+      "fullName": "Lena Fischer",
+      "roleTitle": "Payroll Analyst",
+      "department": "Finance",
+      "managerId": "E-1005",
+      "location": "Berlin",
+      "accessTier": "high",
+      "systems": ["okta", "payroll", "slack"],
+      "status": "active",
+      "startDate": "2023-09-11",
+      "leaveBalanceDays": 6
+    },
+    {
+      "employeeId": "E-1005",
+      "fullName": "Marco Silveira",
+      "roleTitle": "Finance Manager",
+      "department": "Finance",
+      "managerId": "E-1008",
+      "location": "Lisbon",
+      "accessTier": "high",
+      "systems": ["okta", "payroll", "erp", "banking", "slack"],
+      "status": "active",
+      "startDate": "2021-11-02",
+      "leaveBalanceDays": 15
+    },
+    {
+      "employeeId": "E-1006",
+      "fullName": "Dara Whitfield",
+      "roleTitle": "People Partner",
+      "department": "People",
+      "managerId": "E-1008",
+      "location": "Austin",
+      "accessTier": "medium",
+      "systems": ["okta", "workday", "slack"],
+      "status": "active",
+      "startDate": "2022-02-28",
+      "leaveBalanceDays": 12
+    },
+    {
+      "employeeId": "E-1007",
+      "fullName": "Tomas Berg",
+      "roleTitle": "Ops Coordinator",
+      "department": "Operations",
+      "managerId": "E-1008",
+      "location": "Lisbon",
+      "accessTier": "low",
+      "systems": ["okta", "jira", "slack"],
+      "status": "active",
+      "startDate": "2023-05-15",
+      "leaveBalanceDays": 8
+    },
+    {
+      "employeeId": "E-1008",
+      "fullName": "Ada Nakamura",
+      "roleTitle": "Chief of Staff",
+      "department": "People",
+      "managerId": null,
+      "location": "Austin",
+      "accessTier": "high",
+      "systems": ["okta", "jira", "slack", "hr-console"],
+      "status": "active",
+      "startDate": "2020-10-01",
+      "leaveBalanceDays": 18
+    }
+  ],
+  "departments": {
+    "Engineering": { "headId": "E-1002" },
+    "Finance": { "headId": "E-1005" },
+    "Operations": { "headId": "E-1007" },
+    "People": { "headId": "E-1008" }
+  }
+}

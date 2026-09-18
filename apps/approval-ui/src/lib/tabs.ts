@@ -7,6 +7,16 @@ export type TabKind =
   | "account"
   | "new";
 
+const TAB_KINDS: readonly string[] = [
+  "dashboard",
+  "ticket",
+  "approvals",
+  "docs",
+  "settings",
+  "account",
+  "new",
+];
+
 export type Tab = {
   id: string;
   kind: TabKind;
@@ -96,4 +106,78 @@ export function closeTab(
   if (activeId !== id) return { tabs: next, activeId };
   const fallback = next[Math.max(0, index - 1)]?.id ?? DASHBOARD_TAB.id;
   return { tabs: next, activeId: fallback };
+}
+
+const TAB_STATE_KEY = "allrounder.tabs.v1";
+
+export type TabState = { tabs: Tab[]; activeTabId: string };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function sanitizeTab(value: unknown): Tab | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const kind = typeof record.kind === "string" ? record.kind : "";
+  if (id === "" || !TAB_KINDS.includes(kind)) return null;
+  const tab: Tab = {
+    id,
+    kind: kind as TabKind,
+    title: typeof record.title === "string" ? record.title : "",
+  };
+  if (typeof record.ticketKey === "string" && record.ticketKey !== "") {
+    tab.ticketKey = record.ticketKey;
+  }
+  if (typeof record.ticketSummary === "string" && record.ticketSummary !== "") {
+    tab.ticketSummary = record.ticketSummary;
+  }
+  return tab;
+}
+
+/**
+ * Restore the tab strip saved by `saveTabState`. Invalid entries are dropped
+ * and the dashboard is re-anchored, so a corrupt payload can never wedge the
+ * console — it just falls back to a fresh dashboard.
+ */
+export function loadTabState(storage: Pick<Storage, "getItem">): TabState | null {
+  let raw: string | null = null;
+  try {
+    raw = storage.getItem(TAB_STATE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = asRecord(JSON.parse(raw));
+    if (!parsed) return null;
+    const tabs: Tab[] = [];
+    for (const item of Array.isArray(parsed.tabs) ? parsed.tabs : []) {
+      const tab = sanitizeTab(item);
+      if (tab !== null && !tabs.some((entry) => entry.id === tab.id)) tabs.push(tab);
+    }
+    if (tabs.length === 0) return null;
+    const next = ensureDashboard(tabs);
+    const activeTabId =
+      typeof parsed.activeTabId === "string" &&
+      next.some((tab) => tab.id === parsed.activeTabId)
+        ? parsed.activeTabId
+        : DASHBOARD_TAB.id;
+    return { tabs: next, activeTabId };
+  } catch {
+    return null;
+  }
+}
+
+/** Best-effort persistence: storage may be unavailable (private mode). */
+export function saveTabState(storage: Pick<Storage, "setItem">, state: TabState): void {
+  try {
+    storage.setItem(
+      TAB_STATE_KEY,
+      JSON.stringify({ tabs: state.tabs, activeTabId: state.activeTabId }),
+    );
+  } catch {
+    // The console still works when the tab strip cannot be persisted.
+  }
 }

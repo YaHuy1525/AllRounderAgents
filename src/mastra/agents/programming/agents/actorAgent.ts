@@ -14,6 +14,7 @@ export const actorAgent = createStructuredAgent({
       "Read the RCA evidence and the current source at the evidence paths.",
       "Identify the minimal change that fixes the cited root cause.",
       "Write the complete new content for each patched file.",
+      "The patch plan always lists at least one file (a whole-file replacement); never return an empty files list.",
       "Return the patch plan JSON object below and nothing else.",
     ],
     qualityBar:

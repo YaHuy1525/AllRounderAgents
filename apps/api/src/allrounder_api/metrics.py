@@ -66,6 +66,18 @@ class MetricsRegistry:
             buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0),
             registry=self.registry,
         )
+        self.runs = Counter(
+            "runs_total",
+            "Workflow runs by terminal status.",
+            ["workflow", "status"],
+            registry=self.registry,
+        )
+        self.run_decisions = Counter(
+            "run_decisions_total",
+            "Human decisions on runs by action.",
+            ["workflow", "action"],
+            registry=self.registry,
+        )
 
     def record_request(
         self, method: str, route: str, status_code: int, duration_seconds: float
@@ -87,6 +99,12 @@ class MetricsRegistry:
 
     def record_chat_stream(self, source: str, first_token_seconds: float) -> None:
         self.chat_first_token.labels(source=source).observe(first_token_seconds)
+
+    def record_run(self, *, workflow: str, status: str) -> None:
+        self.runs.labels(workflow=workflow, status=status).inc()
+
+    def record_run_decision(self, *, workflow: str, action: str) -> None:
+        self.run_decisions.labels(workflow=workflow, action=action).inc()
 
     def render(self) -> bytes:
         return generate_latest(self.registry)

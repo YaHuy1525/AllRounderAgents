@@ -20,6 +20,7 @@ import {
   type RootCauseAnalysis,
   type ValidationReport,
 } from "./contracts.js";
+import { generateContractOutput } from "../contract-output.js";
 import { actorAgent, investigatorAgent } from "./agents/index.js";
 import {
   RepositoryPolicyError,
@@ -120,30 +121,8 @@ function truncate(message: string, max = 1_900): string {
   return message.length <= max ? message : `${message.slice(0, max)}…`;
 }
 
-function extractJson(text: string): unknown {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = fenced?.[1] ?? text;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    throw new Error("Agent output did not contain a JSON object");
-  }
-  return JSON.parse(candidate.slice(start, end + 1)) as unknown;
-}
-
-function parseJsonObject<T>(schema: z.ZodType<T>, text: string, label: string): T {
-  const parsed = schema.safeParse(extractJson(text));
-  if (!parsed.success) {
-    const detail = parsed.error.issues
-      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-      .join("; ");
-    throw new Error(`${label} contract violation: ${detail}`);
-  }
-  return parsed.data;
-}
-
 /**
- * Default live model: the scripted DeepSeek agents that already exist for
+ * Default live model: the scripted OpenRouter agents that already exist for
  * this lane (investigator + actor). Every call is deterministic-only on the
  * output side — JSON is parsed through the same zod contracts the
  * deterministic workflow uses. Tests never hit these; they inject a
@@ -170,8 +149,7 @@ export function createCodingAgentModel(options: {
         "- Do not propose a patch.",
         'Return JSON matching { summary, confidence, evidence[{ path, startLine, endLine, excerpt }], fixable }.',
       ].join("\n");
-      const { text } = await investigator.generate(prompt);
-      return parseJsonObject(RootCauseAnalysisSchema, text, "Investigator");
+      return generateContractOutput(investigator, prompt, RootCauseAnalysisSchema, "Investigator");
     },
 
     async planPatch(context: InvestigationContext, rca: RootCauseAnalysis): Promise<PatchPlan> {
@@ -202,12 +180,12 @@ export function createCodingAgentModel(options: {
         "",
         "Rules:",
         "- Patch only files named in the RCA evidence.",
+        "- files must list at least one file (a whole-file replacement); never return an empty list.",
         "- Keep the change the smallest that fixes the cited cause.",
         "- validators must be one or more of json, yaml, xml, basic-syntax.",
         'Return JSON matching { summary, files[{ path, content, validators }] }.',
       ].join("\n");
-      const { text } = await actor.generate(prompt);
-      return parseJsonObject(PatchPlanSchema, text, "Actor");
+      return generateContractOutput(actor, prompt, PatchPlanSchema, "Actor");
     },
 
     async repairPatch(
@@ -228,8 +206,7 @@ export function createCodingAgentModel(options: {
         "- Return the complete repaired patch, not a diff.",
         'Return JSON matching { summary, files[{ path, content, validators }] }.',
       ].join("\n");
-      const { text } = await actor.generate(prompt);
-      return parseJsonObject(PatchPlanSchema, text, "Actor repair");
+      return generateContractOutput(actor, prompt, PatchPlanSchema, "Actor repair");
     },
   };
 }
@@ -242,7 +219,7 @@ export function createCodingAgentModel(options: {
  * Destructive-path patches suspend at `preflight` for a signed human
  * approval; nothing is written to GitHub before an approved resume with a
  * receipt. All policy checks and validators stay deterministic — the model
- * is injected (`deps.model`), defaulting to the scripted DeepSeek agents.
+ * is injected (`deps.model`), defaulting to the scripted OpenRouter agents.
  */
 export function createCodingFlow(deps: CodingFlowDeps) {
   const { github } = deps;

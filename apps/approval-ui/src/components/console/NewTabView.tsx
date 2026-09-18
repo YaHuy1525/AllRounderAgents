@@ -1,92 +1,131 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-import type { Workspace } from "@/lib/models";
-import type { JiraPrefs } from "@/lib/prefs";
+import type { JiraIssue } from "@/lib/board";
+import { RUNNABLE_WORKFLOWS, workflowsForTicket } from "@/lib/runs";
+
+import { StartRunCard } from "./RunPanel";
 
 /**
- * Empty "+" tab state: a board picker reusing the workspace catalog. Opening
- * a board focuses the Dashboard tab with that project/board applied.
+ * Empty "+" tab state: pick a ticket, see the workflows its type supports,
+ * then start one — the run opens in the ticket tab where the action bar
+ * drives every checkpoint. Board switching lives in Settings.
  */
 export function NewTabView({
-  workspace,
-  prefs,
-  onOpenBoard,
+  issues,
+  status,
+  onOpenTicket,
 }: {
-  workspace: Workspace;
-  prefs: JiraPrefs;
-  onOpenBoard: (project: string, boardId: number | null) => void;
+  issues: JiraIssue[];
+  status: string;
+  onOpenTicket: (issue: JiraIssue) => void;
 }) {
-  const [project, setProject] = useState(prefs.project || workspace.projects[0] || "");
-  const [boardId, setBoardId] = useState("");
+  const [search, setSearch] = useState("");
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  const boards = workspace.boards.filter((board) => board.project === project);
-  const boardValue =
-    boardId !== "" && boards.some((board) => String(board.id) === boardId)
-      ? boardId
-      : boards[0]
-        ? String(boards[0].id)
-        : "";
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (term === "") return issues;
+    return issues.filter((issue) =>
+      `${issue.key} ${issue.summary} ${issue.issue_type} ${issue.labels.join(" ")}`
+        .toLowerCase()
+        .includes(term),
+    );
+  }, [issues, search]);
+
+  const selected = issues.find((issue) => issue.key === selectedKey) ?? null;
+  const supported = useMemo(() => {
+    if (selected === null) return [];
+    const ids = workflowsForTicket({
+      issueType: selected.issue_type,
+      summary: selected.summary,
+      labels: selected.labels,
+    });
+    return RUNNABLE_WORKFLOWS.filter((item) => ids.includes(item.id));
+  }, [selected]);
 
   return (
     <section id="new-tab-view" className="panel-view new-tab-view">
       <div className="panel-heading">
         <p className="eyebrow">New tab</p>
-        <h2>Pick a board to open</h2>
+        <h2>Start a workflow run</h2>
         <p className="panel-note">
-          The sprint board lives on the Dashboard tab. Choosing a board here focuses it with your
-          selection applied.
+          Pick a ticket to see the workflows its type supports, then start one — the run opens in
+          the ticket tab and pauses at every checkpoint for your review.
         </p>
       </div>
-      <form
-        className="settings-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          onOpenBoard(project, boardValue === "" ? null : Number(boardValue));
-        }}
-      >
-        <label>
-          <span>Project</span>
-          <select
-            id="new-tab-project"
-            value={project}
-            onChange={(event) => {
-              setProject(event.target.value);
-              setBoardId("");
-            }}
-          >
-            {workspace.projects.length === 0 ? (
-              <option value="">None available</option>
+
+      <div className="start-panel-grid">
+        <section className="picker-pane" aria-label="Choose a ticket">
+          <header>
+            <h3>Choose a ticket</h3>
+            <p role="status">{status}</p>
+          </header>
+          <label className="search-field">
+            <span>Search tickets</span>
+            <input
+              id="new-tab-search"
+              type="search"
+              placeholder="Key, title, type or label"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+          <div className="ticket-list">
+            {filtered.length === 0 ? (
+              <p className="step-empty">No tickets match this search.</p>
             ) : (
-              workspace.projects.map((key) => (
-                <option key={key} value={key}>
-                  {key}
-                </option>
+              filtered.map((issue) => (
+                <button
+                  key={issue.key}
+                  type="button"
+                  className={`ticket-option${issue.key === selectedKey ? " selected" : ""}`}
+                  aria-pressed={issue.key === selectedKey}
+                  onClick={() => setSelectedKey(issue.key)}
+                >
+                  <strong>{issue.key}</strong>
+                  <span className="ticket-option-summary">{issue.summary}</span>
+                  <span className="ticket-option-meta">
+                    {`${issue.issue_type} · ${issue.status}`}
+                  </span>
+                </button>
               ))
             )}
-          </select>
-        </label>
-        <label>
-          <span>Board</span>
-          <select id="new-tab-board" value={boardValue} onChange={(event) => setBoardId(event.target.value)}>
-            {boards.length === 0 ? (
-              <option value="">None available</option>
-            ) : (
-              boards.map((board) => (
-                <option key={board.id} value={String(board.id)}>
-                  {`${board.name} (${board.type})`}
-                </option>
-              ))
-            )}
-          </select>
-        </label>
-        <div className="settings-actions">
-          <button id="new-tab-open" type="submit">
-            Open board
-          </button>
-        </div>
-      </form>
+          </div>
+        </section>
+
+        <section className="picker-pane" aria-label="Workflows for the selected ticket">
+          {selected === null ? (
+            <p className="step-empty">Select a ticket to see the workflows you can run.</p>
+          ) : (
+            <>
+              <header>
+                <h3>{`Workflows for ${selected.key}`}</h3>
+                <p>
+                  {`${selected.issue_type} tickets support the workflows below — the dropdown is limited to this list.`}
+                </p>
+              </header>
+              <ul className="workflow-list">
+                {supported.map((item) => (
+                  <li key={item.id} className="workflow-card">
+                    <h4>{item.label}</h4>
+                    <p>{item.description}</p>
+                  </li>
+                ))}
+              </ul>
+              <StartRunCard
+                key={selected.key}
+                issue={selected}
+                caseId={null}
+                initialWorkflow={supported[0]?.id}
+                workflowOptions={supported.map((item) => ({ id: item.id, label: item.label }))}
+                onStarted={() => onOpenTicket(selected)}
+              />
+            </>
+          )}
+        </section>
+      </div>
     </section>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, api } from "@/lib/api";
 import { safeBrowseUrl, ticketFacts, type JiraIssue } from "@/lib/board";
@@ -19,8 +19,10 @@ import {
   type TicketStatus,
 } from "@/lib/cases";
 import type { Approval } from "@/lib/models";
+import { listRuns, type RunDetail, type RunSummary } from "@/lib/runs";
 
 import { IconCode } from "./icons";
+import { RunPanel, StartRunCard } from "./RunPanel";
 
 type CaseState =
   | { status: "loading" }
@@ -32,6 +34,8 @@ const STEP_STATE_COPY: Record<StepState, string> = {
   done: "Completed",
   current: "In progress",
   future: "Not started",
+  awaiting: "Awaiting you",
+  blocked: "Blocked",
 };
 
 function formatTimestamp(value: string): string {
@@ -53,10 +57,10 @@ function EventPayload({ event }: { event: CaseEvent }) {
 }
 
 /**
- * View B — the ticket execution tab. The stepper is derived from the case
- * record's lane: only the steps that lane actually runs are rendered (the
- * support lane has no environment selection stage, for example). Approval
- * gates post to the real decision endpoint and refresh in place.
+ * View B — the ticket execution tab. When the ticket has runs, the run panel
+ * drives the experience (per-run SSE, queue/lock banners, the action bar,
+ * History); otherwise the lane stepper derived from the case events renders
+ * with a start-run card. Approval gates post to the real decision endpoint.
  */
 export function TicketTab({
   issue,
@@ -68,6 +72,9 @@ export function TicketTab({
   onDecide: (id: string, decision: "approved" | "rejected") => Promise<void>;
 }) {
   const [caseState, setCaseState] = useState<CaseState>({ status: "loading" });
+  const [caseTick, setCaseTick] = useState(0);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [activeRun, setActiveRun] = useState<RunDetail | null>(null);
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
   const [decidingId, setDecidingId] = useState<string | null>(null);
@@ -96,7 +103,21 @@ export function TicketTab({
     return () => {
       cancelled = true;
     };
+  }, [issue.key, caseTick]);
+
+  const refreshRuns = useCallback(async (): Promise<void> => {
+    try {
+      setRuns(await listRuns(issue.key));
+    } catch {
+      // The run list is supplemental; the case view still renders without it.
+    }
   }, [issue.key]);
+
+  useEffect(() => {
+    setRuns([]);
+    setActiveRun(null);
+    void refreshRuns();
+  }, [refreshRuns]);
 
   const record = caseState.status === "ready" ? caseState.record : null;
   const hasRun = record !== null;
@@ -121,6 +142,16 @@ export function TicketTab({
     return steps[0]?.id ?? null;
   }, [steps, states]);
   const activeStepId = expandedStep ?? defaultStepId;
+  const activeStep = steps.find((step) => step.id === activeStepId) ?? steps[0] ?? null;
+  const activeIndex = activeStep === null ? -1 : steps.indexOf(activeStep);
+  const activeState = activeIndex >= 0 ? states[activeIndex] ?? "future" : "future";
+  const activeStepEvents = activeStep === null ? [] : eventsForStep(activeStep, events);
+
+  // Bring the freshly selected panel into view after it renders.
+  useEffect(() => {
+    if (expandedStep === null) return;
+    panelRefs.current.get(expandedStep)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [expandedStep]);
 
   const relatedApprovals = useMemo(
     () =>
@@ -147,8 +178,7 @@ export function TicketTab({
   }
 
   function focusStep(step: LaneStep): void {
-    setExpandedStep((previous) => (previous === step.id ? null : step.id));
-    panelRefs.current.get(step.id)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    setExpandedStep(step.id);
   }
 
   return (
@@ -180,7 +210,7 @@ export function TicketTab({
       )}
       {caseState.status === "missing" && (
         <p className="ticket-notice">
-          {`No execution has been recorded for this ticket yet. The ${lane} lane steps below stay greyed until a run starts.`}
+          No case has been opened for this ticket yet — starting a run opens one automatically.
         </p>
       )}
       {caseState.status === "error" && (
@@ -189,87 +219,87 @@ export function TicketTab({
         </p>
       )}
 
-      <div className="stepper-row">
-        <ol className="stepper" aria-label="Run steps">
-          {steps.map((step, index) => {
-            const state = states[index] ?? "future";
-            return (
-              <li key={step.id} className={`step step-${state}`}>
-                <button
-                  type="button"
-                  className="step-button"
-                  aria-expanded={activeStepId === step.id}
-                  onClick={() => focusStep(step)}
-                >
-                  <span className="step-dot" aria-hidden="true">
-                    {state === "done" ? "✓" : index + 1}
-                  </span>
-                  <span className="step-label">
-                    {step.label}
-                    <span className="sr-only">{` — ${STEP_STATE_COPY[state]}`}</span>
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-        <button
-          type="button"
-          className="debug-toggle"
-          aria-expanded={debugOpen}
-          onClick={() => setDebugOpen((open) => !open)}
-        >
-          <IconCode />
-          <span>Debug Info</span>
-        </button>
-      </div>
-
-      {debugOpen && (
-        <div className="debug-drawer" id="debug-drawer">
-          <header>
-            <h3>Case record JSON</h3>
-            <button type="button" onClick={() => setDebugOpen(false)}>
-              Close
-            </button>
-          </header>
-          <pre>
-            {JSON.stringify(
-              record ?? { note: "No case record loaded for this ticket." },
-              null,
-              2,
-            )}
-          </pre>
-        </div>
-      )}
-
-      <div className="step-panels">
-        {steps.map((step) => {
-          const state = states[steps.indexOf(step)] ?? "future";
-          const stepEvents = eventsForStep(step, events);
-          const expanded = activeStepId === step.id;
-          return (
-            <section
-              key={step.id}
-              className={`step-panel${expanded ? " expanded" : ""}`}
-              ref={(node) => {
-                if (node) panelRefs.current.set(step.id, node);
-                else panelRefs.current.delete(step.id);
+      {runs.length > 0 ? (
+        <RunPanel
+          issue={issue}
+          runs={runs}
+          debugOpen={debugOpen}
+          onToggleDebug={() => setDebugOpen((open) => !open)}
+          onRunsChanged={() => void refreshRuns()}
+          onActiveRun={setActiveRun}
+        />
+      ) : (
+        <>
+          {(caseState.status === "ready" || caseState.status === "missing") && (
+            <StartRunCard
+              issue={issue}
+              caseId={caseState.status === "ready" ? caseState.record.id : null}
+              onStarted={() => {
+                void refreshRuns();
+                setCaseTick((tick) => tick + 1);
               }}
+            />
+          )}
+
+          <div className="stepper-row">
+            <ol className="stepper" aria-label="Run steps">
+              {steps.map((step, index) => {
+                const state = states[index] ?? "future";
+                return (
+                  <li key={step.id} className={`step step-${state}`}>
+                    <button
+                      type="button"
+                      className="step-button"
+                      aria-expanded={activeStepId === step.id}
+                      onClick={() => focusStep(step)}
+                    >
+                      <span className="step-dot" aria-hidden="true">
+                        {state === "done" ? "✓" : index + 1}
+                      </span>
+                      <span className="step-label">
+                        {step.label}
+                        <span className="sr-only">{` — ${STEP_STATE_COPY[state]}`}</span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+            <button
+              type="button"
+              className="debug-toggle"
+              aria-expanded={debugOpen}
+              onClick={() => setDebugOpen((open) => !open)}
             >
-              <header>
-                <button
-                  type="button"
-                  className="step-panel-toggle"
-                  aria-expanded={expanded}
-                  onClick={() => focusStep(step)}
-                >
-                  <span className={`step-state state-${state}`}>{STEP_STATE_COPY[state]}</span>
-                  <h3>{step.label}</h3>
-                </button>
-              </header>
-              {expanded && (
+              <IconCode />
+              <span>Debug Info</span>
+            </button>
+          </div>
+
+          <div className="step-panels">
+            {activeStep === null ? null : (
+              <section
+                className="step-panel expanded"
+                ref={(node) => {
+                  if (node) panelRefs.current.set(activeStep.id, node);
+                  else panelRefs.current.delete(activeStep.id);
+                }}
+              >
+                <header>
+                  <button
+                    type="button"
+                    className="step-panel-toggle"
+                    aria-expanded
+                    onClick={() => focusStep(activeStep)}
+                  >
+                    <span className={`step-state state-${activeState}`}>
+                      {STEP_STATE_COPY[activeState]}
+                    </span>
+                    <h3>{activeStep.label}</h3>
+                  </button>
+                </header>
                 <div className="step-panel-body">
-                  {step.id === "input" && (
+                  {activeStep.id === "input" && (
                     <dl className="ticket-facts">
                       {ticketFacts(issue).map((fact) => (
                         <div key={fact.label} className="fact-row">
@@ -280,7 +310,7 @@ export function TicketTab({
                     </dl>
                   )}
 
-                  {step.id === "gate" && (
+                  {activeStep.id === "gate" && (
                     <div className="gate-list">
                       {relatedApprovals.length === 0 ? (
                         <p className="step-empty">No approval gate has been raised for this case yet.</p>
@@ -331,19 +361,19 @@ export function TicketTab({
                     </div>
                   )}
 
-                  {step.id !== "input" && step.id !== "gate" && (
+                  {activeStep.id !== "input" && activeStep.id !== "gate" && (
                     <div className="step-events">
-                      {stepEvents.length === 0 ? (
+                      {activeStepEvents.length === 0 ? (
                         <p className="step-empty">No data recorded for this step yet.</p>
                       ) : (
-                        stepEvents.map((event) => (
+                        activeStepEvents.map((event) => (
                           <EventPayload key={`${event.kind}-${event.created_at}-${event.actor}`} event={event} />
                         ))
                       )}
                     </div>
                   )}
 
-                  {step.id === "results" && resultLinks.length > 0 && (
+                  {activeStep.id === "results" && resultLinks.length > 0 && (
                     <ul className="result-links">
                       {resultLinks.map((link) => (
                         <li key={link}>
@@ -355,17 +385,39 @@ export function TicketTab({
                     </ul>
                   )}
 
-                  {step.id === "input" && record && (
+                  {activeStep.id === "input" && record && (
                     <p className="step-summary">
                       {`Lane ${lane} · case ${record.id} · status ${record.status}`}
                     </p>
                   )}
                 </div>
-              )}
-            </section>
-          );
-        })}
-      </div>
+              </section>
+            )}
+          </div>
+        </>
+      )}
+
+      {debugOpen && (
+        <div className="debug-drawer" id="debug-drawer">
+          <header>
+            <h3>Case and run JSON</h3>
+            <button type="button" onClick={() => setDebugOpen(false)}>
+              Close
+            </button>
+          </header>
+          <pre>
+            {JSON.stringify(
+              {
+                case: record ?? { note: "No case record loaded for this ticket." },
+                runs,
+                activeRun,
+              },
+              null,
+              2,
+            )}
+          </pre>
+        </div>
+      )}
     </section>
   );
 }

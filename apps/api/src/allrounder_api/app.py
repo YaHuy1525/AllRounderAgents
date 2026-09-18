@@ -9,6 +9,7 @@ import secrets
 import time
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -31,12 +32,16 @@ from .repositories import (
     ApprovalRepository,
     CaseRepository,
     FeedbackRepository,
+    GithubAccountRepository,
     InMemoryApprovalRepository,
     InMemoryCaseRepository,
     InMemoryFeedbackRepository,
+    InMemoryGithubAccountRepository,
     InMemorySupportSendRepository,
     SupportSendRepository,
 )
+from .runs import RunService, RunServiceConfig, build_memory_run_service
+from .runs.api import build_runs_router
 from .settings import Settings
 
 
@@ -59,6 +64,9 @@ def create_app(
     chat_completer: ChatCompleter | None = None,
     metrics: MetricsRegistry | None = None,
     rate_limiter: RateLimiter | None = None,
+    runs_service: RunService | None = None,
+    github_client: httpx.AsyncClient | None = None,
+    github_accounts: GithubAccountRepository | None = None,
 ) -> FastAPI:
     config = settings or Settings()
     configure_logging(config.log_level)
@@ -107,6 +115,7 @@ def create_app(
         return response
 
     from .chat_api import build_chat_router
+    from .github_api import build_github_router
     from .jira_board_api import build_jira_board_router
     from .phase1_api import build_phase1_router
     from .phase2_api import build_phase2_router
@@ -156,6 +165,15 @@ def create_app(
         )
     )
     app.include_router(
+        build_github_router(
+            verifier=verifier,
+            repository_allowlist=config.github_repository_allowlist,
+            accounts=github_accounts or InMemoryGithubAccountRepository(),
+            token=config.github_token.get_secret_value(),
+            client=github_client,
+        )
+    )
+    app.include_router(
         build_chat_router(
             verifier=verifier,
             completer=chat_completer,
@@ -163,6 +181,25 @@ def create_app(
             metrics=metrics,
         )
     )
+    run_service = runs_service or build_memory_run_service(
+        signer=signer,
+        approvals=approvals,
+        cases=cases,
+        mastra_base_url=config.mastra_base_url,
+        mastra_timeout_seconds=config.mastra_request_timeout_seconds,
+        max_concurrent=config.runs_max_concurrent,
+        max_concurrent_applies=config.runs_max_concurrent_applies,
+        config=RunServiceConfig(
+            lock_ttl_seconds=config.runs_lock_ttl_seconds,
+            receipt_ttl_seconds=config.runs_receipt_ttl_seconds,
+            max_run_seconds=config.runs_max_seconds,
+            max_regenerations_per_step=config.runs_max_regenerations_per_step,
+        ),
+        metrics=metrics,
+    )
+    app.include_router(build_runs_router(verifier=verifier, service=run_service))
+    if config.runs_sweep_interval_seconds > 0:
+        _schedule_run_sweeper(app, run_service, config.runs_sweep_interval_seconds)
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -256,6 +293,29 @@ def create_app(
         return {"ticketKey": ticket.key, "deduped": False}
 
     return app
+
+
+def _schedule_run_sweeper(app: FastAPI, service: RunService, interval_seconds: int) -> None:
+    """Background sweeper: time out over-budget passes, unblock stale locks."""
+
+    async def sweep_loop() -> None:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await service.sweep_expired()
+            except Exception:  # pragma: no cover - defensive background loop
+                get_logger().exception("run_sweeper_failed")
+
+    async def start_sweeper() -> None:  # pragma: no cover - lifecycle hook
+        app.state.run_sweeper = asyncio.create_task(sweep_loop())
+
+    async def stop_sweeper() -> None:  # pragma: no cover - lifecycle hook
+        sweeper = getattr(app.state, "run_sweeper", None)
+        if sweeper is not None:
+            sweeper.cancel()
+
+    app.router.add_event_handler("startup", start_sweeper)
+    app.router.add_event_handler("shutdown", stop_sweeper)
 
 
 def _webhook_signature_header(request: Request) -> str | None:

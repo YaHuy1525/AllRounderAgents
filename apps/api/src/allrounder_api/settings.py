@@ -53,4 +53,16 @@ class Settings(BaseSettings):
     github_app_installation_id: str = ""
     github_app_private_key: SecretStr = SecretStr("")
     jira_tenant_project_allowlist: dict[str, list[str]] = Field(default_factory=dict)
+    # Parallel-safe run infrastructure. Ceilings are hard caps; over-cap runs
+    # queue with a visible position instead of being dropped.
+    mastra_base_url: str = "http://localhost:4111"
+    mastra_request_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    runs_max_concurrent: int = Field(default=5, ge=1, le=100)
+    runs_max_concurrent_applies: int = Field(default=2, ge=1, le=20)
+    runs_lock_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
+    runs_receipt_ttl_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    runs_max_seconds: int = Field(default=1_800, ge=60, le=86_400)
+    runs_sweep_interval_seconds: int = Field(default=0, ge=0, le=86_400)
+    runs_registry_ttl_seconds: int = Field(default=604_800, ge=3_600, le=2_592_000)
+    runs_max_regenerations_per_step: int = Field(default=1, ge=0, le=10)
 

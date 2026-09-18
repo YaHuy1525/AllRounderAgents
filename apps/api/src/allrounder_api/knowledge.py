@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+import re
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -13,7 +14,7 @@ from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from .resilience import retry_async
+from .resilience import DEFAULT_ATTEMPTS, retry_async
 
 
 class EmptyRetrievalError(LookupError):
@@ -52,17 +53,32 @@ class CitationSpan:
 
 @dataclass(frozen=True)
 class CitedPassage:
+    """One retrieved passage.
+
+    ``score`` is the effective ranking score of the stage that produced the
+    final order: the fused reciprocal-rank-fusion score on the hybrid path,
+    or the reranker's relevance after reranking. ``rerank_score`` repeats
+    the relevance for provenance and is ``None`` unless reranking ran.
+    """
+
     content: str
     citation: CitationSpan
     score: float
     stale: bool
     source_version: str
+    rerank_score: float | None = None
 
 
 @dataclass(frozen=True)
 class RetrievalResult:
+    """A retrieval pass; ``rerank_model`` is set only when reranking produced
+    the returned order, and ``rerank_degraded`` is true when a configured
+    reranker failed and the fused order was used instead."""
+
     passages: list[CitedPassage]
     embedding_model: str
+    rerank_model: str | None = None
+    rerank_degraded: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,6 +91,80 @@ class _Chunk:
     embedding: list[float]
     embedding_model: str
     embedding_dimensions: int
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    chunk_id: str
+    content: str
+    citation: CitationSpan
+    stale: bool
+    source_version: str
+
+
+RRF_K = 60
+RECALL_K = 30
+
+
+def reciprocal_rank_fusion(
+    arms: Sequence[Sequence[_Candidate]], *, k: int = RRF_K
+) -> list[tuple[float, _Candidate]]:
+    """Merge ranked arms with reciprocal rank fusion.
+
+    Each hit scores ``1 / (k + rank)`` per arm and the scores sum across
+    arms; ties break by chunk id so the merged order is deterministic.
+    """
+    merged: dict[str, tuple[float, _Candidate]] = {}
+    for arm in arms:
+        for rank, candidate in enumerate(arm, start=1):
+            score = 1.0 / (k + rank)
+            prior = merged.get(candidate.chunk_id)
+            if prior is None:
+                merged[candidate.chunk_id] = (score, candidate)
+            else:
+                merged[candidate.chunk_id] = (prior[0] + score, prior[1])
+    return sorted(merged.values(), key=lambda item: (-item[0], item[1].chunk_id))
+
+
+def _memory_chunk_id(chunk: _Chunk) -> str:
+    document = chunk.document
+    return f"{document.source_id}#{document.source_version}#{chunk.ordinal}"
+
+
+def _memory_candidate(chunk: _Chunk, at: datetime) -> _Candidate:
+    return _Candidate(
+        chunk_id=_memory_chunk_id(chunk),
+        content=chunk.content,
+        citation=CitationSpan(chunk.document.source_id, chunk.start, chunk.end),
+        stale=chunk.document.stale_after <= at,
+        source_version=chunk.document.source_version,
+    )
+
+
+def _candidate_from_row(row: dict[str, Any]) -> _Candidate:
+    return _Candidate(
+        chunk_id=str(row["chunk_id"]),
+        content=str(row["content"]),
+        citation=CitationSpan(
+            str(row["source_id"]), int(row["span_start"]), int(row["span_end"])
+        ),
+        stale=bool(row["stale"]),
+        source_version=str(row["source_version"]),
+    )
+
+
+def _query_terms(query: str) -> list[str]:
+    """Lowercased word tokens (3+ characters) for the in-memory lexical arm."""
+    terms: list[str] = []
+    for match in re.findall(r"[a-z][a-z0-9-]{2,}", query.lower()):
+        if match not in terms:
+            terms.append(match)
+    return terms
+
+
+def _matches_term(text: str, term: str) -> bool:
+    """Word-boundary test so a short term never matches inside a longer word."""
+    return re.search(rf"\b{re.escape(term)}\b", text.lower()) is not None
 
 
 def chunk_text(
@@ -224,9 +314,131 @@ class OpenAICompatibleAdapter:
             await self._client.aclose()
 
 
+class Reranker(Protocol):
+    """Cross-encoder rerank stage over a short candidate list."""
+
+    model: str
+
+    async def rerank(
+        self, query: str, passages: list[CitedPassage], top_n: int
+    ) -> list[CitedPassage]: ...
+
+
+class NoopReranker:
+    """Deterministic pass-through keeping the fused order (tests and CI)."""
+
+    def __init__(self, model: str = "noop") -> None:
+        self.model = model
+
+    async def rerank(
+        self, query: str, passages: list[CitedPassage], top_n: int
+    ) -> list[CitedPassage]:
+        return passages[:top_n]
+
+
+class CohereReranker:
+    """Hosted cross-encoder reranker over the Cohere v2 rerank API."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str = "rerank-v3.5",
+        base_url: str = "https://api.cohere.com",
+        attempts: int = DEFAULT_ATTEMPTS,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        if not api_key:
+            raise ValueError("COHERE_API_KEY is required")
+        self.model = model
+        self._api_key = api_key
+        self._base_url = base_url.rstrip("/")
+        self._attempts = attempts
+        self._client = client or httpx.AsyncClient(timeout=30)
+        self._owns_client = client is None
+
+    async def rerank(
+        self, query: str, passages: list[CitedPassage], top_n: int
+    ) -> list[CitedPassage]:
+        if not passages:
+            return []
+        limit = max(1, min(top_n, len(passages)))
+
+        async def send() -> httpx.Response:
+            response = await self._client.post(
+                f"{self._base_url}/v2/rerank",
+                json={
+                    "model": self.model,
+                    "query": query,
+                    "documents": [passage.content for passage in passages],
+                    "top_n": limit,
+                },
+                headers={"Authorization": f"Bearer {self._api_key}"},
+            )
+            response.raise_for_status()
+            return response
+
+        response = await retry_async(send, attempts=self._attempts)
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Reranker returned an invalid response")
+        results = payload.get("results")
+        if not isinstance(results, list) or not results:
+            raise ValueError("Reranker returned no results")
+        ranked: list[CitedPassage] = []
+        seen: set[int] = set()
+        for item in results:
+            if not isinstance(item, dict):
+                raise ValueError("Reranker returned an invalid result")
+            index = item.get("index")
+            relevance = item.get("relevance_score")
+            if (
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or not 0 <= index < len(passages)
+                or index in seen
+                or not isinstance(relevance, int | float)
+                or isinstance(relevance, bool)
+            ):
+                raise ValueError("Reranker returned an invalid result")
+            seen.add(index)
+            score = float(relevance)
+            ranked.append(replace(passages[index], score=score, rerank_score=score))
+        return ranked
+
+    async def close(self) -> None:
+        if self._owns_client:
+            await self._client.aclose()
+
+
+async def _rerank_passages(
+    reranker: Reranker | None, query: str, passages: list[CitedPassage], k: int
+) -> tuple[list[CitedPassage], str | None, bool]:
+    """Return (passages, rerank_model, rerank_degraded).
+
+    A reranker outage degrades to the fused order instead of failing the
+    retrieval; callers surface the degradation via the result flags.
+    """
+    if reranker is None:
+        return passages[:k], None, False
+    try:
+        reranked = await reranker.rerank(query, passages, k)
+    except Exception:  # noqa: BLE001 -- a reranker outage must not fail retrieval
+        return passages[:k], None, True
+    return reranked[:k], reranker.model, False
+
+
 class InMemoryKnowledgeStore:
-    def __init__(self, embeddings: EmbeddingProvider) -> None:
+    def __init__(
+        self,
+        embeddings: EmbeddingProvider,
+        *,
+        reranker: Reranker | None = None,
+        recall_k: int = RECALL_K,
+    ) -> None:
         self._embeddings = embeddings
+        self._reranker = reranker
+        self._recall_k = recall_k
         self._chunks: list[_Chunk] = []
 
     async def ingest(
@@ -263,9 +475,8 @@ class InMemoryKnowledgeStore:
     ) -> RetrievalResult:
         if k < 1:
             raise ValueError("k must be positive")
-        query_vector = (await self._embeddings.embed([query]))[0]
-        candidates = [
-            (self._cosine(query_vector, chunk.embedding), chunk)
+        scoped = [
+            chunk
             for chunk in self._chunks
             if (
                 chunk.document.tenant_id == tenant_id
@@ -274,20 +485,49 @@ class InMemoryKnowledgeStore:
                 and chunk.embedding_dimensions == self._embeddings.dimensions
             )
         ]
-        if not candidates:
+        if not scoped:
             raise EmptyRetrievalError("No scoped knowledge was found; escalate")
+        limit = max(self._recall_k, k)
+        query_vector = (await self._embeddings.embed([query]))[0]
+        dense = sorted(
+            scoped,
+            key=lambda chunk: self._cosine(query_vector, chunk.embedding),
+            reverse=True,
+        )[:limit]
+        terms = _query_terms(query)
+        lexical_scored: list[tuple[int, _Chunk]] = []
+        for chunk in scoped:
+            matched = sum(1 for term in terms if _matches_term(chunk.content, term))
+            if matched > 0:
+                lexical_scored.append((matched, chunk))
+        lexical_scored.sort(key=lambda item: (-item[0], _memory_chunk_id(item[1])))
+        lexical = [chunk for _, chunk in lexical_scored[:limit]]
         at = now or datetime.now(UTC)
+        fused = reciprocal_rank_fusion(
+            [
+                [_memory_candidate(chunk, at) for chunk in dense],
+                [_memory_candidate(chunk, at) for chunk in lexical],
+            ]
+        )
         passages = [
             CitedPassage(
-                content=chunk.content,
-                citation=CitationSpan(chunk.document.source_id, chunk.start, chunk.end),
+                content=candidate.content,
+                citation=candidate.citation,
                 score=score,
-                stale=chunk.document.stale_after <= at,
-                source_version=chunk.document.source_version,
+                stale=candidate.stale,
+                source_version=candidate.source_version,
             )
-            for score, chunk in sorted(candidates, key=lambda value: value[0], reverse=True)[:k]
+            for score, candidate in fused
         ]
-        return RetrievalResult(passages, self._embeddings.model)
+        passages, rerank_model, rerank_degraded = await _rerank_passages(
+            self._reranker, query, passages, k
+        )
+        return RetrievalResult(
+            passages=passages,
+            embedding_model=self._embeddings.model,
+            rerank_model=rerank_model,
+            rerank_degraded=rerank_degraded,
+        )
 
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float:
@@ -297,10 +537,19 @@ class InMemoryKnowledgeStore:
 class PostgresKnowledgeStore:
     """Async, parameterized pgvector adapter for Supabase hosted Postgres."""
 
-    def __init__(self, database_url: str, embeddings: EmbeddingProvider) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        embeddings: EmbeddingProvider,
+        *,
+        reranker: Reranker | None = None,
+        recall_k: int = RECALL_K,
+    ) -> None:
         if not database_url:
             raise ValueError("DATABASE_URL is required")
         self._embeddings = embeddings
+        self._reranker = reranker
+        self._recall_k = recall_k
         self._pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] = AsyncConnectionPool(
             conninfo=database_url, min_size=0, max_size=10, open=False,
             kwargs={"row_factory": dict_row},
@@ -372,12 +621,14 @@ class PostgresKnowledgeStore:
             raise ValueError("k must be positive")
         vector = (await self._embeddings.embed([query]))[0]
         encoded = _encode_vector(vector, self._embeddings.dimensions)
+        at = now or datetime.now(UTC)
+        limit = max(self._recall_k, k)
         async with self._pool.connection() as connection:
-            cursor = await connection.execute(
+            dense_cursor = await connection.execute(
                 """
-                select c.content, d.source_id, c.span_start, c.span_end, d.source_version,
-                       d.stale_after <= %s as stale,
-                       1 - (c.embedding <=> %s::extensions.vector) as score
+                select c.id::text as chunk_id, c.content, d.source_id,
+                       c.span_start, c.span_end, d.source_version,
+                       d.stale_after <= %s as stale
                 from public.kb_chunks c
                 join public.kb_documents d on d.id = c.document_id
                 where d.tenant_id = %s and d.domain = %s
@@ -386,25 +637,57 @@ class PostgresKnowledgeStore:
                 limit %s
                 """,
                 (
-                    now or datetime.now(UTC), encoded, tenant_id, domain,
-                    self._embeddings.model, self._embeddings.dimensions, encoded, k,
+                    at, tenant_id, domain,
+                    self._embeddings.model, self._embeddings.dimensions, encoded, limit,
                 ),
             )
-            rows = await cursor.fetchall()
-        if not rows:
-            raise EmptyRetrievalError("No scoped knowledge was found; escalate")
-        return RetrievalResult(
+            dense_rows = await dense_cursor.fetchall()
+            lexical_cursor = await connection.execute(
+                """
+                select c.id::text as chunk_id, c.content, d.source_id,
+                       c.span_start, c.span_end, d.source_version,
+                       d.stale_after <= %s as stale,
+                       ts_rank_cd(c.content_tsv, websearch_to_tsquery('simple', %s)) as rank
+                from public.kb_chunks c
+                join public.kb_documents d on d.id = c.document_id
+                where d.tenant_id = %s and d.domain = %s
+                  and c.embedding_model = %s and c.embedding_dimensions = %s
+                  and c.content_tsv @@ websearch_to_tsquery('simple', %s)
+                order by rank desc, d.source_id, c.span_start
+                limit %s
+                """,
+                (
+                    at, query, tenant_id, domain,
+                    self._embeddings.model, self._embeddings.dimensions, query, limit,
+                ),
+            )
+            lexical_rows = await lexical_cursor.fetchall()
+        fused = reciprocal_rank_fusion(
             [
-                CitedPassage(
-                    content=row["content"],
-                    citation=CitationSpan(row["source_id"], row["span_start"], row["span_end"]),
-                    score=float(row["score"]),
-                    stale=bool(row["stale"]),
-                    source_version=row["source_version"],
-                )
-                for row in rows
-            ],
-            self._embeddings.model,
+                [_candidate_from_row(row) for row in dense_rows],
+                [_candidate_from_row(row) for row in lexical_rows],
+            ]
+        )
+        if not fused:
+            raise EmptyRetrievalError("No scoped knowledge was found; escalate")
+        passages = [
+            CitedPassage(
+                content=candidate.content,
+                citation=candidate.citation,
+                score=score,
+                stale=candidate.stale,
+                source_version=candidate.source_version,
+            )
+            for score, candidate in fused
+        ]
+        passages, rerank_model, rerank_degraded = await _rerank_passages(
+            self._reranker, query, passages, k
+        )
+        return RetrievalResult(
+            passages=passages,
+            embedding_model=self._embeddings.model,
+            rerank_model=rerank_model,
+            rerank_degraded=rerank_degraded,
         )
 
 

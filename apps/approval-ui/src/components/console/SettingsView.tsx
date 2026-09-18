@@ -2,6 +2,8 @@ import { apiUrl } from "@/lib/api";
 import type { Workspace } from "@/lib/models";
 import type { JiraPrefs, UiPrefs } from "@/lib/prefs";
 
+import { GithubAccountsSection } from "./GithubAccountsSection";
+
 type SettingsViewProps = {
   workspace: Workspace;
   prefs: JiraPrefs;
@@ -187,6 +189,8 @@ export function SettingsView({
           ))}
         </div>
       </section>
+
+      <GithubAccountsSection />
 
       <section className="settings-section">
         <header>

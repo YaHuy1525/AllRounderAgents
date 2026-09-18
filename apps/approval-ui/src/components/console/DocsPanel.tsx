@@ -27,7 +27,7 @@ const DOC_TOPICS = [
   {
     id: "security",
     title: "Rendering and secrets",
-    body: "All Jira and run content renders as plain text nodes, so markup in a summary can never execute. Secrets never reach the browser bundle.",
+    body: "Summaries, reviews and chat replies render as markdown: formatting is shown, but raw HTML stays inert text and only https links become clickable, so markup in server content can never execute. Secrets never reach the browser bundle.",
   },
 ];
 
