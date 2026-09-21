@@ -82,6 +82,25 @@ def test_approval_decision_counters() -> None:
     assert 'gate_decisions_total{gate="support:send"} 1.0' in text
 
 
+def test_security_counters_render_bounded_labels() -> None:
+    metrics = MetricsRegistry()
+    metrics.record_security_triage(classification="tp", severity="high", injection=True)
+    metrics.record_security_triage(classification="fp", severity="low", injection=False)
+    metrics.record_security_containment(outcome="contained", replayed=False)
+    metrics.record_security_containment(outcome="contained", replayed=True)
+    text = metrics.render().decode()
+    assert (
+        'security_triage_verdicts_total{classification="tp",injection="flagged",severity="high"} 1.0'
+        in text
+    )
+    assert (
+        'security_triage_verdicts_total{classification="fp",injection="clean",severity="low"} 1.0'
+        in text
+    )
+    assert 'security_containment_total{outcome="contained",replayed="false"} 1.0' in text
+    assert 'security_containment_total{outcome="contained",replayed="true"} 1.0' in text
+
+
 def test_metrics_endpoint_is_present_without_a_registry() -> None:
     client = TestClient(create_app(settings=Settings(webhook_secret="test")))
     response = client.get("/metrics")

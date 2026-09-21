@@ -1,0 +1,27 @@
+{
+  "alertId": "SEC-105",
+  "events": [
+    {
+      "eventId": "EVT-105-01",
+      "alertId": "SEC-105",
+      "at": "2026-09-16T10:05:00.000Z",
+      "host": "web-01",
+      "user": null,
+      "source": "waf",
+      "action": "Suspicious request",
+      "detail": "Periodic POST to /api/telemetry with jittered intervals from the host itself.",
+      "severity": "medium"
+    },
+    {
+      "eventId": "EVT-105-02",
+      "alertId": "SEC-105",
+      "at": "2026-09-16T10:07:00.000Z",
+      "host": "web-01",
+      "user": null,
+      "source": "edr",
+      "action": "Process network",
+      "detail": "powershell.exe beacon interval 60s to 198.51.100.23:8443.",
+      "severity": "high"
+    }
+  ]
+}

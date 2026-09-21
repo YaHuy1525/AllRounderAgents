@@ -1,0 +1,39 @@
+{
+  "assets": [
+    {
+      "host": "fin-db-01",
+      "owner": "Finance Database Ops",
+      "criticality": "high",
+      "environment": "production",
+      "services": ["postgres", "billing-api"]
+    },
+    {
+      "host": "web-01",
+      "owner": "Web Platform",
+      "criticality": "high",
+      "environment": "production",
+      "services": ["nginx", "public-site"]
+    },
+    {
+      "host": "ops-ws-04",
+      "owner": "IT Operations",
+      "criticality": "medium",
+      "environment": "corporate",
+      "services": ["helpdesk-tools"]
+    },
+    {
+      "host": "build-02",
+      "owner": "Developer Experience",
+      "criticality": "low",
+      "environment": "staging",
+      "services": ["ci-runner"]
+    },
+    {
+      "host": "dc-01",
+      "owner": "Identity & Directory",
+      "criticality": "critical",
+      "environment": "production",
+      "services": ["domain controller", "dns", "kerberos"]
+    }
+  ]
+}

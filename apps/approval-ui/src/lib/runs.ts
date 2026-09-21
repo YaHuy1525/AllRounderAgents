@@ -164,6 +164,11 @@ export const RUNNABLE_WORKFLOWS: ReadonlyArray<{
     label: "HR Help",
     description: "Intake the employee question, retrieve the policy passages, draft a cited answer, approve it, and record the answer.",
   },
+  {
+    id: "security",
+    label: "SOC Alert Triage",
+    description: "Ingest the alert, triage it with ATT&CK mapping, investigate with cited evidence, decide and approve the disposition, then contain — containment is idempotent.",
+  },
 ];
 
 /** Keyword signals that pull in their workflow even when the Jira type is generic. */
@@ -172,6 +177,24 @@ const KEYWORD_WORKFLOW_RULES: ReadonlyArray<{ id: string; tokens: readonly strin
   { id: "offboarding", tokens: ["offboard", "off-board", "termination", "resignation", "departure", "last day"] },
   { id: "screening", tokens: ["screen", "candidate", "recruit", "interview", "requisition"] },
   { id: "hr-help", tokens: ["hr help", "hr-help", "handbook", "policy question", "policy lookup"] },
+  {
+    id: "security",
+    tokens: [
+      "security",
+      "soc ",
+      "alert",
+      "ioc",
+      "malware",
+      "phishing",
+      "ransomware",
+      "siem",
+      "edr",
+      "intrusion",
+      "mitre",
+      "cve",
+      "exploit",
+    ],
+  },
   { id: "vendors", tokens: ["vendor", "onboard"] },
   { id: "accessibility", tokens: ["accessib", "a11y"] },
   { id: "dependencies", tokens: ["dependen", "upgrade", "bump"] },

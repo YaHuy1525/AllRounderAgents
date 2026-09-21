@@ -15,6 +15,7 @@ from .contracts import (
     Ticket,
     TriageVerdict,
 )
+from .policy import RiskPolicy, default_risk_policy, load_risk_policy
 
 DOMAIN_TERMS: Mapping[Domain, frozenset[str]] = {
     Domain.CODE: frozenset({"bug", "code", "api", "compiler", "typescript", "build", "ci", "500"}),
@@ -40,25 +41,54 @@ DOMAIN_TERMS: Mapping[Domain, frozenset[str]] = {
     Domain.SUPPORT: frozenset(
         {"support", "customer", "login", "password", "refund", "account", "faq", "help"}
     ),
+    Domain.SECURITY: frozenset(
+        {
+            "alert",
+            "ioc",
+            "malware",
+            "phishing",
+            "ransomware",
+            "siem",
+            "edr",
+            "intrusion",
+            "mitre",
+            "cve",
+            "exploit",
+            "soc",
+            "triage",
+        }
+    ),
 }
 PROJECT_DOMAINS = {
     "ENG": Domain.CODE,
     "FIN": Domain.FINANCE,
     "MKT": Domain.MARKETING,
     "SUP": Domain.SUPPORT,
+    "SEC": Domain.SECURITY,
 }
 
 
 class DeterministicDispatcher:
-    """Provider-neutral Phase 0 dispatcher; replace triage behind this interface later."""
+    """Provider-neutral Phase 0 dispatcher; replace triage behind this interface later.
+
+    All thresholds (confidence math, pre-flight scores/gates, per-domain
+    approval floors, sensitive markers) come from ``policy/risk.yaml`` v1 —
+    this class contains no magic numbers of its own.
+    """
 
     workflows: Mapping[Domain, str] = {
         Domain.CODE: "coding-comment-only",
         Domain.FINANCE: "finance-comment-only",
         Domain.MARKETING: "marketing-comment-only",
         Domain.SUPPORT: "support-comment-only",
+        Domain.SECURITY: "security-comment-only",
         Domain.UNKNOWN: "escalation-comment-only",
     }
+
+    def __init__(self, policy: RiskPolicy | None = None, *, policy_dir: str | None = None) -> None:
+        if policy is None:
+            policy = load_risk_policy(policy_dir) if policy_dir else default_risk_policy()
+        self._risk = policy
 
     def normalize_for_test(self, payload: Mapping[str, object]) -> Ticket:
         return normalize_jira_payload(payload)
@@ -68,7 +98,7 @@ class DeterministicDispatcher:
     ) -> RoutedTicket:
         verdict = self.triage(ticket)
         actions = list(planned_actions or ["jira_comment"])
-        risks = [self.preflight(action) for action in actions]
+        risks = [self.preflight(action, domain=verdict.domain) for action in actions]
         gate = max((risk.gate for risk in risks), key=_gate_rank)
         if verdict.needs_human and gate is Gate.AUTO:
             gate = Gate.APPROVAL
@@ -85,47 +115,97 @@ class DeterministicDispatcher:
             [ticket.project, ticket.issue_type, ticket.summary, ticket.description, *ticket.labels]
         )
         tokens = frozenset(re.findall(r"[a-z0-9]+", text.lower()))
+        policy = self._risk.triage
         scores = {
             domain: sum(term in tokens for term in terms) for domain, terms in DOMAIN_TERMS.items()
         }
         project_domain = PROJECT_DOMAINS.get(ticket.project)
         if project_domain:
-            scores[project_domain] += 3
+            scores[project_domain] += policy.project_signal_bonus
         domain, score = max(scores.items(), key=lambda item: item[1])
+        sensitive = self._sensitive_markers(text)
         if score == 0:
             return TriageVerdict(
                 domain=Domain.UNKNOWN,
                 confidence=0,
                 urgency=_urgency(ticket.priority),
                 needs_human=True,
-                rationale="No domain had sufficient deterministic evidence; escalate with context.",
+                rationale=self._with_sensitive_note(
+                    "No domain had sufficient deterministic evidence; escalate with context.",
+                    sensitive,
+                ),
             )
-        confidence = min(0.99, 0.55 + score * 0.08)
+        confidence = min(
+            policy.confidence_cap, policy.base_confidence + score * policy.signal_weight
+        )
         return TriageVerdict(
             domain=domain,
             confidence=confidence,
             urgency=_urgency(ticket.priority),
-            needs_human=confidence < 0.7,
-            rationale=(
-                f"Matched {score} deterministic project or content signals for {domain.value}."
+            needs_human=confidence < policy.human_review_below or bool(sensitive),
+            rationale=self._with_sensitive_note(
+                f"Matched {score} deterministic project or content signals for {domain.value}.",
+                sensitive,
             ),
         )
 
-    def preflight(self, action: str) -> RiskScore:
+    def preflight(self, action: str, *, domain: Domain | None = None) -> RiskScore:
         lowered = action.lower()
-        irreversible = any(
-            term in lowered for term in ("irreversible", "payment", "delete", "publish")
+        policy = self._risk.preflight
+        irreversible = any(term in lowered for term in policy.irreversible_terms)
+        high_blast = any(term in lowered for term in policy.high_blast_terms)
+        if irreversible and high_blast:
+            score = policy.score_both
+        elif irreversible or high_blast:
+            score = policy.score_single
+        else:
+            score = policy.score_benign
+        gate = (
+            Gate.REFUSE
+            if score >= policy.refuse_at
+            else Gate.APPROVAL
+            if score >= policy.approval_at
+            else Gate.AUTO
         )
-        high_blast = any(term in lowered for term in ("production", "global", "payment", "publish"))
-        score = 90 if irreversible and high_blast else 55 if irreversible or high_blast else 10
-        gate = Gate.REFUSE if score >= 80 else Gate.APPROVAL if score >= 40 else Gate.AUTO
+        reasons = [f"policy/risk.yaml v{self._risk.version} deterministic pre-flight"]
+        if domain is not None:
+            floor = next(
+                (term for term in policy.domain_terms.get(domain.value, ()) if term in lowered),
+                None,
+            )
+            if floor is not None and gate is not Gate.REFUSE:
+                # A domain floor only raises the gate (never lowers a refuse).
+                if gate is Gate.AUTO:
+                    gate = Gate.APPROVAL
+                    score = max(score, policy.approval_at)
+                reasons.append(f"{domain.value} lane policy floors '{floor}' to human approval")
         return RiskScore(
             action=action,
             blast_radius="high" if high_blast else "low",
             reversibility="irreversible" if irreversible else "reversible",
             score=score,
             gate=gate,
-            reasons=["Phase 0 deterministic risk policy"],
+            reasons=reasons,
+        )
+
+    def _sensitive_markers(self, text: str) -> tuple[str, ...]:
+        """Markers of sensitive tickets; matches force human approval."""
+
+        lowered = " ".join(text.lower().split())
+        return tuple(
+            marker
+            for marker in self._risk.sensitive.markers
+            if re.search(rf"\b{re.escape(marker)}\b", lowered)
+        )
+
+    def _with_sensitive_note(self, rationale: str, sensitive: tuple[str, ...]) -> str:
+        if not sensitive:
+            return rationale
+        clause = self._risk.sensitive.clause
+        matched = ", ".join(sensitive)
+        return (
+            f"{rationale} Sensitive-ticket policy clause {clause} requires mandatory human "
+            f"approval (matched: {matched})."
         )
 
 

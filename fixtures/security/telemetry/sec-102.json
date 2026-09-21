@@ -1,0 +1,38 @@
+{
+  "alertId": "SEC-102",
+  "events": [
+    {
+      "eventId": "EVT-102-01",
+      "alertId": "SEC-102",
+      "at": "2026-09-16T02:40:00.000Z",
+      "host": "fin-db-01",
+      "user": "FIN\\svc-backup",
+      "source": "edr",
+      "action": "Process start",
+      "detail": "powershell.exe -enc <base64> spawned by sqlservr.exe with a non-interactive parent chain.",
+      "severity": "high"
+    },
+    {
+      "eventId": "EVT-102-02",
+      "alertId": "SEC-102",
+      "at": "2026-09-16T02:41:00.000Z",
+      "host": "fin-db-01",
+      "user": "FIN\\svc-backup",
+      "source": "edr",
+      "action": "Scheduled task created",
+      "detail": "Task WinUpdate registered pointing back to powershell.exe.",
+      "severity": "high"
+    },
+    {
+      "eventId": "EVT-102-03",
+      "alertId": "SEC-102",
+      "at": "2026-09-16T02:43:00.000Z",
+      "host": "fin-db-01",
+      "user": "FIN\\svc-backup",
+      "source": "firewall",
+      "action": "Outbound connection",
+      "detail": "TCP 443 session to 203.0.113.77 sustained for six minutes.",
+      "severity": "medium"
+    }
+  ]
+}

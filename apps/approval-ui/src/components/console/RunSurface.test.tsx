@@ -22,6 +22,12 @@ import {
   IssueSelectionSurface,
   ReviewOptionsSurface,
   ScopeDesignSurface,
+  SecurityApproveSurface,
+  SecurityContainSurface,
+  SecurityDecideSurface,
+  SecurityIngestSurface,
+  SecurityInvestigateSurface,
+  SecurityTriageSurface,
   SelectPrSurface,
   VendorApproveSurface,
   VendorCollectSurface,
@@ -36,8 +42,18 @@ import {
   parseDependencyReceipt,
   parseFeatureReceipt,
   parseIssueReceipt,
+  parseSecurityApprove,
+  parseSecurityDecide,
+  parseSecurityIngest,
+  parseSecurityInvestigate,
+  parseSecurityPreview,
+  parseSecurityReceipt,
+  parseSecurityTriage,
   parseVendorCreate,
   parseVendorReceipt,
+  SECURITY_CLASSIFICATION_LABELS,
+  securityCitationLabel,
+  securitySourceLabel,
   vendorDocumentTotals,
   type DependencyReceiptView,
   type FeatureReceiptView,
@@ -4266,5 +4282,460 @@ describe("hr help send surface", () => {
     expect(parseHrHelpReceipt({})).toBeNull();
     expect(parseHrHelpSend(hrHelpSendArtifact())?.answerId).toBe("HA-7F3A1C2D");
     expect(parseHrHelpReceipt(HR_HELP_RECEIPT)?.created).toBe(true);
+  });
+});
+
+function securityIngestArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    alertId: "SEC-102",
+    alertSource: "edr",
+    title: "Suspicious encoded PowerShell on fin-db-01",
+    host: "fin-db-01",
+    user: "FIN\\svc-backup",
+    indicators: ["203.0.113.77"],
+    provenance: "edr:alert-9f21",
+    checks: [
+      { id: "caps", label: "Field caps", status: "pass", detail: "All fields within caps." },
+      { id: "dedupe", label: "Dedupe", status: "pass", detail: "First occurrence." },
+    ],
+    dedupe: { seenBefore: false, priorCaseId: null },
+    summary: "Normalized EDR alert for fin-db-01.",
+    ...overrides,
+  };
+}
+
+describe("security ingest surface", () => {
+  it("renders the normalized alert with provenance, dedupe and checks", () => {
+    const html = renderToString(<SecurityIngestSurface artifact={securityIngestArtifact()} />);
+    expect(html).toContain("EDR");
+    expect(html).toContain("Suspicious encoded PowerShell on fin-db-01");
+    expect(html).toContain("SEC-102");
+    expect(html).toContain("fin-db-01");
+    expect(html).toContain("edr:alert-9f21");
+    expect(html).toContain("First occurrence");
+    expect(html).toContain("Validation checks · all 2 clear");
+    expect(html).toContain("203.0.113.77");
+    expect(html).toContain("Normalized EDR alert for fin-db-01.");
+  });
+
+  it("counts failing checks and links the duplicate case", () => {
+    const html = renderToString(
+      <SecurityIngestSurface
+        artifact={securityIngestArtifact({
+          checks: [
+            {
+              id: "caps",
+              label: "Field caps",
+              status: "fail",
+              detail: "Raw alert exceeds 20 000 chars.",
+            },
+          ],
+          dedupe: { seenBefore: true, priorCaseId: "case-7777" },
+        })}
+      />,
+    );
+    expect(html).toContain("Validation checks · 1 failing");
+    expect(html).toContain("Seen before — prior case case-7777");
+  });
+
+  it("keeps the alert text as text, never markup", () => {
+    const html = renderToString(
+      <SecurityIngestSurface artifact={securityIngestArtifact({ summary: MALICIOUS_SUMMARY })} />,
+    );
+    expect(html).not.toContain("<script");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("parses artifacts and labels strictly", () => {
+    expect(parseSecurityIngest({})).toBeNull();
+    expect(parseSecurityIngest(securityIngestArtifact())?.alertId).toBe("SEC-102");
+    expect(securitySourceLabel("edr")).toBe("EDR");
+    expect(securitySourceLabel("zeek")).toBe("ZEEK");
+  });
+});
+
+function securityTriageArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    classification: "tp",
+    severity: "high",
+    confidence: 0.86,
+    mitreTechniques: [
+      { id: "T1059.001", name: "PowerShell", tactic: "Execution" },
+      { id: "T1053.005", name: "Scheduled Task/Job", tactic: "Persistence" },
+    ],
+    injectionFlags: [],
+    rationale: "Signals fired: encoded_command, c2_beacon.",
+    needsInvestigation: true,
+    ...overrides,
+  };
+}
+
+describe("security triage surface", () => {
+  it("renders the verdict, the ATT&CK map and the investigation flag", () => {
+    const html = renderToString(<SecurityTriageSurface artifact={securityTriageArtifact()} />);
+    expect(html).toContain("True positive");
+    expect(html).toContain("high");
+    expect(html).toContain("confidence 86%");
+    expect(html).toContain("Investigation required");
+    expect(html).toContain("map · 2");
+    expect(html).toContain("T1059.001");
+    expect(html).toContain("PowerShell");
+  });
+
+  it("flags prompt-injection signals and pins the verdict", () => {
+    const html = renderToString(
+      <SecurityTriageSurface
+        artifact={securityTriageArtifact({
+          classification: "unknown",
+          injectionFlags: ["system_tag", "override_instruction"],
+        })}
+      />,
+    );
+    expect(html).toContain("Unknown");
+    expect(html).toContain("Prompt-injection signals detected");
+    expect(html).toContain("system_tag, override_instruction");
+    expect(html).toContain("escalates to a human");
+  });
+
+  it("parses verdicts strictly", () => {
+    expect(renderToString(<SecurityTriageSurface artifact={{}} />)).toContain(
+      "The triage verdict is not available yet.",
+    );
+    expect(parseSecurityTriage({})).toBeNull();
+    expect(SECURITY_CLASSIFICATION_LABELS["fp"]).toBe("False positive");
+    expect(parseSecurityTriage(securityTriageArtifact())?.severity).toBe("high");
+  });
+});
+
+function securityInvestigateArtifact(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    claims: [
+      {
+        claim: "The encoded payload registered a scheduled task named WinUpdate.",
+        sourceTool: "memory",
+        retrievedAt: "2026-09-12T09:02:00Z",
+        snippetRef: { sourceId: "telemetry/fin-db-01", span: "40-88" },
+      },
+    ],
+    timeline: [
+      {
+        at: "2026-09-12T08:55:00Z",
+        event: "Scheduled task created",
+        sourceId: "telemetry/fin-db-01",
+        span: "12-20",
+      },
+    ],
+    resolvedIndicators: [
+      {
+        indicator: "203.0.113.77",
+        verdict: "malicious",
+        detail: "C2 beacon in three intel feeds.",
+        sourceTool: "memory",
+        retrievedAt: "2026-09-12T09:03:00Z",
+        snippetRef: { sourceId: "intel/feeds", span: "3-9" },
+      },
+    ],
+    missingEvidence: ["Process-tree capture for the parent shell"],
+    unsourcedCount: 0,
+    summary: "Evidence pack for SEC-102.",
+    ...overrides,
+  };
+}
+
+describe("security investigate surface", () => {
+  it("renders the timeline, cited claims and resolved indicators", () => {
+    const html = renderToString(
+      <SecurityInvestigateSurface artifact={securityInvestigateArtifact()} />,
+    );
+    expect(html).toContain("1 cited claims");
+    expect(html).toContain("0 unsourced");
+    expect(html).toContain("1 timeline events");
+    expect(html).toContain("Scheduled task created");
+    expect(html).toContain("telemetry/fin-db-01#12-20");
+    expect(html).toContain("The encoded payload registered a scheduled task named WinUpdate.");
+    expect(html).toContain("memory · retrieved 2026-09-12T09:02:00Z");
+    expect(html).toContain("malicious");
+    expect(html).toContain("intel/feeds#3-9");
+    expect(html).toContain("Missing evidence");
+    expect(html).toContain("Process-tree capture for the parent shell");
+  });
+
+  it("shows the return note when approval bounced the run back", () => {
+    const html = renderToString(
+      <SecurityInvestigateSurface
+        artifact={securityInvestigateArtifact()}
+        returnNote="The cited task name does not match the EDR event."
+      />,
+    );
+    expect(html).toContain("Returned from approval");
+    expect(html).toContain("The cited task name does not match the EDR event.");
+  });
+
+  it("parses evidence packs strictly", () => {
+    expect(renderToString(<SecurityInvestigateSurface artifact={{ claims: [] }} />)).toContain(
+      "The evidence pack is not available yet.",
+    );
+    expect(parseSecurityInvestigate({})).toBeNull();
+    expect(securityCitationLabel({ sourceId: "intel/feeds", span: "3-9" })).toBe("intel/feeds#3-9");
+    expect(parseSecurityInvestigate(securityInvestigateArtifact())?.claims).toHaveLength(1);
+  });
+});
+
+function securityDecideArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    action: "contain",
+    confidence: 0.79,
+    reasoningClaims: [0],
+    risk: {
+      score: 78,
+      tier: "critical",
+      factors: [
+        { id: "blast", label: "Blast radius", points: 30, detail: "Production database host." },
+        { id: "beacon", label: "Active C2 beacon", points: 24, detail: "Beacon observed twice." },
+      ],
+      blastRadius: "high",
+      reversibility: "reversible",
+      refused: false,
+    },
+    requiresHuman: true,
+    detectionProposal: "Add rule: encoded PowerShell spawning schtasks.exe.",
+    summary: "Contain SEC-102 at tier critical.",
+    ...overrides,
+  };
+}
+
+describe("security decide surface", () => {
+  it("renders the risk meter, factors and the requires-human flag", () => {
+    const html = renderToString(<SecurityDecideSurface artifact={securityDecideArtifact()} />);
+    expect(html).toContain("tier critical");
+    expect(html).toContain("Human decision required");
+    expect(html).toContain("78 / 100");
+    expect(html).toContain("Blast radius high · reversible");
+    expect(html).toContain("Risk factors");
+    expect(html).toContain("+30");
+    expect(html).toContain("Active C2 beacon");
+    expect(html).toContain("Detection-tuning proposal");
+    expect(html).toContain("Contain SEC-102 at tier critical.");
+  });
+
+  it("links reasoning claims to the investigation pack", () => {
+    const claims = [
+      {
+        claim: "Task created on fin-db-01.",
+        sourceTool: "memory",
+        retrievedAt: "2026-09-12T09:02:00Z",
+        citation: { sourceId: "telemetry/fin-db-01", span: "40-88" },
+      },
+    ];
+    const linked = renderToString(
+      <SecurityDecideSurface artifact={securityDecideArtifact()} claims={claims} />,
+    );
+    expect(linked).toContain("Task created on fin-db-01.");
+    expect(linked).toContain("Claim #0 · memory");
+    expect(linked).toContain("telemetry/fin-db-01#40-88");
+
+    const unlinked = renderToString(<SecurityDecideSurface artifact={securityDecideArtifact()} />);
+    expect(unlinked).toContain("Claim #0 — see the investigation pack");
+  });
+
+  it("marks the lane risk refusal", () => {
+    const html = renderToString(
+      <SecurityDecideSurface
+        artifact={securityDecideArtifact({
+          risk: {
+            score: 95,
+            tier: "critical",
+            factors: [],
+            blastRadius: "high",
+            reversibility: "irreversible",
+            refused: true,
+          },
+        })}
+      />,
+    );
+    expect(html).toContain("refused by the lane risk policy");
+  });
+
+  it("parses dispositions strictly", () => {
+    expect(renderToString(<SecurityDecideSurface artifact={{}} />)).toContain(
+      "The disposition proposal is not available yet.",
+    );
+    expect(parseSecurityDecide({})).toBeNull();
+    expect(parseSecurityDecide(securityDecideArtifact())?.risk.tier).toBe("critical");
+  });
+});
+
+function securityApproveArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    alertId: "SEC-102",
+    action: "contain",
+    tier: "critical",
+    requiredSigners: ["soc-analyst", "soc-lead"],
+    signers: [
+      {
+        role: "soc-analyst",
+        name: "Rivka Adler",
+        state: "approved",
+        approvedAt: "2026-09-12T09:04:00Z",
+        comment: "Verified the beacon against the intel feeds.",
+      },
+      { role: "soc-lead", name: "Marcus Bell", state: "pending", approvedAt: null, comment: null },
+    ],
+    allApproved: false,
+    returnedNote: null,
+    summary: "Approval chain for SEC-102.",
+    ...overrides,
+  };
+}
+
+describe("security approve surface", () => {
+  it("renders the signer chain with states and timestamps", () => {
+    const html = renderToString(
+      <SecurityApproveSurface
+        artifact={securityApproveArtifact()}
+        editable={false}
+        draft={null}
+        onChange={() => undefined}
+      />,
+    );
+    expect(html).toContain("Rivka Adler");
+    expect(html).toContain("soc-analyst");
+    expect(html).toContain("Signed 2026-09-12T09:04:00Z");
+    expect(html).toContain("No signature recorded yet");
+    expect(html).toContain("Awaiting signers");
+    expect(html).toContain("tier critical");
+    expect(html).toContain("Verified the beacon against the intel feeds.");
+  });
+
+  it("renders the editable approve controls and the reject editor", () => {
+    const html = renderToString(
+      <SecurityApproveSurface
+        artifact={securityApproveArtifact()}
+        editable
+        draft={null}
+        onChange={() => undefined}
+        returnFlow={{ onReturn: () => undefined, busy: false }}
+      />,
+    );
+    expect(html).toContain("Approve");
+    expect(html).toContain(
+      "Every required signer must approve before containment can be previewed",
+    );
+    expect(html).toContain("Reject — return to Investigate");
+  });
+
+  it("reports the fully-signed chain and parses strictly", () => {
+    const approved = securityApproveArtifact({
+      signers: [
+        {
+          role: "soc-analyst",
+          name: "Rivka Adler",
+          state: "approved",
+          approvedAt: "2026-09-12T09:04:00Z",
+          comment: null,
+        },
+        {
+          role: "soc-lead",
+          name: "Marcus Bell",
+          state: "approved",
+          approvedAt: "2026-09-12T09:05:00Z",
+          comment: null,
+        },
+      ],
+      allApproved: true,
+    });
+    const html = renderToString(
+      <SecurityApproveSurface
+        artifact={approved}
+        editable={false}
+        draft={null}
+        onChange={() => undefined}
+      />,
+    );
+    expect(html).toContain("All approved");
+    expect(parseSecurityApprove({})).toBeNull();
+    expect(parseSecurityApprove(approved)?.signers).toHaveLength(2);
+  });
+});
+
+function securityContainArtifact(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    alertId: "SEC-102",
+    action: "contain",
+    outcome: "contained",
+    containmentId: "SEC-2FCF0A5A",
+    idempotencyKey: "SEC-2FCF0A5A",
+    target: "containment:SEC-2FCF0A5A",
+    summary: "Contain SEC-102 by quarantining fin-db-01.",
+    ...overrides,
+  };
+}
+
+const SECURITY_RECEIPT = {
+  alertId: "SEC-102",
+  action: "contain",
+  outcome: "contained",
+  containmentId: "SEC-2FCF0A5A",
+  idempotencyKey: "SEC-2FCF0A5A",
+  target: "containment:SEC-2FCF0A5A",
+  registryRef: "containment-registry:SEC-2FCF0A5A",
+  completedAt: "2026-09-12T09:06:00Z",
+  evidenceRef: "run:run-1#investigate",
+  summary: "Executed contain as contained (SEC-2FCF0A5A).",
+};
+
+describe("security contain surface", () => {
+  it("renders the preview before the side effect runs", () => {
+    const html = renderToString(
+      <SecurityContainSurface
+        artifact={securityContainArtifact()}
+        receipt={null}
+        replayed={false}
+      />,
+    );
+    expect(html).toContain("contained");
+    expect(html).toContain("Not executed");
+    expect(html).toContain("SEC-2FCF0A5A");
+    expect(html).toContain("Idempotent — replaying this decision returns the original receipt");
+    expect(html).not.toContain("Registry reference");
+  });
+
+  it("renders the executed receipt with the replay badge", () => {
+    const html = renderToString(
+      <SecurityContainSurface
+        artifact={securityContainArtifact()}
+        receipt={parseSecurityReceipt(SECURITY_RECEIPT)}
+        replayed
+      />,
+    );
+    expect(html).toContain("Executed");
+    expect(html).toContain("already replayed");
+    expect(html).toContain("Containment SEC-2FCF0A5A recorded — outcome contained");
+    expect(html).toContain("Registry: containment-registry:SEC-2FCF0A5A");
+    expect(html).toContain("Evidence: run:run-1#investigate");
+    expect(html).toContain("Completed 2026-09-12T09:06:00Z");
+  });
+
+  it("omits the replay badge on a first execution", () => {
+    const html = renderToString(
+      <SecurityContainSurface
+        artifact={securityContainArtifact()}
+        receipt={parseSecurityReceipt(SECURITY_RECEIPT)}
+        replayed={false}
+      />,
+    );
+    expect(html).toContain("Executed");
+    expect(html).not.toContain("already replayed");
+  });
+
+  it("parses previews and receipts strictly", () => {
+    expect(parseSecurityPreview({})).toBeNull();
+    expect(parseSecurityReceipt({})).toBeNull();
+    expect(parseSecurityPreview(securityContainArtifact())?.containmentId).toBe("SEC-2FCF0A5A");
+    expect(parseSecurityReceipt(SECURITY_RECEIPT)?.registryRef).toBe(
+      "containment-registry:SEC-2FCF0A5A",
+    );
   });
 });

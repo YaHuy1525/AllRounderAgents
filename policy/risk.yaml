@@ -1,0 +1,97 @@
+# Unified governance policy, v1 (Master Plan Phase 5 — Governance hardening).
+#
+# Single source for the deterministic risk thresholds used by the dispatcher:
+# triage confidence math, pre-flight scores/gates with per-domain approval
+# floors, sensitive-ticket markers (mandatory human approval) and the
+# cross-domain spawn rule (support -> bug, Nexus pattern).
+#
+# Loaded by allrounder_api.policy; every change is a policy-version bump and
+# must keep apps/api/tests/test_governance.py green.
+version: 1
+
+triage:
+  base_confidence: 0.55
+  signal_weight: 0.08
+  confidence_cap: 0.99
+  project_signal_bonus: 3
+  human_review_below: 0.7
+
+preflight:
+  irreversible_terms:
+    - irreversible
+    - payment
+    - delete
+    - publish
+    - isolate
+    - quarantine
+    - revoke
+    - disable
+  high_blast_terms:
+    - production
+    - global
+    - payment
+    - publish
+    - fleet
+    - domain controller
+  scores:
+    irreversible_high_blast: 90
+    single_risk: 55
+    benign: 10
+  gates:
+    refuse_at: 80
+    approval_at: 40
+  # Per-domain approval floors: a planned action matching any of these terms
+  # can never be auto-gated, whatever its blast radius (floors only raise the
+  # gate, they never lower a refuse).
+  domains:
+    code:
+      require_approval_terms: [delete, drop, truncate, force-push, destructive]
+    finance:
+      require_approval_terms: [payment, post, posting, journal, transfer, payout, refund]
+    marketing:
+      require_approval_terms: [publish, schedule, send]
+    support:
+      require_approval_terms: [refund, send, reply]
+    security:
+      require_approval_terms: [quarantine, isolate, disable, revoke, contain]
+
+# Sensitive tickets (personal data, payroll, health, identity documents) are
+# never auto-judged: the verdict is pinned to a human and the gate floor is
+# approval. Audit payloads are redacted with cited clauses (see
+# allrounder_api.repositories.REDACTION_CLAUSES).
+sensitive:
+  clause: sensitive/personal-data
+  markers:
+    - ssn
+    - social security
+    - payroll
+    - salary
+    - medical
+    - health record
+    - passport
+    - date of birth
+    - bank account
+    - personal data
+    - home address
+  required_gate: approval
+
+# Cross-domain spawn: a support ticket whose text carries defect signals
+# files a linked bug ticket in the target project with the evidence trail,
+# idempotently (correlation id = source ticket + matched signals).
+spawn:
+  enabled: true
+  from_domain: support
+  target_project: ENG
+  issue_type: Bug
+  signals:
+    - stack trace
+    - traceback
+    - exception
+    - "http 500"
+    - crash
+    - regression
+    - broken
+    - failing
+    - fails
+    - error
+  labels: [spawned-from-support, cross-domain]

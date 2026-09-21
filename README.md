@@ -47,11 +47,15 @@ apps/
                         (Rovo MCP + REST), Supabase persistence
   approval-ui/          Next.js (App Router) console, statically exported (out/):
                         Jira board + approval queue + per-run workflow panel
-src/mastra/             Mastra agent plane: agents (32 across 16 lanes, incl. the HR
-                        lanes), flows (incl. the review and issues lanes), GitHub
-                        MCP/REST tools, dev host instance (instance.ts)
+src/mastra/             Mastra agent plane: agents (36 across 17 lanes, incl. the HR,
+                        vendors and security lanes), flows (incl. the review and
+                        issues lanes), GitHub MCP/REST tools, dev host instance
+                        (instance.ts)
 contracts/jsonschema/   Canonical Pydantic JSON Schemas: ticket, risk-score,
                         triage-verdict, evidence-pack
+policy/                 Versioned governance policy: risk.yaml (thresholds, per-domain
+                        floors, sensitive markers, cross-domain spawn rule) and
+                        tools.yaml (the tool permission matrix)
 supabase/migrations/    10 ordered SQL migrations: foundation → phase 3 finance →
                         chat feedback → runs (run registry + steps, RLS forced) →
                         GitHub accounts → hybrid KB retrieval
@@ -89,13 +93,14 @@ gate → close with evidence — and differs only in agents, tools, and gate cal
 | Offboarding | `offboardingAuditAgent` | Access audit with per-system blast radius and reversibility → per-item approval for high-blast revocations → idempotent per-system revocation → final-pay, equipment and case-close attestation with its own receipt. | Shipped — `offboardingFlow` always registered |
 | Screening | `hrGuardrailAgent` | Requisition rubric (weighted criteria, must-haves) → per-candidate verdicts with citations → guardrail review for protected-attribute and non-rubric language → shortlist → idempotent interview invites. | Shipped — `screeningFlow` always registered |
 | HR Help | `hrHelpDrafterAgent`, `hrHelpGuardrailAgent` | Question intake → fixture policy retrieval with citations (sourceId + span, stale flag, score) → cited answer draft → people-partner approval → idempotent send with receipt. | Shipped — `hrHelpFlow` always registered |
+| Security (SOC) | `alertTriageAgent`, `investigationAgent`, `containmentAdvisorAgent`, `reportingAgent` | SOC alert pipeline: ingest with dedupe + provenance → deterministic triage (weighted signal rules, ATT&CK mapping, prompt-injection flags) → investigation with cited claims and resolved indicators → risk-scored disposition (`requiresHuman` on refuses) → signer-matrix approval → idempotent containment receipt (stable `SEC-…` id; replay returns the original). | Shipped — `securityFlow` always registered (fixture seams; case history upgrades to Mastra Memory with `DATABASE_URL`) |
 
-The Mastra dev host (`src/mastra/instance.ts`) always registers `financeFlow`, `vendorsFlow`
-and the five HR lanes (`leaveFlow`, `onboardingFlow`, `offboardingFlow`, `screeningFlow`,
-`hrHelpFlow`); `codingFlow`, `reviewFlow`, `issuesFlow`, `featuresFlow`, `dependenciesFlow`
-and `accessibilityFlow` register only when the `GITHUB_*` policy env block is present
-(coding also needs MCP or REST credentials), and coding uses the GitHub MCP backend by
-default.
+The Mastra dev host (`src/mastra/instance.ts`) always registers `financeFlow`, `vendorsFlow`,
+`securityFlow` and the five HR lanes (`leaveFlow`, `onboardingFlow`, `offboardingFlow`,
+`screeningFlow`, `hrHelpFlow`); `codingFlow`, `reviewFlow`, `issuesFlow`, `featuresFlow`,
+`dependenciesFlow` and `accessibilityFlow` register only when the `GITHUB_*` policy env block
+is present (coding also needs MCP or REST credentials), and coding uses the GitHub MCP backend
+by default.
 Deterministic engines (`reconcile`, `rca`, `proposePosting`, `audit`, pilot metrics,
 dispatcher steps, and the HR lane policy, duplicate, blast-radius and retrieval math)
 are exported as plain functions so they are fully testable without model credentials.
@@ -114,21 +119,74 @@ to swap the fixture retriever for the existing pgvector knowledge store under an
 domain; the citation discipline (`sourceId` + `span`, stale flag, score) already matches
 the support lane's contract.
 
+### Security lane (SOC)
+
+The security lane drives one alert through six checkpoints — `ingest` (dedupe, provenance,
+input caps) → `triage` (deterministic weighted signal rules, ATT&CK technique mapping,
+prompt-injection flags) → `investigate` (claims that must cite a retrieved item with source +
+span, resolved indicators, timeline) → `decide` (risk score/tier/factors, `requiresHuman`,
+optional detection proposal) → `approve` (signer matrix by tier: SOC analyst, SOC lead and
+CISO) → `contain` (idempotent side effect with a registry receipt keyed by the stable `SEC-…`
+containment id). Raw alert text is wrapped as untrusted data in every model prompt; free-text
+injection output fails strict schema validation and escalates as `unknown` + human; and the
+only write-capable step (`contain`) refuses to act without the signed `security:contain`
+receipt. Quarantine on a production host is refused outright by the risk policy and never
+auto-runs. `securityFlow` always registers on fixture seams (`fixtures/security/**`); the case
+history upgrades to Mastra Memory when `DATABASE_URL` is set, so recalled dispositions carry
+citations.
+
 ## Governance spine
 
+One risk/approval/audit model everywhere, versioned as policy-as-code: the deterministic
+thresholds, per-domain floors, sensitive-ticket rules and the cross-domain spawn rule live
+in `policy/risk.yaml`, and every agent-facing tool declares its scope, approval class and
+idempotency discipline in `policy/tools.yaml`. A malformed policy fails closed at startup,
+and `apps/api/tests/test_governance.py` pins the numbers, walks the matrix and cross-checks
+every side-effecting workflow step against the `run.side-effect` template — a drift is a
+test failure, and a threshold change is a policy-version bump.
+
 - **Risk gates before action** — pre-flight scores every planned action
-  (blast radius, reversibility, score). Irreversible or high-blast actions refuse and
-  create a human task; they are never auto-run.
+  (blast radius, reversibility, score) from policy; per-domain floors can only raise a
+  gate, never lower a refuse. Irreversible or high-blast actions refuse and create a
+  human task; they are never auto-run.
+- **Sensitive tickets always reach a human** — tickets mentioning personal data, payroll,
+  health or identity documents are pinned to `needs_human` and approval-gated regardless
+  of confidence, with the matched markers and the policy clause in the rationale.
 - **Approvals are signed and single-use** — `APPROVAL_HMAC_SECRET` signs receipts bound
-  to an approval id, case id, action, and scope (`finance:post`, support sends, …).
-  Executors verify the receipt, never the caller's claim, and replay is idempotent.
+  to an approval id, case id, action, and scope (`finance:post`, `support:send`,
+  `security:contain`, …). Executors verify the receipt, never the caller's claim, and
+  replay is idempotent.
+- **Audit-first redaction** — audit payloads are masked by clause
+  (`secrets/api-key`, `secrets/token-value`, `pii/email`, `pii/finance-account`) and
+  every case event carries the clause citations for what was masked (RTI pattern).
+- **Cross-domain spawn (Nexus)** — a support ticket whose text carries defect signals
+  files a linked bug ticket in the target project, idempotently (stable correlation id =
+  source ticket + matched signals), with the evidence trail and clause citations; raw
+  customer text is not copied into the spawned ticket.
 - **Comment-only until approved** — routing posts a Jira receipt comment describing the
   domain and rationale; no external action happens before a gate passes.
-- **Audit trail** — every webhook, routing verdict, run, tool trail, approval, and send
-  lands in the case store with integer micro-dollar cost rollups.
+- **Audit trail** — every webhook, routing verdict, spawn, run, tool trail, approval, and
+  send lands in the case store with integer micro-dollar cost rollups.
 - **Tenant isolation** — every table has RLS enforced; browser roles have no grants;
   roles (`viewer`, `agent`, `approver`, `admin`) live only in signed Supabase
   `app_metadata`.
+
+### Tool permission matrix (policy/tools.yaml)
+
+| Tool | Class | Scope | Idempotency key |
+| --- | --- | --- | --- |
+| `jira.comment` · `jira.transition` | auto | `jira-projects` | event id |
+| `jira.create-ticket` | auto | `jira-projects` | spawn correlation id |
+| `support.send` | approval | `support:send` | draft hash |
+| `finance.post` | approval | `finance:post` | ledger key |
+| `run.side-effect` | approval | `{workflow}:{step}` (e.g. `security:contain`) | action hash |
+| `jira.read` · `github.read` · `knowledge.retrieve` | read-only | project / repo allowlist / KB domains | — |
+
+The matrix suite asserts every transport write maps to a matrix entry, every
+side-effecting step maps to the run template through the shared `side_effect_scope`
+helper, read-only tools declare no idempotency, and each approval-class tool's denial
+path is exercised in its lane suite (support send 403, finance post 403, tampered run
+receipts).
 
 ## Parallel-safe runs (developer workflows)
 
@@ -159,14 +217,16 @@ advances only on an explicit decision backed by a signed receipt.
   and expiry escalates — never auto-approves.
 
 **A. PR Review**, **B. Issue Resolution**, **C. Feature Implementation**,
-**D. Dependency Update**, **E. Accessibility Audit** and **F. Vendor Onboarding**
-are shipped (scan → group → apply → validate → merge → one Draft bump PR per group
-for D; issue selection → analysis → implementation → complete for B; feature
-selection → scope & design → implementation → complete for C; crawl → violations →
-fix → re-scan → one Draft fix PR for E, gated on zero open criticals or an approver
-waiver with an expiry; collect → verify → risk-score → approve → create for F, with
-reject-with-reason looping back to Collect and the master record created
-idempotently by tax ID).
+**D. Dependency Update**, **E. Accessibility Audit**, **F. Vendor Onboarding**
+and **G. SOC Alert Triage** are shipped (scan → group → apply → validate → merge → one
+Draft bump PR per group for D; issue selection → analysis → implementation → complete
+for B; feature selection → scope & design → implementation → complete for C; crawl →
+violations → fix → re-scan → one Draft fix PR for E, gated on zero open criticals or an
+approver waiver with an expiry; collect → verify → risk-score → approve → create for F,
+with reject-with-reason looping back to Collect and the master record created
+idempotently by tax ID; ingest → triage → investigate → decide → approve → contain for G,
+with prompt-injection flags pinned to `unknown` + human and containment idempotent by
+alert id).
 
 ## Third-party access: MCP-first
 
@@ -212,7 +272,8 @@ Supabase Postgres connection string), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY
 `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`, `WEBHOOK_SECRET`,
 `APPROVAL_HMAC_SECRET` (≥ 32 random bytes, stable across restarts), `REDIS_URL`,
 `CORS_ALLOW_ORIGINS` (exact-origin JSON list; wildcards unsupported),
-`TRUSTED_PROXY_IPS`, `RATE_LIMIT_PER_MINUTE`, the `JIRA_*` / `ATLASSIAN_MCP_URL` /
+`TRUSTED_PROXY_IPS`, `RATE_LIMIT_PER_MINUTE`, `POLICY_DIR` (optional policy override;
+empty resolves the repo-root `policy/`), the `JIRA_*` / `ATLASSIAN_MCP_URL` /
 `JIRA_CLOUD_ID` block, `MODEL_*`, `OPENROUTER_API_KEY`, `EMBEDDING_MODEL`,
 `EMBEDDING_DIMENSIONS=1536`, and the `GITHUB_*` block.
 
@@ -369,9 +430,9 @@ failures (transport errors and HTTP 429/5xx) with full-jitter backoff and honor
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/webhooks/jira` | Jira webhook entry: HMAC verification, dedupe, triage/pre-flight, enqueue + comment receipt (`deduped` on replay) |
+| POST | `/webhooks/jira` | Jira webhook entry: HMAC verification, dedupe, triage/pre-flight, enqueue + comment receipt, and the cross-domain spawn on support defect reports (`deduped` on replay) |
 | GET | `/health` | Liveness |
-| GET | `/metrics` | Prometheus exposition: request/webhook counters, gate and approval decisions, chat answer sources and a `chat_first_token_seconds` TTFT histogram |
+| GET | `/metrics` | Prometheus exposition: request/webhook counters, gate and approval decisions, chat answer sources, a `chat_first_token_seconds` TTFT histogram, run terminal/decision counters, and the security-lane counters (`security_triage_verdicts_total`, `security_containment_total`) |
 | POST | `/chat` | Chat completion through the model router |
 | POST | `/chat/stream` | Same chat request streamed as SSE (`data:` JSON delta frames + a terminal `done` frame carrying `source` and `interrupted`) |
 | POST | `/chat/feedback` | Rate a reply (`up`/`down`/`report`) by client-computed `messageSha256` with an optional ≤ 200-char reason; message text is never stored |
@@ -404,7 +465,7 @@ started as runs and only execute through their gates.
 python -m ruff check apps/api
 python -m mypy                      # strict; packages allrounder_api
 python -m pytest                    # offline; coverage gate ≥ 80 % (fail_under)
-python scripts/golden-eval.py       # 12 golden routing cases; also a CI job step
+python scripts/golden-eval.py       # 15 golden routing + security-guardrail cases; also a CI job step
 npm run typecheck                   # tsc root + test config + approval-ui
 npm test                            # vitest (src/mastra lanes) + approval-ui tests
 npm run test:coverage
@@ -425,8 +486,10 @@ npx vitest run src/mastra
 
 The Compose stack runs the FastAPI service, the static UI, Redis, and an ops pair:
 Prometheus (~15 s scrape of `api:8000/metrics`) and Grafana with a provisioned
-datasource plus the **AllRounder chat and API health** dashboard (`chat-stream`); both
-read `ops/` config and keep state in named volumes. Supabase stays hosted. Populate
+datasource plus the **AllRounder chat and API health** dashboard (`chat-stream`, including
+the security row: triage verdicts, escalate rate, injection-flag rate and containment
+replays); both read `ops/` config and keep state in named volumes. Supabase stays
+hosted. Populate
 `.env`, apply the Supabase migrations, then:
 
 ```powershell
@@ -459,13 +522,48 @@ before dispatching, so no manual seeding is needed. To launch one locally:
    container at it in `.env` (`MASTRA_BASE_URL=http://host.docker.internal:4111`), then
    `docker compose up -d api` — without a reachable Mastra host, starting a run cannot
    dispatch.
-3. Open a ticket and start the run: pick one of the six workflows, fill the inputs, and
+3. Open a ticket and start the run: pick a workflow from the card, fill the inputs, and
    **Start run** — the run suspends at step one and the action bar
    (Back / Edit / Regenerate / Proceed / Abort) drives every checkpoint with a signed
    receipt. The stepper shows one step at a time; select a step to inspect it.
 
 `python scripts/seed-case.py SCRUM-12` remains available for seeding a case without
 touching the UI (`--domain` / `--tenant` override the defaults).
+
+### Security lane demo path
+
+The S4 definition-of-done walk, on the seeded SEC tickets (`python -m allrounder_api.jira_seed`
+creates the phishing alert and the suspicious-PowerShell alert): open the endpoint alert and
+start the **SOC Alert Triage** run with `alertSource` `edr`, host `fin-db-01` and the C2
+indicator, then walk the checkpoints — `ingest` → `triage` (classification pill, severity,
+ATT&CK chips) → `investigate` (claims with citations) → `decide` (risk tier `critical`,
+`requiresHuman`) → `approve` (signed receipt) → `contain` (idempotent: an identical replay
+returns the same receipt and nothing re-executes) — and the case closes with the evidence
+pack. Then prove the guardrails: the `security-quarantine-production-refuse` golden case never
+auto-runs (the risk policy refuses quarantine on a production host), and an alert from the
+injection corpus triages as flagged `unknown` and escalates to a human. The Grafana
+dashboard's security row (triage verdicts, escalate rate, injection-flag rate, containment
+replays) tracks the walk live.
+
+### Cross-domain spawn demo path
+
+The Phase 5 definition-of-done walk, credential-free and replayable from the suite:
+
+```powershell
+python -m pytest apps/api/tests/test_spawn.py apps/api/tests/test_governance.py -q
+```
+
+`test_spawn.py` posts a support webhook whose text carries defect signals (for example a
+login ticket mentioning a `stack trace` and `exception`) and proves the same request that
+routes it to support also files a linked **Bug** in the spawn target project with the
+evidence trail — source key, matched signals, and the redacted rationale with its clause
+citations — plus a link comment back on the source ticket. Duplicate deliveries and
+replayed events of the same ticket stay at exactly one filed bug (dedupe + spawn
+correlation id), a clean support ticket files nothing, and a Jira outage during the
+spawn never fails the webhook (the routing comment is the durable step). Against a live
+Jira (`JIRA_*` configured), the same flow runs from a real SUP ticket with `crashes` or
+`stack trace` in its text; `jira.create-ticket` in the permission matrix keeps it
+correlation-id idempotent and `test_governance.py` pins the whole matrix.
 
 ## Load testing & evals
 
@@ -476,8 +574,9 @@ validated for a numeric `Retry-After` instead of failing the run. Server-side TT
 (`chat_first_token_seconds`, split by `source`) shows on `/metrics` and in the Grafana
 dashboard while a run is in flight.
 
-Routing golden cases live in `evals/golden_tickets.jsonl` (12 pinned domain + gate
-expectations, including refuse and low-confidence escalation). Replay them with
+Routing golden cases live in `evals/golden_tickets.jsonl` (15 pinned expectations: 12
+domain + gate routing cases plus 3 security guardrail cases, including refuse and
+low-confidence escalation). Replay them with
 `python scripts/golden-eval.py`; CI runs the same script as the **Golden ticket gate**
 step.
 
@@ -487,6 +586,13 @@ math, balances, duplicate scoring, blast-radius planning, rubric scores and retr
 discipline). They replay through `src/mastra/agents/hr/lane-evals.test.ts` inside
 `npm test`; a regression fails with the exact expected-vs-actual pair.
 
+Security lane golden cases live in `evals/security_alert_cases.jsonl` (pinned engine and
+flow-step expectations), joined by the §8 guardrail corpora: `evals/security_injection_corpus.jsonl`
+(injected alerts must land on `unknown` with flags — never `benign`) and
+`evals/security_fp_corpus.jsonl` (legitimate-but-scary SOC artifacts — encoded PowerShell,
+YARA text, IOC lists — must pass untouched). All three replay through
+`src/mastra/agents/security/lane-evals.test.ts` inside `npm test`.
+
 ## Documentation
 
 - `AllRounderAgent_Master_Plan_20260906.md` — two-plane vision, subsystem specs,
@@ -495,6 +601,8 @@ discipline). They replay through `src/mastra/agents/hr/lane-evals.test.ts` insid
 - `Mastra_Agents_Prompting_Guide_20260906.md` — agent prompts and output-shape rules.
 - `docs/coding-agent-architecture.md` — implementation architecture; §12 MCP
   prerequisites, §13 the third-party call register with the GitHub/Jira trade-offs.
+- `AllRounderAgent_SOC_Lane_Plan_20260917.md` — the security/SOC lane: engines,
+  contracts, guardrails, corpora, and the S0–S4 phase plan with the demo path.
 
 ## Status & known limits
 
@@ -528,5 +636,18 @@ discipline). They replay through `src/mastra/agents/hr/lane-evals.test.ts` insid
   OpenAI-compatible (`MODEL_BASE_URL`), so pointing it at a local server (Ollama `/v1`,
   vLLM) exercises `/chat` and `/chat/stream` end to end without an external key.
 - The marketing lane has agents and contracts but no workflow yet.
+- The security/SOC lane (plan: `docs/AllRounderAgent_SOC_Lane_Plan_20260917.md`) is shipped
+  as a six-checkpoint run (`ingest → triage → investigate → decide → approve → contain`):
+  deterministic engines + ATT&CK mapping, prompt-injection guardrails replayed from the §8
+  corpora, signer-matrix approvals, idempotent containment, console surfaces for every step,
+  and the Grafana security panels. Live model-driven triage needs `OPENROUTER_API_KEY`; the
+  engines, corpora and flow run credential-free in CI.
+- Governance hardening (Phase 5) is shipped: policy-as-code (`policy/risk.yaml`,
+  `policy/tools.yaml`) consumed by the dispatcher and pinned by `test_governance.py`
+  (thresholds, per-domain floors, sensitive markers, the permission matrix and the
+  side-effect scopes), audit-first clause-citing redaction on case events,
+  deterministic cross-domain spawn (support → linked bug with evidence,
+  `test_spawn.py`), and the read-only defaults audit. The dispatcher contains no magic
+  numbers — thresholds change by policy-version bump.
 - Board listing always uses read-only REST (Rovo MCP exposes no agile-board tools);
   legacy `JIRA_TRANSPORT=http` and `GITHUB_ACCESS=rest` fallbacks remain tested options.

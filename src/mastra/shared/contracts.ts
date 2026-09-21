@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const DomainSchema = z.enum(["code", "finance", "marketing", "support", "unknown"]);
+export const DomainSchema = z.enum(["code", "finance", "marketing", "support", "security", "unknown"]);
 export const GateSchema = z.enum(["auto", "approval", "refuse"]);
 
 export const AttachmentSchema = z

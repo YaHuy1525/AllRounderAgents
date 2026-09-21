@@ -1,0 +1,245 @@
+[
+  {
+    "requestId": "LR-1D6BDF80",
+    "employeeId": "E-2009",
+    "startDate": "2026-11-02",
+    "endDate": "2026-11-04",
+    "workingDays": 3,
+    "status": "booked",
+    "createdAt": "2026-08-10T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-E84C284F",
+    "employeeId": "E-2009",
+    "startDate": "2026-11-04",
+    "endDate": "2026-11-06",
+    "workingDays": 3,
+    "status": "booked",
+    "createdAt": "2026-08-11T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-9B0656BD",
+    "employeeId": "E-2054",
+    "startDate": "2026-12-22",
+    "endDate": "2026-12-24",
+    "workingDays": 3,
+    "status": "booked",
+    "createdAt": "2026-08-12T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-7070BF84",
+    "employeeId": "E-2002",
+    "startDate": "2026-10-05",
+    "endDate": "2026-10-14",
+    "workingDays": 8,
+    "status": "booked",
+    "createdAt": "2026-08-13T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-5981DF34",
+    "employeeId": "E-2009",
+    "startDate": "2026-10-19",
+    "endDate": "2026-10-26",
+    "workingDays": 6,
+    "status": "booked",
+    "createdAt": "2026-08-20T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-99C9C850",
+    "employeeId": "E-2016",
+    "startDate": "2026-11-09",
+    "endDate": "2026-11-12",
+    "workingDays": 4,
+    "status": "booked",
+    "createdAt": "2026-08-27T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-52E1FBDA",
+    "employeeId": "E-2023",
+    "startDate": "2026-11-16",
+    "endDate": "2026-11-25",
+    "workingDays": 8,
+    "status": "booked",
+    "createdAt": "2026-08-14T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-A2E40C18",
+    "employeeId": "E-2030",
+    "startDate": "2027-01-11",
+    "endDate": "2027-01-15",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-21T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-F03EA5FC",
+    "employeeId": "E-2037",
+    "startDate": "2027-02-01",
+    "endDate": "2027-02-07",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-28T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-743430D4",
+    "employeeId": "E-2044",
+    "startDate": "2026-10-05",
+    "endDate": "2026-10-14",
+    "workingDays": 8,
+    "status": "booked",
+    "createdAt": "2026-08-15T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-756FBEA5",
+    "employeeId": "E-2051",
+    "startDate": "2026-10-19",
+    "endDate": "2026-10-25",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-22T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-796DAFEB",
+    "employeeId": "E-2059",
+    "startDate": "2026-11-09",
+    "endDate": "2026-11-14",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-29T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-DE22F7A5",
+    "employeeId": "E-2066",
+    "startDate": "2026-11-16",
+    "endDate": "2026-11-25",
+    "workingDays": 8,
+    "status": "booked",
+    "createdAt": "2026-08-16T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-90F0BE35",
+    "employeeId": "E-2073",
+    "startDate": "2027-01-11",
+    "endDate": "2027-01-14",
+    "workingDays": 4,
+    "status": "booked",
+    "createdAt": "2026-08-23T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-73602932",
+    "employeeId": "E-2080",
+    "startDate": "2027-02-01",
+    "endDate": "2027-02-04",
+    "workingDays": 4,
+    "status": "booked",
+    "createdAt": "2026-08-30T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-0F644C9B",
+    "employeeId": "E-2087",
+    "startDate": "2026-10-05",
+    "endDate": "2026-10-09",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-17T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-BCDB464D",
+    "employeeId": "E-2095",
+    "startDate": "2026-10-19",
+    "endDate": "2026-10-23",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-24T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-F76A1803",
+    "employeeId": "E-2102",
+    "startDate": "2026-11-09",
+    "endDate": "2026-11-17",
+    "workingDays": 7,
+    "status": "booked",
+    "createdAt": "2026-08-31T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-79F145A9",
+    "employeeId": "E-2109",
+    "startDate": "2026-11-16",
+    "endDate": "2026-11-19",
+    "workingDays": 4,
+    "status": "booked",
+    "createdAt": "2026-08-18T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-0FECBBDE",
+    "employeeId": "E-2116",
+    "startDate": "2027-01-11",
+    "endDate": "2027-01-17",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-25T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-42773ED6",
+    "employeeId": "E-2124",
+    "startDate": "2027-02-01",
+    "endDate": "2027-02-04",
+    "workingDays": 4,
+    "status": "booked",
+    "createdAt": "2026-09-01T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-095EF314",
+    "employeeId": "E-2131",
+    "startDate": "2026-10-05",
+    "endDate": "2026-10-09",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-19T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-F3C622D0",
+    "employeeId": "E-2138",
+    "startDate": "2026-10-19",
+    "endDate": "2026-10-27",
+    "workingDays": 7,
+    "status": "booked",
+    "createdAt": "2026-08-26T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-ECE593D6",
+    "employeeId": "E-2145",
+    "startDate": "2026-11-09",
+    "endDate": "2026-11-12",
+    "workingDays": 4,
+    "status": "booked",
+    "createdAt": "2026-08-13T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-D756B587",
+    "employeeId": "E-2153",
+    "startDate": "2026-11-16",
+    "endDate": "2026-11-23",
+    "workingDays": 6,
+    "status": "booked",
+    "createdAt": "2026-08-20T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-894E8D8B",
+    "employeeId": "E-2160",
+    "startDate": "2027-01-11",
+    "endDate": "2027-01-15",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-27T09:00:00.000Z"
+  },
+  {
+    "requestId": "LR-1B97D939",
+    "employeeId": "E-2168",
+    "startDate": "2027-02-01",
+    "endDate": "2027-02-07",
+    "workingDays": 5,
+    "status": "booked",
+    "createdAt": "2026-08-14T09:00:00.000Z"
+  }
+]

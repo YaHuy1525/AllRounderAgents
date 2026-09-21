@@ -52,6 +52,12 @@ import {
   IssueSelectionSurface,
   ReviewOptionsSurface,
   ScopeDesignSurface,
+  SecurityApproveSurface,
+  SecurityContainSurface,
+  SecurityDecideSurface,
+  SecurityIngestSurface,
+  SecurityInvestigateSurface,
+  SecurityTriageSurface,
   SelectPrSurface,
   VendorApproveSurface,
   VendorCollectSurface,
@@ -82,6 +88,9 @@ import {
   parseReceipt,
   parseReview,
   parseScopeDesign,
+  parseSecurityApprove,
+  parseSecurityInvestigate,
+  parseSecurityReceipt,
   parseSelected,
   parseVendorApprove,
   parseVendorCollect,
@@ -105,6 +114,7 @@ import {
   type OptionsDraft,
   type ReviewDraft,
   type ScopeDesignDraft,
+  type SecurityApproveDraft,
   type VendorApproveDraft,
   type VendorCollectDraft,
   type VendorCreateDraft,
@@ -231,6 +241,14 @@ function proceedLabel(workflow: string, stepId: string): string {
     if (stepId === "approve") return "Approve the answer";
     if (stepId === "send") return "Record the answer";
   }
+  if (workflow === "security") {
+    if (stepId === "ingest") return "Run triage";
+    if (stepId === "triage") return "Open the investigation";
+    if (stepId === "investigate") return "Score the disposition";
+    if (stepId === "decide") return "Request approval";
+    if (stepId === "approve") return "Preview the containment";
+    if (stepId === "contain") return "Execute the containment";
+  }
   if (workflow === "dependencies" && stepId === "merge") return "Open bump PRs";
   if (workflow === "features" && stepId === "implementation") return "Apply & Open PR";
   return PROCEED_LABELS[stepId] ?? "Proceed";
@@ -324,6 +342,16 @@ function leaveApplyReceipt(run: RunDetail): Record<string, unknown> | null {
 /** The onboarding lane records its side effect on the `provision` step. */
 function provisionReceipt(run: RunDetail): Record<string, unknown> | null {
   const effect = run.sideEffects["provision"];
+  if (typeof effect !== "object" || effect === null || Array.isArray(effect)) return null;
+  const receipt = (effect as Record<string, unknown>)["receipt"];
+  return typeof receipt === "object" && receipt !== null && !Array.isArray(receipt)
+    ? (receipt as Record<string, unknown>)
+    : null;
+}
+
+/** The security lane records its single side effect on the `contain` step. */
+function securityContainReceipt(run: RunDetail): Record<string, unknown> | null {
+  const effect = run.sideEffects["contain"];
   if (typeof effect !== "object" || effect === null || Array.isArray(effect)) return null;
   const receipt = (effect as Record<string, unknown>)["receipt"];
   return typeof receipt === "object" && receipt !== null && !Array.isArray(receipt)
@@ -520,6 +548,17 @@ function screeningShortlistBlocked(
   );
 }
 
+/** The security containment preview opens once every required signer approved. */
+function securityApproveBlocked(
+  artifact: Record<string, unknown>,
+  draft: SecurityApproveDraft | null,
+): boolean {
+  const approve = parseSecurityApprove(artifact);
+  if (approve === null) return false;
+  const signers = draft?.signers ?? approve.signers;
+  return !signers.every((signer) => signer.state === "approved" && signer.approvedAt !== null);
+}
+
 function isValidHttpUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -642,6 +681,11 @@ export function RunPanel({
     useState<OffboardingAttestDraft | null>(null);
   const [screeningShortlistDraft, setScreeningShortlistDraft] =
     useState<ScreeningShortlistDraft | null>(null);
+  const [securityApproveDraft, setSecurityApproveDraft] = useState<SecurityApproveDraft | null>(
+    null,
+  );
+  const [securityReturnNote, setSecurityReturnNote] = useState<string | null>(null);
+  const [securityReplayedStepId, setSecurityReplayedStepId] = useState<string | null>(null);
   const [followUpBusy, setFollowUpBusy] = useState(false);
 
   const onRunsChangedRef = useRef(onRunsChanged);
@@ -691,6 +735,7 @@ export function RunPanel({
     // A different run drops panel-scoped state (e.g. the vendors return note).
     setVendorReturnNote(null);
     setOnboardingReturnNote(null);
+    setSecurityReturnNote(null);
     setDetail(null);
     void reload();
   }, [activeRunId, loadTick, reload]);
@@ -763,6 +808,8 @@ export function RunPanel({
     setOffboardingApproveDraft(null);
     setOffboardingAttestDraft(null);
     setScreeningShortlistDraft(null);
+    setSecurityApproveDraft(null);
+    setSecurityReplayedStepId(null);
   }, [focusKey]);
 
   // Auto-focus the step that is awaiting the user (or the last step when done).
@@ -800,6 +847,17 @@ export function RunPanel({
         (decision.action === "proceed" || decision.action === "edit")
       ) {
         setOnboardingReturnNote(null);
+      }
+      // The security lane surfaces the idempotent-replay signal and consumes
+      // its return note once Investigate moves forward again.
+      if (detail.workflow === "security") {
+        setSecurityReplayedStepId(result.replayed ? activeStep.stepId : null);
+        if (
+          activeStep.stepId === "investigate" &&
+          (decision.action === "proceed" || decision.action === "edit")
+        ) {
+          setSecurityReturnNote(null);
+        }
       }
       setEditActive(false);
       setRegenerateOpen(false);
@@ -1207,6 +1265,23 @@ export function RunPanel({
           },
         };
       }
+      if (detail?.workflow === "security") {
+        const approve = parseSecurityApprove(artifact);
+        if (approve === null || securityApproveDraft === null) return { action: "proceed" };
+        const signers = securityApproveDraft.signers;
+        if (JSON.stringify(signers) === JSON.stringify(approve.signers)) {
+          return { action: "proceed" };
+        }
+        return {
+          action: "edit",
+          edits: {
+            signers,
+            allApproved: signers.every(
+              (signer) => signer.state === "approved" && signer.approvedAt !== null,
+            ),
+          },
+        };
+      }
       const approve = parseVendorApprove(artifact);
       if (approve === null || vendorApproveDraft === null) return { action: "proceed" };
       const chain = vendorApproveDraft.chain;
@@ -1417,6 +1492,42 @@ export function RunPanel({
     }
   }
 
+  /**
+   * The security reject loop: a reason at Approve walks the run back through
+   * two `back` decisions (approve -> decide) until it rests at Investigate;
+   * the reason is kept in panel state and shown on the evidence pack (the API
+   * caps the decision comment at 500).
+   */
+  async function rejectSecurityToInvestigate(reason: string): Promise<void> {
+    if (detail === null) return;
+    const note = reason.trim().slice(0, 500);
+    if (note === "") return;
+    setBusy(true);
+    setActionError(null);
+    setSecurityApproveDraft(null);
+    try {
+      let run = detail;
+      for (const stepId of ["approve", "decide"]) {
+        const result = await decideRunStep(run.runId, stepId, { action: "back", comment: note });
+        run = result.run;
+      }
+      setSecurityReturnNote(note);
+      setDetail(run);
+      onActiveRunRef.current(run);
+      onRunsChangedRef.current();
+      setEditActive(false);
+      setRegenerateOpen(false);
+      setGuidance("");
+      setArmedAction(null);
+    } catch (error) {
+      setSecurityReturnNote(null);
+      setActionError(decisionErrorCopy(error));
+      if (error instanceof ApiError && error.status === 409) refreshRef.current();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const receipt = detail === null ? null : parseReceipt(completeReceipt(detail));
   const issueReceipt =
     detail === null || detail.workflow !== "issues"
@@ -1462,6 +1573,10 @@ export function RunPanel({
     detail === null || detail.workflow !== "hr-help"
       ? null
       : parseHrHelpReceipt(hrHelpSendReceipt(detail));
+  const securityReceiptView =
+    detail === null || detail.workflow !== "security"
+      ? null
+      : parseSecurityReceipt(securityContainReceipt(detail));
   const historyRuns = sortedRuns.filter(
     (run) => detail === null || run.workflow === detail.workflow,
   );
@@ -1479,6 +1594,17 @@ export function RunPanel({
     );
   }
 
+  /** The security lane's idempotent-replay notice for the step just decided. */
+  function securityReplayNotice(step: RunStep): ReactNode {
+    if (securityReplayedStepId !== step.stepId) return null;
+    return (
+      <p className="security-hint">
+        Receipt replayed — this decision matched a previously signed receipt; nothing re-executed
+        and the run did not advance.
+      </p>
+    );
+  }
+
   function actionBar(step: RunStep, proceedDisabled: boolean): ReactNode {
     const index = detail === null ? 0 : detail.steps.findIndex((item) => item.stepId === step.stepId);
     const issuesFlow = detail?.workflow === "issues";
@@ -1491,6 +1617,7 @@ export function RunPanel({
     const offboardingFlow = detail?.workflow === "offboarding";
     const screeningFlow = detail?.workflow === "screening";
     const hrHelpFlow = detail?.workflow === "hr-help";
+    const securityFlow = detail?.workflow === "security";
     const regenerateAvailable =
       step.stepId === "ai-review" ||
       (issuesFlow && (step.stepId === "analysis" || step.stepId === "implementation")) ||
@@ -1502,7 +1629,9 @@ export function RunPanel({
       (onboardingFlow && (step.stepId === "verify" || step.stepId === "risk-score")) ||
       (offboardingFlow && step.stepId === "access-audit") ||
       (screeningFlow && step.stepId === "screen") ||
-      (hrHelpFlow && step.stepId === "draft");
+      (hrHelpFlow && step.stepId === "draft") ||
+      (securityFlow &&
+        (step.stepId === "triage" || step.stepId === "investigate" || step.stepId === "decide"));
     if (regenerateOpen && regenerateAvailable) {
       return (
         <div className="run-actions-wrap">
@@ -1518,7 +1647,8 @@ export function RunPanel({
                 onboardingFlow ||
                 offboardingFlow ||
                 screeningFlow ||
-                hrHelpFlow
+                hrHelpFlow ||
+                securityFlow
                   ? "What should change in this step?"
                   : "What should the reviewer change?"}
               </span>
@@ -1595,7 +1725,8 @@ export function RunPanel({
                   onboardingFlow ||
                   offboardingFlow ||
                   screeningFlow ||
-                  hrHelpFlow
+                  hrHelpFlow ||
+                  securityFlow
                   ? "Re-run this step with optional guidance"
                   : "Re-run the review with optional guidance"
                 : "Only the AI review step re-runs"
@@ -1641,6 +1772,62 @@ export function RunPanel({
       );
     }
     switch (step.stepId) {
+      case "ingest":
+        return (
+          <>
+            <SecurityIngestSurface artifact={artifact} />
+            {securityReplayNotice(step)}
+            {decisionLine(step)}
+            {interactive && actionBar(step, false)}
+          </>
+        );
+      case "triage":
+        return (
+          <>
+            <SecurityTriageSurface artifact={artifact} />
+            {securityReplayNotice(step)}
+            {decisionLine(step)}
+            {interactive && actionBar(step, false)}
+          </>
+        );
+      case "investigate":
+        return (
+          <>
+            <SecurityInvestigateSurface artifact={artifact} returnNote={securityReturnNote} />
+            {securityReplayNotice(step)}
+            {decisionLine(step)}
+            {interactive && actionBar(step, false)}
+          </>
+        );
+      case "decide": {
+        const investigateArtifact =
+          detail?.steps.find((item) => item.stepId === "investigate")?.artifact ?? null;
+        const decideClaims =
+          investigateArtifact === null
+            ? undefined
+            : parseSecurityInvestigate(investigateArtifact)?.claims;
+        return (
+          <>
+            <SecurityDecideSurface artifact={artifact} claims={decideClaims} />
+            {securityReplayNotice(step)}
+            {decisionLine(step)}
+            {interactive && actionBar(step, false)}
+          </>
+        );
+      }
+      case "contain":
+        return (
+          <>
+            <SecurityContainSurface
+              artifact={artifact}
+              receipt={securityReceiptView}
+              replayed={securityReplayedStepId === "contain"}
+            />
+            {securityReplayNotice(step)}
+            {decisionLine(step)}
+            {interactive && actionBar(step, false)}
+          </>
+        );
       case "intake":
         if (detail?.workflow === "hr-help") {
           return (
@@ -2047,6 +2234,23 @@ export function RunPanel({
               {decisionLine(step)}
               {interactive &&
                 actionBar(step, onboardingApproveBlocked(artifact, onboardingApproveDraft))}
+            </>
+          );
+        }
+        if (detail?.workflow === "security") {
+          return (
+            <>
+              <SecurityApproveSurface
+                artifact={artifact}
+                editable={interactive}
+                draft={securityApproveDraft}
+                onChange={setSecurityApproveDraft}
+                returnFlow={{ onReturn: (reason) => void rejectSecurityToInvestigate(reason), busy }}
+              />
+              {securityReplayNotice(step)}
+              {decisionLine(step)}
+              {interactive &&
+                actionBar(step, securityApproveBlocked(artifact, securityApproveDraft))}
             </>
           );
         }
@@ -2518,6 +2722,11 @@ export function StartRunCard({
   const [offboardReason, setOffboardReason] = useState("");
   const [screeningRequisitionId, setScreeningRequisitionId] = useState("");
   const [hrHelpQuestion, setHrHelpQuestion] = useState("");
+  const [securityAlertSource, setSecurityAlertSource] = useState("edr");
+  const [securityTitle, setSecurityTitle] = useState("");
+  const [securityRawAlert, setSecurityRawAlert] = useState("");
+  const [securityHost, setSecurityHost] = useState("");
+  const [securityIndicators, setSecurityIndicators] = useState("");
   const [repositories, setRepositories] = useState<string[] | null>(null);
   const [repositoriesFailed, setRepositoriesFailed] = useState(false);
   const [accounts, setAccounts] = useState<GithubAccount[] | null>(null);
@@ -2537,6 +2746,7 @@ export function StartRunCard({
   const offboardingFlow = workflow === "offboarding";
   const screeningFlow = workflow === "screening";
   const hrHelpFlow = workflow === "hr-help";
+  const securityFlow = workflow === "security";
   const repositoryOptional = !accessibilityFlow && (issuesFlow || featuresFlow || dependenciesFlow);
   const reviewFlow =
     !repositoryOptional &&
@@ -2546,7 +2756,8 @@ export function StartRunCard({
     !onboardingFlow &&
     !offboardingFlow &&
     !screeningFlow &&
-    !hrHelpFlow;
+    !hrHelpFlow &&
+    !securityFlow;
   const accountsSettled = accounts !== null || accountsFailed;
 
   useEffect(() => {
@@ -2825,6 +3036,50 @@ export function StartRunCard({
       }
       return;
     }
+    if (securityFlow) {
+      const title = securityTitle.trim();
+      const host = securityHost.trim();
+      const indicators = securityIndicators
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item !== "")
+        .slice(0, 50);
+      if (title.length < 5) {
+        setError("Enter the alert title (at least 5 characters).");
+        return;
+      }
+      if (title.length > 300) {
+        setError("Keep the alert title under 300 characters.");
+        return;
+      }
+      if (securityRawAlert.length > 20000) {
+        setError("Keep the raw alert under 20000 characters.");
+        return;
+      }
+      setBusy(true);
+      setError(null);
+      try {
+        const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
+        await startRun({
+          workflow,
+          ticketKey: issue.key,
+          caseId: activeCaseId,
+          input: {
+            alertSource: securityAlertSource,
+            title,
+            rawAlert: securityRawAlert,
+            ...(host === "" ? {} : { host }),
+            indicators,
+          },
+        });
+        onStarted();
+      } catch (submitError) {
+        setError(startErrorCopy(submitError));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     const repo = repository.trim();
     if (repositoryOptional ? repo !== "" && !isValidRepository(repo) : !isValidRepository(repo)) {
       setError("Choose the repository as owner/name, for example acme/app.");
@@ -2969,12 +3224,19 @@ export function StartRunCard({
           ticket.
         </p>
       ) : null}
+      {securityFlow ? (
+        <p className="step-summary">
+          SOC Alert Triage: ingest the alert, triage it with ATT&CK mapping, investigate with cited
+          evidence, decide and approve the disposition, then contain — containment is idempotent.
+        </p>
+      ) : null}
       {!vendorsFlow &&
         !leaveFlow &&
         !onboardingFlow &&
         !offboardingFlow &&
         !screeningFlow &&
-        !hrHelpFlow && (
+        !hrHelpFlow &&
+        !securityFlow && (
         <label className="field-row">
           <span>{repositoryOptional ? "Repository (optional)" : "Repository"}</span>
           {repositoriesFailed ? (
@@ -3281,6 +3543,74 @@ export function StartRunCard({
             }}
           />
         </label>
+      )}
+      {securityFlow && (
+        <>
+          <label className="field-row">
+            <span>Alert source</span>
+            <select
+              value={securityAlertSource}
+              onChange={(event) => {
+                setSecurityAlertSource(event.target.value);
+                setError(null);
+              }}
+            >
+              <option value="edr">EDR</option>
+              <option value="siem">SIEM</option>
+              <option value="email">Email gateway</option>
+              <option value="cloud">Cloud</option>
+            </select>
+          </label>
+          <label className="field-row">
+            <span>Alert title</span>
+            <input
+              type="text"
+              value={securityTitle}
+              placeholder="Suspicious encoded PowerShell with scheduled task persistence"
+              onChange={(event) => {
+                setSecurityTitle(event.target.value);
+                setError(null);
+              }}
+            />
+          </label>
+          <label className="field-row">
+            <span>Raw alert (untrusted)</span>
+            <textarea
+              rows={3}
+              maxLength={20000}
+              value={securityRawAlert}
+              placeholder="Paste the raw alert body exactly as the sensor emitted it — it is treated as untrusted input."
+              onChange={(event) => {
+                setSecurityRawAlert(event.target.value);
+                setError(null);
+              }}
+            />
+          </label>
+          <label className="field-row">
+            <span>Host (optional)</span>
+            <input
+              type="text"
+              value={securityHost}
+              placeholder="fin-db-01"
+              onChange={(event) => {
+                setSecurityHost(event.target.value);
+                setError(null);
+              }}
+            />
+          </label>
+          <label className="field-row">
+            <span>Indicators (comma-separated, optional)</span>
+            <input
+              type="text"
+              value={securityIndicators}
+              placeholder="203.0.113.77, hxxp://malicious.example"
+              onChange={(event) => {
+                setSecurityIndicators(event.target.value);
+                setError(null);
+              }}
+            />
+          </label>
+        </>
       )}
       {reviewFlow && (
         <label className="field-row">

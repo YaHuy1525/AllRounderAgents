@@ -46,6 +46,17 @@
   },
   {
     "schema": "TriageVerdict",
+    "valid": true,
+    "value": {
+      "domain": "security",
+      "confidence": 0.88,
+      "urgency": 4,
+      "needsHuman": false,
+      "rationale": "Security keywords and project"
+    }
+  },
+  {
+    "schema": "TriageVerdict",
     "valid": false,
     "value": {
       "domain": "sales",

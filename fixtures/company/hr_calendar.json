@@ -1,0 +1,57 @@
+{
+  "holidays": [
+    {
+      "date": "2026-01-01",
+      "label": "New Year's Day"
+    },
+    {
+      "date": "2026-04-03",
+      "label": "Good Friday"
+    },
+    {
+      "date": "2026-05-01",
+      "label": "Labour Day"
+    },
+    {
+      "date": "2026-07-03",
+      "label": "Independence Day (observed)"
+    },
+    {
+      "date": "2026-11-26",
+      "label": "Thanksgiving"
+    },
+    {
+      "date": "2026-11-27",
+      "label": "Day after Thanksgiving"
+    },
+    {
+      "date": "2026-12-25",
+      "label": "Christmas Day"
+    },
+    {
+      "date": "2026-12-26",
+      "label": "Boxing Day"
+    },
+    {
+      "date": "2027-01-01",
+      "label": "New Year's Day"
+    }
+  ],
+  "blackoutPeriods": [
+    {
+      "from": "2026-06-29",
+      "to": "2026-07-03",
+      "reason": "Half-year close"
+    },
+    {
+      "from": "2026-12-21",
+      "to": "2026-12-31",
+      "reason": "Year-end close"
+    },
+    {
+      "from": "2027-03-29",
+      "to": "2027-04-02",
+      "reason": "Quarterly audit freeze"
+    }
+  ]
+}

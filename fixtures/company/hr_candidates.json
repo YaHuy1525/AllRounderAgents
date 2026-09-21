@@ -1,0 +1,1383 @@
+{
+  "requisitions": [
+    {
+      "requisitionId": "REQ-5001",
+      "roleTitle": "Senior Backend Engineer",
+      "department": "Engineering",
+      "location": "Remote (EU)",
+      "seniority": "senior",
+      "interviewers": [
+        "E-2002",
+        "E-2003"
+      ],
+      "criteria": [
+        {
+          "id": "api-design",
+          "label": "API design",
+          "weight": 30,
+          "mustHave": true,
+          "detail": "Designs versioned, backward-compatible APIs for production traffic."
+        },
+        {
+          "id": "typescript",
+          "label": "TypeScript",
+          "weight": 25,
+          "mustHave": true,
+          "detail": "Strong typing discipline in strict mode across a real codebase."
+        },
+        {
+          "id": "distributed-systems",
+          "label": "Distributed systems",
+          "weight": 20,
+          "mustHave": false,
+          "detail": "Reasons about queues, retries, and idempotency."
+        },
+        {
+          "id": "testing",
+          "label": "Testing discipline",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Automated tests around behaviour, not just snapshots."
+        },
+        {
+          "id": "mentoring",
+          "label": "Mentoring",
+          "weight": 10,
+          "mustHave": false,
+          "detail": "Grows engineers through structured review and pairing."
+        }
+      ]
+    },
+    {
+      "requisitionId": "REQ-5002",
+      "roleTitle": "Account Executive",
+      "department": "Sales",
+      "location": "Austin",
+      "seniority": "mid",
+      "interviewers": [
+        "E-2054",
+        "E-2055"
+      ],
+      "criteria": [
+        {
+          "id": "pipeline",
+          "label": "Pipeline building",
+          "weight": 30,
+          "mustHave": true,
+          "detail": "Builds qualified pipeline from outbound and inbound sources."
+        },
+        {
+          "id": "negotiation",
+          "label": "Negotiation",
+          "weight": 25,
+          "mustHave": true,
+          "detail": "Closes multi-stakeholder deals at or above target pricing."
+        },
+        {
+          "id": "crm",
+          "label": "CRM hygiene",
+          "weight": 20,
+          "mustHave": false,
+          "detail": "Keeps the CRM accurate enough to forecast from."
+        },
+        {
+          "id": "forecasting",
+          "label": "Forecasting",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Commits with documented confidence categories."
+        },
+        {
+          "id": "discovery",
+          "label": "Discovery",
+          "weight": 10,
+          "mustHave": false,
+          "detail": "Runs structured discovery against customer pain points."
+        }
+      ]
+    },
+    {
+      "requisitionId": "REQ-5003",
+      "roleTitle": "Payroll Specialist",
+      "department": "Finance",
+      "location": "Lisbon",
+      "seniority": "mid",
+      "interviewers": [
+        "E-2094",
+        "E-2095"
+      ],
+      "criteria": [
+        {
+          "id": "payroll-ops",
+          "label": "Payroll operations",
+          "weight": 35,
+          "mustHave": true,
+          "detail": "Runs multi-country payroll cycles end to end."
+        },
+        {
+          "id": "compliance",
+          "label": "Compliance",
+          "weight": 25,
+          "mustHave": true,
+          "detail": "Tracks statutory filing deadlines without misses."
+        },
+        {
+          "id": "erp",
+          "label": "ERP fluency",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Posts payroll journals into the ERP accurately."
+        },
+        {
+          "id": "reporting",
+          "label": "Reporting",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Builds payroll cost reports for leadership."
+        },
+        {
+          "id": "automation",
+          "label": "Automation",
+          "weight": 10,
+          "mustHave": false,
+          "detail": "Reduces manual steps in the payroll cycle."
+        }
+      ]
+    },
+    {
+      "requisitionId": "REQ-5004",
+      "roleTitle": "Recruiter",
+      "department": "People",
+      "location": "Berlin",
+      "seniority": "mid",
+      "interviewers": [
+        "E-2142",
+        "E-2143"
+      ],
+      "criteria": [
+        {
+          "id": "sourcing",
+          "label": "Sourcing",
+          "weight": 30,
+          "mustHave": true,
+          "detail": "Fills senior pipelines through direct sourcing."
+        },
+        {
+          "id": "employer-brand",
+          "label": "Employer brand",
+          "weight": 20,
+          "mustHave": false,
+          "detail": "Improves offer-accept rate through candidate care."
+        },
+        {
+          "id": "stakeholders",
+          "label": "Stakeholder management",
+          "weight": 20,
+          "mustHave": false,
+          "detail": "Manages hiring managers with structured updates."
+        },
+        {
+          "id": "ats",
+          "label": "ATS discipline",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Keeps candidate records complete in the ATS."
+        },
+        {
+          "id": "analytics",
+          "label": "Recruiting analytics",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Reports funnel conversion and time-to-fill."
+        }
+      ]
+    },
+    {
+      "requisitionId": "REQ-5005",
+      "roleTitle": "IT Support Specialist",
+      "department": "Operations",
+      "location": "Manila",
+      "seniority": "junior",
+      "interviewers": [
+        "E-2120",
+        "E-2121"
+      ],
+      "criteria": [
+        {
+          "id": "troubleshooting",
+          "label": "Troubleshooting",
+          "weight": 35,
+          "mustHave": true,
+          "detail": "Diagnoses endpoint and network issues from tickets."
+        },
+        {
+          "id": "identity",
+          "label": "Identity and access",
+          "weight": 25,
+          "mustHave": true,
+          "detail": "Administers SSO and least-privilege access reviews."
+        },
+        {
+          "id": "ticketing",
+          "label": "Ticketing",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Keeps queue SLAs inside target."
+        },
+        {
+          "id": "hardware",
+          "label": "Hardware lifecycle",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Ships and recovers equipment with clean records."
+        },
+        {
+          "id": "communication",
+          "label": "Communication",
+          "weight": 10,
+          "mustHave": false,
+          "detail": "Writes statuses people can act on."
+        }
+      ]
+    },
+    {
+      "requisitionId": "REQ-5006",
+      "roleTitle": "Growth Marketer",
+      "department": "Marketing",
+      "location": "Remote (EU)",
+      "seniority": "senior",
+      "interviewers": [
+        "E-2160",
+        "E-2161"
+      ],
+      "criteria": [
+        {
+          "id": "experimentation",
+          "label": "Experimentation",
+          "weight": 30,
+          "mustHave": true,
+          "detail": "Designs and reads controlled growth experiments."
+        },
+        {
+          "id": "analytics",
+          "label": "Analytics",
+          "weight": 25,
+          "mustHave": false,
+          "detail": "Instrumented funnels and cohort analysis."
+        },
+        {
+          "id": "seo",
+          "label": "SEO",
+          "weight": 20,
+          "mustHave": false,
+          "detail": "Owns technical and content SEO programs."
+        },
+        {
+          "id": "copy",
+          "label": "Copywriting",
+          "weight": 15,
+          "mustHave": false,
+          "detail": "Writes conversion-focused landing page copy."
+        },
+        {
+          "id": "lifecycle",
+          "label": "Lifecycle",
+          "weight": 10,
+          "mustHave": false,
+          "detail": "Runs onboarding and win-back email journeys."
+        }
+      ]
+    }
+  ],
+  "candidates": [
+    {
+      "candidateId": "C-5001",
+      "fullName": "Nadia Zhang",
+      "requisitionId": "REQ-5001",
+      "headline": "senior hire, 7 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5001",
+          "span": "40-88",
+          "criterionId": "api-design",
+          "strength": "strong",
+          "text": "Led api design work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5001",
+          "span": "130-178",
+          "criterionId": "typescript",
+          "strength": "strong",
+          "text": "Led typescript work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5001",
+          "span": "220-277",
+          "criterionId": "distributed-systems",
+          "strength": "strong",
+          "text": "Led distributed systems work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5001",
+          "span": "310-366",
+          "criterionId": "testing",
+          "strength": "strong",
+          "text": "Led testing discipline work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5001",
+          "span": "400-447",
+          "criterionId": "mentoring",
+          "strength": "strong",
+          "text": "Led mentoring work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5002",
+      "fullName": "Amara Bianchi",
+      "requisitionId": "REQ-5001",
+      "headline": "senior hire, 5 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5002",
+          "span": "40-88",
+          "criterionId": "api-design",
+          "strength": "strong",
+          "text": "Led api design work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5002",
+          "span": "130-178",
+          "criterionId": "typescript",
+          "strength": "strong",
+          "text": "Led typescript work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5002",
+          "span": "220-277",
+          "criterionId": "distributed-systems",
+          "strength": "strong",
+          "text": "Led distributed systems work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5002",
+          "span": "400-458",
+          "criterionId": "mentoring",
+          "strength": "weak",
+          "text": "Some exposure to mentoring from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5003",
+      "fullName": "Leo Lindqvist",
+      "requisitionId": "REQ-5001",
+      "headline": "senior hire, 8 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5003",
+          "span": "40-99",
+          "criterionId": "api-design",
+          "strength": "weak",
+          "text": "Some exposure to api design from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5003",
+          "span": "130-178",
+          "criterionId": "typescript",
+          "strength": "strong",
+          "text": "Led typescript work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5003",
+          "span": "220-277",
+          "criterionId": "distributed-systems",
+          "strength": "strong",
+          "text": "Led distributed systems work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5003",
+          "span": "310-377",
+          "criterionId": "testing",
+          "strength": "weak",
+          "text": "Some exposure to testing discipline from a recent internal project."
+        },
+        {
+          "sourceId": "cv:C-5003",
+          "span": "400-447",
+          "criterionId": "mentoring",
+          "strength": "strong",
+          "text": "Led mentoring work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks.",
+        "Culture fit is exceptional; feels like a firm personality match."
+      ]
+    },
+    {
+      "candidateId": "C-5004",
+      "fullName": "Mona Dubois",
+      "requisitionId": "REQ-5001",
+      "headline": "senior hire, 10 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5004",
+          "span": "40-99",
+          "criterionId": "api-design",
+          "strength": "weak",
+          "text": "Some exposure to api design from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5004",
+          "span": "130-178",
+          "criterionId": "typescript",
+          "strength": "strong",
+          "text": "Led typescript work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5004",
+          "span": "220-288",
+          "criterionId": "distributed-systems",
+          "strength": "weak",
+          "text": "Some exposure to distributed systems from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5004",
+          "span": "400-447",
+          "criterionId": "mentoring",
+          "strength": "strong",
+          "text": "Led mentoring work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5005",
+      "fullName": "Amara Tanaka",
+      "requisitionId": "REQ-5001",
+      "headline": "senior hire, 8 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5005",
+          "span": "40-88",
+          "criterionId": "api-design",
+          "strength": "strong",
+          "text": "Led api design work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5005",
+          "span": "130-178",
+          "criterionId": "typescript",
+          "strength": "strong",
+          "text": "Led typescript work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5005",
+          "span": "220-288",
+          "criterionId": "distributed-systems",
+          "strength": "weak",
+          "text": "Some exposure to distributed systems from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5005",
+          "span": "310-366",
+          "criterionId": "testing",
+          "strength": "strong",
+          "text": "Led testing discipline work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5005",
+          "span": "400-458",
+          "criterionId": "mentoring",
+          "strength": "weak",
+          "text": "Some exposure to mentoring from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5006",
+      "fullName": "Edith Brennan",
+      "requisitionId": "REQ-5002",
+      "headline": "mid hire, 9 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5006",
+          "span": "40-106",
+          "criterionId": "pipeline",
+          "strength": "weak",
+          "text": "Some exposure to pipeline building from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5006",
+          "span": "130-179",
+          "criterionId": "negotiation",
+          "strength": "strong",
+          "text": "Led negotiation work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5006",
+          "span": "220-269",
+          "criterionId": "crm",
+          "strength": "strong",
+          "text": "Led crm hygiene work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5006",
+          "span": "310-359",
+          "criterionId": "forecasting",
+          "strength": "strong",
+          "text": "Led forecasting work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5006",
+          "span": "400-447",
+          "criterionId": "discovery",
+          "strength": "strong",
+          "text": "Led discovery work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5007",
+      "fullName": "Dario Dubois",
+      "requisitionId": "REQ-5002",
+      "headline": "mid hire, 11 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5007",
+          "span": "220-269",
+          "criterionId": "crm",
+          "strength": "strong",
+          "text": "Led crm hygiene work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5007",
+          "span": "310-359",
+          "criterionId": "forecasting",
+          "strength": "strong",
+          "text": "Led forecasting work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5008",
+      "fullName": "Leo Yilmaz",
+      "requisitionId": "REQ-5002",
+      "headline": "mid hire, 5 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5008",
+          "span": "40-106",
+          "criterionId": "pipeline",
+          "strength": "weak",
+          "text": "Some exposure to pipeline building from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5008",
+          "span": "220-269",
+          "criterionId": "crm",
+          "strength": "strong",
+          "text": "Led crm hygiene work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5008",
+          "span": "310-359",
+          "criterionId": "forecasting",
+          "strength": "strong",
+          "text": "Led forecasting work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5009",
+      "fullName": "Stefan Rossi",
+      "requisitionId": "REQ-5002",
+      "headline": "mid hire, 8 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5009",
+          "span": "40-95",
+          "criterionId": "pipeline",
+          "strength": "strong",
+          "text": "Led pipeline building work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5009",
+          "span": "130-179",
+          "criterionId": "negotiation",
+          "strength": "strong",
+          "text": "Led negotiation work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5009",
+          "span": "220-269",
+          "criterionId": "crm",
+          "strength": "strong",
+          "text": "Led crm hygiene work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5009",
+          "span": "310-359",
+          "criterionId": "forecasting",
+          "strength": "strong",
+          "text": "Led forecasting work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5009",
+          "span": "400-458",
+          "criterionId": "discovery",
+          "strength": "weak",
+          "text": "Some exposure to discovery from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5010",
+      "fullName": "Yara Falk",
+      "requisitionId": "REQ-5003",
+      "headline": "mid hire, 10 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5010",
+          "span": "40-107",
+          "criterionId": "payroll-ops",
+          "strength": "weak",
+          "text": "Some exposure to payroll operations from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5010",
+          "span": "220-269",
+          "criterionId": "erp",
+          "strength": "strong",
+          "text": "Led erp fluency work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5010",
+          "span": "310-357",
+          "criterionId": "reporting",
+          "strength": "strong",
+          "text": "Led reporting work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5010",
+          "span": "400-459",
+          "criterionId": "automation",
+          "strength": "weak",
+          "text": "Some exposure to automation from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks.",
+        "At 58, likely near retirement; consider energy levels."
+      ]
+    },
+    {
+      "candidateId": "C-5011",
+      "fullName": "Iris Novak",
+      "requisitionId": "REQ-5003",
+      "headline": "mid hire, 12 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5011",
+          "span": "40-96",
+          "criterionId": "payroll-ops",
+          "strength": "strong",
+          "text": "Led payroll operations work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5011",
+          "span": "130-178",
+          "criterionId": "compliance",
+          "strength": "strong",
+          "text": "Led compliance work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5011",
+          "span": "220-280",
+          "criterionId": "erp",
+          "strength": "weak",
+          "text": "Some exposure to erp fluency from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5011",
+          "span": "310-357",
+          "criterionId": "reporting",
+          "strength": "strong",
+          "text": "Led reporting work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5011",
+          "span": "400-459",
+          "criterionId": "automation",
+          "strength": "weak",
+          "text": "Some exposure to automation from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5012",
+      "fullName": "Farid Yilmaz",
+      "requisitionId": "REQ-5003",
+      "headline": "mid hire, 5 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5012",
+          "span": "40-107",
+          "criterionId": "payroll-ops",
+          "strength": "weak",
+          "text": "Some exposure to payroll operations from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5012",
+          "span": "130-178",
+          "criterionId": "compliance",
+          "strength": "strong",
+          "text": "Led compliance work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5012",
+          "span": "220-280",
+          "criterionId": "erp",
+          "strength": "weak",
+          "text": "Some exposure to erp fluency from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5012",
+          "span": "310-357",
+          "criterionId": "reporting",
+          "strength": "strong",
+          "text": "Led reporting work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5012",
+          "span": "400-459",
+          "criterionId": "automation",
+          "strength": "weak",
+          "text": "Some exposure to automation from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks.",
+        "Recently married - may plan a family soon."
+      ]
+    },
+    {
+      "candidateId": "C-5013",
+      "fullName": "Rosa Xu",
+      "requisitionId": "REQ-5003",
+      "headline": "mid hire, 6 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5013",
+          "span": "40-107",
+          "criterionId": "payroll-ops",
+          "strength": "weak",
+          "text": "Some exposure to payroll operations from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5013",
+          "span": "130-178",
+          "criterionId": "compliance",
+          "strength": "strong",
+          "text": "Led compliance work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5013",
+          "span": "220-280",
+          "criterionId": "erp",
+          "strength": "weak",
+          "text": "Some exposure to erp fluency from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5013",
+          "span": "310-368",
+          "criterionId": "reporting",
+          "strength": "weak",
+          "text": "Some exposure to reporting from a recent internal project."
+        },
+        {
+          "sourceId": "cv:C-5013",
+          "span": "400-448",
+          "criterionId": "automation",
+          "strength": "strong",
+          "text": "Led automation work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5014",
+      "fullName": "Leo Everly",
+      "requisitionId": "REQ-5004",
+      "headline": "mid hire, 12 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5014",
+          "span": "40-86",
+          "criterionId": "sourcing",
+          "strength": "strong",
+          "text": "Led sourcing work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5014",
+          "span": "130-182",
+          "criterionId": "employer-brand",
+          "strength": "strong",
+          "text": "Led employer brand work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5014",
+          "span": "220-280",
+          "criterionId": "stakeholders",
+          "strength": "strong",
+          "text": "Led stakeholder management work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5014",
+          "span": "310-362",
+          "criterionId": "ats",
+          "strength": "strong",
+          "text": "Led ats discipline work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5014",
+          "span": "400-458",
+          "criterionId": "analytics",
+          "strength": "strong",
+          "text": "Led recruiting analytics work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5015",
+      "fullName": "Farid Gallagher",
+      "requisitionId": "REQ-5004",
+      "headline": "mid hire, 7 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5015",
+          "span": "40-86",
+          "criterionId": "sourcing",
+          "strength": "strong",
+          "text": "Led sourcing work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5015",
+          "span": "220-291",
+          "criterionId": "stakeholders",
+          "strength": "weak",
+          "text": "Some exposure to stakeholder management from a recent internal project."
+        },
+        {
+          "sourceId": "cv:C-5015",
+          "span": "310-373",
+          "criterionId": "ats",
+          "strength": "weak",
+          "text": "Some exposure to ats discipline from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5015",
+          "span": "400-458",
+          "criterionId": "analytics",
+          "strength": "strong",
+          "text": "Led recruiting analytics work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5016",
+      "fullName": "Farid Zhang",
+      "requisitionId": "REQ-5004",
+      "headline": "mid hire, 5 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5016",
+          "span": "40-86",
+          "criterionId": "sourcing",
+          "strength": "strong",
+          "text": "Led sourcing work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5016",
+          "span": "130-193",
+          "criterionId": "employer-brand",
+          "strength": "weak",
+          "text": "Some exposure to employer brand from a recent internal project."
+        },
+        {
+          "sourceId": "cv:C-5016",
+          "span": "220-280",
+          "criterionId": "stakeholders",
+          "strength": "strong",
+          "text": "Led stakeholder management work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5016",
+          "span": "310-362",
+          "criterionId": "ats",
+          "strength": "strong",
+          "text": "Led ats discipline work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5016",
+          "span": "400-458",
+          "criterionId": "analytics",
+          "strength": "strong",
+          "text": "Led recruiting analytics work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks.",
+        "Great vibes on the phone call."
+      ]
+    },
+    {
+      "candidateId": "C-5017",
+      "fullName": "Bruno Xu",
+      "requisitionId": "REQ-5004",
+      "headline": "mid hire, 6 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5017",
+          "span": "40-97",
+          "criterionId": "sourcing",
+          "strength": "weak",
+          "text": "Some exposure to sourcing from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5017",
+          "span": "130-193",
+          "criterionId": "employer-brand",
+          "strength": "weak",
+          "text": "Some exposure to employer brand from a recent internal project."
+        },
+        {
+          "sourceId": "cv:C-5017",
+          "span": "310-362",
+          "criterionId": "ats",
+          "strength": "strong",
+          "text": "Led ats discipline work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5017",
+          "span": "400-458",
+          "criterionId": "analytics",
+          "strength": "strong",
+          "text": "Led recruiting analytics work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5018",
+      "fullName": "Henrik Santos",
+      "requisitionId": "REQ-5005",
+      "headline": "junior hire, 5 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5018",
+          "span": "40-93",
+          "criterionId": "troubleshooting",
+          "strength": "strong",
+          "text": "Led troubleshooting work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5018",
+          "span": "130-187",
+          "criterionId": "identity",
+          "strength": "strong",
+          "text": "Led identity and access work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5018",
+          "span": "220-267",
+          "criterionId": "ticketing",
+          "strength": "strong",
+          "text": "Led ticketing work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5018",
+          "span": "310-366",
+          "criterionId": "hardware",
+          "strength": "strong",
+          "text": "Led hardware lifecycle work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5018",
+          "span": "400-451",
+          "criterionId": "communication",
+          "strength": "strong",
+          "text": "Led communication work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5019",
+      "fullName": "Edith Iversen",
+      "requisitionId": "REQ-5005",
+      "headline": "junior hire, 10 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5019",
+          "span": "40-93",
+          "criterionId": "troubleshooting",
+          "strength": "strong",
+          "text": "Led troubleshooting work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5019",
+          "span": "130-187",
+          "criterionId": "identity",
+          "strength": "strong",
+          "text": "Led identity and access work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5019",
+          "span": "220-278",
+          "criterionId": "ticketing",
+          "strength": "weak",
+          "text": "Some exposure to ticketing from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5019",
+          "span": "310-377",
+          "criterionId": "hardware",
+          "strength": "weak",
+          "text": "Some exposure to hardware lifecycle from a recent internal project."
+        },
+        {
+          "sourceId": "cv:C-5019",
+          "span": "400-451",
+          "criterionId": "communication",
+          "strength": "strong",
+          "text": "Led communication work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5020",
+      "fullName": "Vera Xu",
+      "requisitionId": "REQ-5005",
+      "headline": "junior hire, 3 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5020",
+          "span": "220-267",
+          "criterionId": "ticketing",
+          "strength": "strong",
+          "text": "Led ticketing work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5020",
+          "span": "310-377",
+          "criterionId": "hardware",
+          "strength": "weak",
+          "text": "Some exposure to hardware lifecycle from a recent internal project."
+        },
+        {
+          "sourceId": "cv:C-5020",
+          "span": "400-462",
+          "criterionId": "communication",
+          "strength": "weak",
+          "text": "Some exposure to communication from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5021",
+      "fullName": "Celine Everly",
+      "requisitionId": "REQ-5005",
+      "headline": "junior hire, 2 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5021",
+          "span": "40-93",
+          "criterionId": "troubleshooting",
+          "strength": "strong",
+          "text": "Led troubleshooting work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5021",
+          "span": "130-187",
+          "criterionId": "identity",
+          "strength": "strong",
+          "text": "Led identity and access work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5021",
+          "span": "220-267",
+          "criterionId": "ticketing",
+          "strength": "strong",
+          "text": "Led ticketing work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5021",
+          "span": "310-366",
+          "criterionId": "hardware",
+          "strength": "strong",
+          "text": "Led hardware lifecycle work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5021",
+          "span": "400-451",
+          "criterionId": "communication",
+          "strength": "strong",
+          "text": "Led communication work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5022",
+      "fullName": "Felix Delgado",
+      "requisitionId": "REQ-5006",
+      "headline": "senior hire, 9 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5022",
+          "span": "40-93",
+          "criterionId": "experimentation",
+          "strength": "strong",
+          "text": "Led experimentation work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5022",
+          "span": "220-261",
+          "criterionId": "seo",
+          "strength": "strong",
+          "text": "Led seo work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5022",
+          "span": "310-359",
+          "criterionId": "copy",
+          "strength": "strong",
+          "text": "Led copywriting work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5022",
+          "span": "400-447",
+          "criterionId": "lifecycle",
+          "strength": "strong",
+          "text": "Led lifecycle work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5023",
+      "fullName": "Henrik Weber",
+      "requisitionId": "REQ-5006",
+      "headline": "senior hire, 9 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5023",
+          "span": "40-93",
+          "criterionId": "experimentation",
+          "strength": "strong",
+          "text": "Led experimentation work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5023",
+          "span": "130-177",
+          "criterionId": "analytics",
+          "strength": "strong",
+          "text": "Led analytics work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5023",
+          "span": "220-272",
+          "criterionId": "seo",
+          "strength": "weak",
+          "text": "Some exposure to seo from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5023",
+          "span": "310-359",
+          "criterionId": "copy",
+          "strength": "strong",
+          "text": "Led copywriting work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5023",
+          "span": "400-458",
+          "criterionId": "lifecycle",
+          "strength": "weak",
+          "text": "Some exposure to lifecycle from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5024",
+      "fullName": "Quentin Brennan",
+      "requisitionId": "REQ-5006",
+      "headline": "senior hire, 6 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5024",
+          "span": "40-93",
+          "criterionId": "experimentation",
+          "strength": "strong",
+          "text": "Led experimentation work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5024",
+          "span": "220-261",
+          "criterionId": "seo",
+          "strength": "strong",
+          "text": "Led seo work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5024",
+          "span": "310-359",
+          "criterionId": "copy",
+          "strength": "strong",
+          "text": "Led copywriting work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5024",
+          "span": "400-447",
+          "criterionId": "lifecycle",
+          "strength": "strong",
+          "text": "Led lifecycle work across two production teams."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks.",
+        "Energy and enthusiasm were excellent."
+      ]
+    },
+    {
+      "candidateId": "C-5025",
+      "fullName": "Jasper Fontaine",
+      "requisitionId": "REQ-5006",
+      "headline": "senior hire, 7 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5025",
+          "span": "40-104",
+          "criterionId": "experimentation",
+          "strength": "weak",
+          "text": "Some exposure to experimentation from a recent internal project."
+        },
+        {
+          "sourceId": "screen-call:C-5025",
+          "span": "130-177",
+          "criterionId": "analytics",
+          "strength": "strong",
+          "text": "Led analytics work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5025",
+          "span": "310-359",
+          "criterionId": "copy",
+          "strength": "strong",
+          "text": "Led copywriting work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5025",
+          "span": "400-458",
+          "criterionId": "lifecycle",
+          "strength": "weak",
+          "text": "Some exposure to lifecycle from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    },
+    {
+      "candidateId": "C-5026",
+      "fullName": "Zane Novak",
+      "requisitionId": "REQ-5006",
+      "headline": "senior hire, 7 years",
+      "evidence": [
+        {
+          "sourceId": "cv:C-5026",
+          "span": "40-93",
+          "criterionId": "experimentation",
+          "strength": "strong",
+          "text": "Led experimentation work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5026",
+          "span": "220-261",
+          "criterionId": "seo",
+          "strength": "strong",
+          "text": "Led seo work across two production teams."
+        },
+        {
+          "sourceId": "cv:C-5026",
+          "span": "310-359",
+          "criterionId": "copy",
+          "strength": "strong",
+          "text": "Led copywriting work across two production teams."
+        },
+        {
+          "sourceId": "screen-call:C-5026",
+          "span": "400-458",
+          "criterionId": "lifecycle",
+          "strength": "weak",
+          "text": "Some exposure to lifecycle from a recent internal project."
+        }
+      ],
+      "notes": [
+        "Panel availability confirmed for the coming weeks."
+      ]
+    }
+  ]
+}

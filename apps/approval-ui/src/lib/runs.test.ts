@@ -269,7 +269,7 @@ describe("parseSseChunk", () => {
 });
 
 describe("runnable workflows", () => {
-  it("offers the review, issue-resolution, feature-implementation, dependency-update, accessibility, vendor-onboarding, leave, new-hire-onboarding, offboarding, candidate-screening and HR-help workflows", () => {
+  it("offers the review, issue-resolution, feature-implementation, dependency-update, accessibility, vendor-onboarding, leave, new-hire-onboarding, offboarding, candidate-screening, HR-help and SOC-alert-triage workflows", () => {
     const ids = RUNNABLE_WORKFLOWS.map((workflow) => workflow.id);
     expect(ids).toEqual([
       "review",
@@ -283,6 +283,7 @@ describe("runnable workflows", () => {
       "offboarding",
       "screening",
       "hr-help",
+      "security",
     ]);
     expect(RUNNABLE_WORKFLOWS.find((workflow) => workflow.id === "issues")?.label).toBe(
       "Issue Resolution",
@@ -313,6 +314,9 @@ describe("runnable workflows", () => {
     );
     expect(RUNNABLE_WORKFLOWS.find((workflow) => workflow.id === "hr-help")?.label).toBe(
       "HR Help",
+    );
+    expect(RUNNABLE_WORKFLOWS.find((workflow) => workflow.id === "security")?.label).toBe(
+      "SOC Alert Triage",
     );
   });
 });
@@ -421,6 +425,23 @@ describe("workflowsForTicket", () => {
         labels: [],
       }),
     ).toEqual(["hr-help", "leave"]);
+  });
+
+  it("pulls the security workflow in from SOC alert keywords", () => {
+    expect(
+      workflowsForTicket({
+        issueType: "Task",
+        summary: "Investigate EDR alert on fin-db-01",
+        labels: ["security"],
+      }),
+    ).toEqual(["security", "features", "review"]);
+    expect(
+      workflowsForTicket({
+        issueType: "Support",
+        summary: "Phishing report: credential page reported by finance",
+        labels: [],
+      }),
+    ).toEqual(["security"]);
   });
 
   it("falls back to every workflow for unknown ticket types", () => {

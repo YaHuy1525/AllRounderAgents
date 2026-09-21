@@ -78,6 +78,18 @@ class MetricsRegistry:
             ["workflow", "action"],
             registry=self.registry,
         )
+        self.security_triage_verdicts = Counter(
+            "security_triage_verdicts_total",
+            "Security triage verdicts by classification, severity and injection flag.",
+            ["classification", "severity", "injection"],
+            registry=self.registry,
+        )
+        self.security_containment = Counter(
+            "security_containment_total",
+            "Security containment receipts; a replay skipped execution.",
+            ["outcome", "replayed"],
+            registry=self.registry,
+        )
 
     def record_request(
         self, method: str, route: str, status_code: int, duration_seconds: float
@@ -105,6 +117,20 @@ class MetricsRegistry:
 
     def record_run_decision(self, *, workflow: str, action: str) -> None:
         self.run_decisions.labels(workflow=workflow, action=action).inc()
+
+    def record_security_triage(
+        self, *, classification: str, severity: str, injection: bool
+    ) -> None:
+        self.security_triage_verdicts.labels(
+            classification=classification,
+            severity=severity,
+            injection="flagged" if injection else "clean",
+        ).inc()
+
+    def record_security_containment(self, *, outcome: str, replayed: bool) -> None:
+        self.security_containment.labels(
+            outcome=outcome, replayed="true" if replayed else "false"
+        ).inc()
 
     def render(self) -> bytes:
         return generate_latest(self.registry)

@@ -1,0 +1,124 @@
+{
+  "techniques": [
+    {
+      "techniqueId": "T1566",
+      "name": "Phishing",
+      "tactic": "initial-access",
+      "indicatorPatterns": ["phishing", "credential harvest", "credential harvesting"]
+    },
+    {
+      "techniqueId": "T1566.001",
+      "name": "Spearphishing Link",
+      "tactic": "initial-access",
+      "indicatorPatterns": ["spearphishing link", "malicious link", "evil-login.example"]
+    },
+    {
+      "techniqueId": "T1059.001",
+      "name": "PowerShell",
+      "tactic": "execution",
+      "indicatorPatterns": ["powershell", "-enc", "encodedcommand"]
+    },
+    {
+      "techniqueId": "T1059.003",
+      "name": "Windows Command Shell",
+      "tactic": "execution",
+      "indicatorPatterns": ["cmd.exe", "command shell"]
+    },
+    {
+      "techniqueId": "T1071",
+      "name": "Application Layer Protocol",
+      "tactic": "command-and-control",
+      "indicatorPatterns": ["c2 server", "command-and-control", "beacon"]
+    },
+    {
+      "techniqueId": "T1071.001",
+      "name": "Web Protocols",
+      "tactic": "command-and-control",
+      "indicatorPatterns": ["http beacon", "https beacon", "outbound connection"]
+    },
+    {
+      "techniqueId": "T1041",
+      "name": "Exfiltration Over C2 Channel",
+      "tactic": "exfiltration",
+      "indicatorPatterns": ["exfiltration", "exfiltrate"]
+    },
+    {
+      "techniqueId": "T1048",
+      "name": "Exfiltration Over Alternative Protocol",
+      "tactic": "exfiltration",
+      "indicatorPatterns": ["large upload", "data transfer"]
+    },
+    {
+      "techniqueId": "T1021.001",
+      "name": "Remote Desktop Protocol",
+      "tactic": "lateral-movement",
+      "indicatorPatterns": ["rdp", "remote desktop"]
+    },
+    {
+      "techniqueId": "T1021.002",
+      "name": "SMB/Windows Admin Shares",
+      "tactic": "lateral-movement",
+      "indicatorPatterns": ["admin share", "smb share", "psexec"]
+    },
+    {
+      "techniqueId": "T1055",
+      "name": "Process Injection",
+      "tactic": "defense-evasion",
+      "indicatorPatterns": ["process injection", "rundll32", "mshta"]
+    },
+    {
+      "techniqueId": "T1547.001",
+      "name": "Registry Run Keys / Startup Folder",
+      "tactic": "persistence",
+      "indicatorPatterns": ["run key", "startup folder", "registry run"]
+    },
+    {
+      "techniqueId": "T1053.005",
+      "name": "Scheduled Task",
+      "tactic": "persistence",
+      "indicatorPatterns": ["scheduled task", "schtasks"]
+    },
+    {
+      "techniqueId": "T1105",
+      "name": "Ingress Tool Transfer",
+      "tactic": "command-and-control",
+      "indicatorPatterns": ["file download", "ingress tool transfer", "curl http"]
+    },
+    {
+      "techniqueId": "T1218",
+      "name": "System Binary Proxy Execution",
+      "tactic": "defense-evasion",
+      "indicatorPatterns": ["mshta", "rundll32", "regsvr32"]
+    },
+    {
+      "techniqueId": "T1087",
+      "name": "Account Discovery",
+      "tactic": "discovery",
+      "indicatorPatterns": ["net user", "account discovery", "whoami"]
+    },
+    {
+      "techniqueId": "T1110",
+      "name": "Brute Force",
+      "tactic": "credential-access",
+      "indicatorPatterns": ["brute force", "failed login", "failed logon"]
+    },
+    {
+      "techniqueId": "T1486",
+      "name": "Data Encrypted for Impact",
+      "tactic": "impact",
+      "indicatorPatterns": ["ransomware", "encrypted files", "ransom note"]
+    },
+    {
+      "techniqueId": "T1490",
+      "name": "Inhibit System Recovery",
+      "tactic": "impact",
+      "indicatorPatterns": ["shadow copies", "delete backups", "inhibit recovery"]
+    },
+    {
+      "techniqueId": "T1588.002",
+      "name": "Tool",
+      "tactic": "resource-development",
+      "indicatorPatterns": ["mimikatz", "cobalt strike", "tool download"]
+    }
+  ]
+}

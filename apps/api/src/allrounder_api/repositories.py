@@ -19,18 +19,96 @@ _SECRET_VALUE = re.compile(
     r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b",
     re.IGNORECASE,
 )
+# Account/card-shaped digit runs only when a finance keyword introduces them,
+# so ticket keys and money totals are never caught by accident.
+_ACCOUNT = re.compile(
+    r"\b(?:account|acct|iban|card|routing)[\s#:.-]*\d[\d\s-]{5,}\d\b",
+    re.IGNORECASE,
+)
+
+# Clause ids cited by audit-first redaction. Every masked value names the
+# clause that masked it; case events carry the citations (RTI pattern).
+CLAUSE_SECRET_KEY = "secrets/api-key"
+CLAUSE_SECRET_VALUE = "secrets/token-value"
+CLAUSE_EMAIL = "pii/email"
+CLAUSE_ACCOUNT = "pii/finance-account"
+REDACTION_CLAUSES: frozenset[str] = frozenset(
+    {CLAUSE_SECRET_KEY, CLAUSE_SECRET_VALUE, CLAUSE_EMAIL, CLAUSE_ACCOUNT}
+)
+
+
+@dataclass(frozen=True)
+class RedactionEntry:
+    """One masked value, cited by the policy clause that masked it."""
+
+    path: str
+    clause: str
+
+
+@dataclass(frozen=True)
+class RedactionReport:
+    """A redacted value plus the citations explaining what was masked."""
+
+    value: object
+    entries: tuple[RedactionEntry, ...]
 
 
 def redact(value: object, key: str = "") -> object:
+    """Mask secrets/PII in place; see :func:`audit_redaction` for citations."""
+
+    return audit_redaction(value, key=key).value
+
+
+def audit_redaction(value: object, *, path: str = "", key: str = "") -> RedactionReport:
+    """Redact and cite: every masked value reports its clause and path."""
+
     if _SECRET_KEY.search(key):
-        return "[REDACTED]"
+        return RedactionReport(
+            value="[REDACTED]",
+            entries=(RedactionEntry(path=path or key, clause=CLAUSE_SECRET_KEY),),
+        )
     if isinstance(value, str):
-        return _SECRET_VALUE.sub("[REDACTED]", _EMAIL.sub("[REDACTED_EMAIL]", value))
+        text, clauses = _redact_text(value)
+        return RedactionReport(
+            value=text,
+            entries=tuple(RedactionEntry(path=path, clause=clause) for clause in clauses),
+        )
     if isinstance(value, dict):
-        return {str(item_key): redact(item, str(item_key)) for item_key, item in value.items()}
+        output: dict[str, object] = {}
+        entries: list[RedactionEntry] = []
+        for item_key, item in value.items():
+            child = audit_redaction(item, path=_child_path(path, str(item_key)), key=str(item_key))
+            output[str(item_key)] = child.value
+            entries.extend(child.entries)
+        return RedactionReport(value=output, entries=tuple(entries))
     if isinstance(value, list):
-        return [redact(item) for item in value]
-    return value
+        items: list[object] = []
+        entries = []
+        for index, item in enumerate(value):
+            child = audit_redaction(item, path=_child_path(path, str(index)))
+            items.append(child.value)
+            entries.extend(child.entries)
+        return RedactionReport(value=items, entries=tuple(entries))
+    return RedactionReport(value=value, entries=())
+
+
+def _redact_text(value: str) -> tuple[str, tuple[str, ...]]:
+    text = value
+    clauses: list[str] = []
+    if _SECRET_VALUE.search(text):
+        text = _SECRET_VALUE.sub("[REDACTED]", text)
+        clauses.append(CLAUSE_SECRET_VALUE)
+    if _EMAIL.search(text):
+        text = _EMAIL.sub("[REDACTED_EMAIL]", text)
+        clauses.append(CLAUSE_EMAIL)
+    if _ACCOUNT.search(text):
+        text = _ACCOUNT.sub("[REDACTED_ACCOUNT]", text)
+        clauses.append(CLAUSE_ACCOUNT)
+    return text, tuple(clauses)
+
+
+def _child_path(path: str, segment: str) -> str:
+    return f"{path}.{segment}" if path else segment
 
 
 @dataclass
@@ -178,9 +256,14 @@ class InMemoryCaseRepository:
         if case is None:
             raise KeyError("Case not found")
         _check_case_event_actor(actor)
-        safe = redact(payload)
+        report = audit_redaction(payload)
+        safe = report.value
         if not isinstance(safe, dict):
             raise TypeError("Event payload must be an object")
+        if report.entries:
+            safe["redactions"] = [
+                {"path": entry.path, "clause": entry.clause} for entry in report.entries
+            ]
         cost = safe.get("costUsdMicro", 0)
         if not isinstance(cost, int) or isinstance(cost, bool) or cost < 0:
             raise ValueError("costUsdMicro must be a non-negative integer")
@@ -395,9 +478,14 @@ class PostgresRepositories:
         self, case_id: str, *, actor: str, kind: str, payload: dict[str, object]
     ) -> None:
         _check_case_event_actor(actor)
-        safe = redact(payload)
+        report = audit_redaction(payload)
+        safe = report.value
         if not isinstance(safe, dict):
             raise TypeError("Event payload must be an object")
+        if report.entries:
+            safe["redactions"] = [
+                {"path": entry.path, "clause": entry.clause} for entry in report.entries
+            ]
         cost = safe.get("costUsdMicro", 0)
         if not isinstance(cost, int) or isinstance(cost, bool) or cost < 0:
             raise ValueError("costUsdMicro must be a non-negative integer")

@@ -28,6 +28,7 @@ class Domain(StrEnum):
     FINANCE = "finance"
     MARKETING = "marketing"
     SUPPORT = "support"
+    SECURITY = "security"
     UNKNOWN = "unknown"
 
 

@@ -1,0 +1,28 @@
+{
+  "records": [
+    {
+      "indicator": "evil-login.example",
+      "verdict": "malicious",
+      "detail": "Confirmed credential-phishing kit; same favicon hash as campaign LOGIN-TRAP.",
+      "source": "contoso-ti-feed"
+    },
+    {
+      "indicator": "203.0.113.77",
+      "verdict": "malicious",
+      "detail": "VPS observed as command-and-control for finance-sector intrusions since 2026-07.",
+      "source": "contoso-ti-feed"
+    },
+    {
+      "indicator": "198.51.100.23",
+      "verdict": "suspicious",
+      "detail": "Shared infrastructure with known C2; intermittent health-check traffic observed.",
+      "source": "contoso-ti-feed"
+    },
+    {
+      "indicator": "update.contoso.example",
+      "verdict": "benign",
+      "detail": "Internal update mirror; traffic from managed hosts is expected.",
+      "source": "contoso-asset-catalog"
+    }
+  ]
+}

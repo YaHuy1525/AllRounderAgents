@@ -11,6 +11,7 @@ RUN groupadd --system allrounder \
 
 COPY pyproject.toml README.md ./
 COPY apps/api/src ./apps/api/src
+COPY policy ./policy
 
 RUN python -m pip install --no-cache-dir .
 

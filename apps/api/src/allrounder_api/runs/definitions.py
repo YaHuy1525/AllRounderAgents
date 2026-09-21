@@ -160,6 +160,34 @@ HR_HELP_WORKFLOW = WorkflowDefinition(
     ),
 )
 
+SECURITY_WORKFLOW = WorkflowDefinition(
+    id="security",
+    mastra_workflow="securityFlow",
+    title="SOC Alert Triage",
+    steps=(
+        StepDefinition(id="ingest", title="Ingest"),
+        StepDefinition(id="triage", title="Triage"),
+        StepDefinition(id="investigate", title="Investigate"),
+        StepDefinition(id="decide", title="Decide"),
+        StepDefinition(id="approve", title="Approve"),
+        # Executing the approved disposition (containment or close) is the
+        # side effect (idempotent by alert + host).
+        StepDefinition(id="contain", title="Contain", side_effecting=True),
+    ),
+)
+
+
+def side_effect_scope(workflow: str, step_id: str) -> str:
+    """The ``workflow:step`` permission scope a side-effecting step acts under.
+
+    Single source for the run lane's side-effect permission: policy/tools.yaml
+    declares the ``{workflow}:{step}`` template for ``run.side-effect`` and the
+    governance suite cross-checks every ``side_effecting`` step against it.
+    """
+
+    return f"{workflow}:{step_id}"
+
+
 WORKFLOW_DEFINITIONS: dict[str, WorkflowDefinition] = {
     definition.id: definition
     for definition in (
@@ -174,6 +202,7 @@ WORKFLOW_DEFINITIONS: dict[str, WorkflowDefinition] = {
         OFFBOARDING_WORKFLOW,
         SCREENING_WORKFLOW,
         HR_HELP_WORKFLOW,
+        SECURITY_WORKFLOW,
     )
 }
 
@@ -189,6 +218,8 @@ __all__ = [
     "ONBOARDING_WORKFLOW",
     "REVIEW_WORKFLOW",
     "SCREENING_WORKFLOW",
+    "SECURITY_WORKFLOW",
     "VENDORS_WORKFLOW",
     "WORKFLOW_DEFINITIONS",
+    "side_effect_scope",
 ]

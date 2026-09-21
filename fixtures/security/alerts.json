@@ -1,0 +1,66 @@
+{
+  "alerts": [
+    {
+      "alertId": "SEC-101",
+      "alertSource": "email",
+      "title": "Credential harvest attempt reported by user",
+      "rawAlert": "User mira@contoso.example reported a credential harvesting page at https://evil-login.example/login that mimics the Contoso SSO portal. No credentials were entered; the page was reported by the user's mail client.",
+      "user": "mira@contoso.example",
+      "indicators": ["evil-login.example", "203.0.113.77"],
+      "expected": {
+        "score": 35,
+        "classification": "tp",
+        "severity": "medium",
+        "confidence": 0.75,
+        "mitreIds": ["T1566", "T1566.001"]
+      }
+    },
+    {
+      "alertId": "SEC-102",
+      "alertSource": "edr",
+      "title": "Suspicious encoded PowerShell with scheduled task persistence",
+      "rawAlert": "EDR detected powershell.exe running with -enc on fin-db-01 (user FIN\\svc-backup): the base64 payload decodes to a script that registers a scheduled task named WinUpdate and opens an outbound connection to the c2 server 203.0.113.77. Host fin-db-01.",
+      "host": "fin-db-01",
+      "user": "FIN\\svc-backup",
+      "indicators": ["203.0.113.77"],
+      "expected": {
+        "score": 105,
+        "classification": "tp",
+        "severity": "critical",
+        "confidence": 0.95,
+        "mitreIds": ["T1053.005", "T1059.001", "T1071", "T1071.001"]
+      }
+    },
+    {
+      "alertId": "SEC-103",
+      "alertSource": "edr",
+      "title": "PowerShell maintenance script flagged on ops-ws-04",
+      "rawAlert": "The PowerShell script inventory-check.ps1 ran on ops-ws-04 during admin maintenance; the binary is signed by Contoso IT and was distributed as an approved software update.",
+      "host": "ops-ws-04",
+      "user": "OPS\\itadmin",
+      "indicators": [],
+      "expected": {
+        "score": -20,
+        "classification": "benign",
+        "severity": "low",
+        "confidence": 0.6,
+        "mitreIds": ["T1059.001"]
+      }
+    },
+    {
+      "alertId": "SEC-105",
+      "alertSource": "siem",
+      "title": "Suspicious PowerShell command-and-control activity on web-01",
+      "rawAlert": "WAF and EDR jointly reported suspicious PowerShell activity on web-01: a powershell.exe process issued a command-and-control beacon to an external endpoint every 60 seconds.",
+      "host": "web-01",
+      "indicators": [],
+      "expected": {
+        "score": 50,
+        "classification": "tp",
+        "severity": "medium",
+        "confidence": 0.9,
+        "mitreIds": ["T1059.001", "T1071"]
+      }
+    }
+  ]
+}

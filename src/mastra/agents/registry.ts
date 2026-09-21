@@ -23,6 +23,12 @@ import { onboardingRiskAgent, onboardingVerifierAgent } from "./onboarding/agent
 import { hrGuardrailAgent } from "./screening/agents/index.js";
 import { reviewerAgent } from "./review/agents/index.js";
 import { vendorRiskAgent, vendorVerifierAgent } from "./vendors/agents/index.js";
+import {
+  alertTriageAgent,
+  containmentAdvisorAgent,
+  investigationAgent,
+  reportingAgent,
+} from "./security/agents/index.js";
 import { supportDrafterAgent, supportResearcherAgent } from "./support/agents/index.js";
 
 export function allRounderAgents() {
@@ -54,6 +60,10 @@ export function allRounderAgents() {
     financeTreasury: treasuryAgent,
     financeTax: taxAgent,
     financeAudit: auditAgent,
+    securityTriage: alertTriageAgent,
+    securityInvestigator: investigationAgent,
+    securityContainmentAdvisor: containmentAdvisorAgent,
+    securityReporter: reportingAgent,
     marketingResearcher: marketingResearcherAgent,
     marketingDrafter: marketingDrafterAgent,
     marketingBrandGuardrail: brandGuardrailAgent,

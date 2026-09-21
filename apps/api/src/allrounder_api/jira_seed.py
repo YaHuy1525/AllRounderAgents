@@ -3,13 +3,14 @@
 Idempotent: every ticket is deduped with an exact JQL summary search, so
 re-runs skip what already exists. The set covers the finance-lane demo and
 two test cases per console workflow (PR Review, Issue Resolution, Feature
-Implementation, Dependency Update, Accessibility Audit, Vendor Onboarding).
+Implementation, Dependency Update, Accessibility Audit, Vendor Onboarding),
+plus the two security-lane alerts in the ``SEC`` project.
 """
 
 from __future__ import annotations
 
 import sys
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 import httpx
 
@@ -21,6 +22,9 @@ class TicketSpec(TypedDict):
     summary: str
     labels: list[str]
     description: str
+    # Tickets default to the configured project; SEC alerts target Jira's
+    # security project so PROJECT_DOMAINS routes them into the security lane.
+    project: NotRequired[str]
 
 
 TICKETS: tuple[TicketSpec, ...] = (
@@ -204,6 +208,33 @@ TICKETS: tuple[TicketSpec, ...] = (
             "create gate before the master record is written."
         ),
     },
+    # -- Security lane (SEC project) ----------------------------------------
+    {
+        "summary": "Security alert: credential phishing email reported by finance",
+        "labels": ["security", "phishing", "workflow-test"],
+        "project": "SEC",
+        "description": (
+            "Workflow test case for the security lane. A user reported a "
+            "credential-harvesting page at https://evil-login.example/login that "
+            "mimics the SSO portal (T1566 / T1566.001); no credentials were entered.\n\n"
+            "Start the security run with alertSource email and the reported "
+            "indicators; the lane resolves the URL and host before the decide gate."
+        ),
+    },
+    {
+        "summary": "Security alert: suspicious encoded PowerShell on fin-db-01 (EDR)",
+        "labels": ["security", "edr", "workflow-test"],
+        "project": "SEC",
+        "description": (
+            "Workflow test case for the security lane. EDR flagged powershell.exe "
+            "running with -enc on fin-db-01 (user FIN\\svc-backup): the base64 "
+            "payload registers a scheduled task named WinUpdate and beacons to "
+            "203.0.113.77 (T1059.001, T1053.005, T1071).\n\n"
+            "Start the security run with alertSource edr, host fin-db-01 and the c2 "
+            "indicator; containment executes only with the signed security:contain "
+            "receipt at the decide/approve/contain checkpoints."
+        ),
+    },
 )
 
 
@@ -240,8 +271,9 @@ def _seed_via_mcp(
     try:
         created: list[str] = []
         for ticket in TICKETS:
+            ticket_project = ticket.get("project", project)
             existing = transport.search_jql(
-                f'project = "{project}" AND summary ~ "{ticket["summary"]}"',
+                f'project = "{ticket_project}" AND summary ~ "{ticket["summary"]}"',
                 1,
             )
             if existing:
@@ -250,7 +282,7 @@ def _seed_via_mcp(
                 print(f"{key} exists")
                 continue
             key = transport.create_issue(
-                project,
+                ticket_project,
                 ticket["summary"],
                 issue_type="Task",
                 labels=list(ticket["labels"]),
@@ -277,10 +309,11 @@ def _seed_via_rest(base_url: str, email: str, token: str, project: str) -> int:
         timeout=20,
     ) as client:
         for ticket in TICKETS:
+            ticket_project = ticket.get("project", project)
             existing = client.get(
                 "/rest/api/3/search/jql",
                 params={
-                    "jql": f'project = "{project}" AND summary ~ "{ticket["summary"]}"',
+                    "jql": f'project = "{ticket_project}" AND summary ~ "{ticket["summary"]}"',
                     "maxResults": 1,
                     "fields": "summary",
                 },
@@ -301,7 +334,7 @@ def _seed_via_rest(base_url: str, email: str, token: str, project: str) -> int:
                 "/rest/api/3/issue",
                 json={
                     "fields": {
-                        "project": {"key": project},
+                        "project": {"key": ticket_project},
                         "issuetype": {"name": "Task"},
                         "summary": ticket["summary"],
                         "labels": ticket["labels"],

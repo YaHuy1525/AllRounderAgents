@@ -1,0 +1,27 @@
+{
+  "alertId": "SEC-101",
+  "events": [
+    {
+      "eventId": "EVT-101-01",
+      "alertId": "SEC-101",
+      "at": "2026-09-16T08:12:00.000Z",
+      "host": "proxy-02",
+      "user": "mira@contoso.example",
+      "source": "proxy",
+      "action": "URL request",
+      "detail": "GET https://evil-login.example/login allowed by policy; response 200 served a credential form.",
+      "severity": "medium"
+    },
+    {
+      "eventId": "EVT-101-02",
+      "alertId": "SEC-101",
+      "at": "2026-09-16T08:20:00.000Z",
+      "host": "mail-gw-01",
+      "user": "mira@contoso.example",
+      "source": "email-gateway",
+      "action": "User report",
+      "detail": "User mira@contoso.example reported the message to the SOC via the add-in.",
+      "severity": "info"
+    }
+  ]
+}

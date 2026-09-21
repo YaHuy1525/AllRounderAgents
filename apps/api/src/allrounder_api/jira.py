@@ -20,6 +20,20 @@ def _validate_ticket_key(ticket_key: str) -> None:
         raise ValueError("Invalid Jira ticket key")
 
 
+def _description_doc(description: str) -> dict[str, object]:
+    """Atlassian Document Format body: one paragraph per non-empty line."""
+
+    paragraphs = [line.strip() for line in description.splitlines() if line.strip()]
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": paragraph}]}
+            for paragraph in paragraphs
+        ],
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ToolReceipt:
     action: str
@@ -38,6 +52,18 @@ class JiraComment:
 class JiraTransition:
     ticket_key: str
     transition: str
+
+
+@dataclass(frozen=True, slots=True)
+class JiraCreatedIssue:
+    """A filed ticket recorded by the fake transport (cross-domain spawn)."""
+
+    project: str
+    key: str
+    summary: str
+    issue_type: str
+    labels: tuple[str, ...]
+    description: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +102,16 @@ class JiraTransport(Protocol):
     def add_comment(self, ticket_key: str, body: str) -> None: ...
 
     def transition(self, ticket_key: str, transition: str) -> None: ...
+
+    def create_issue(
+        self,
+        project_key: str,
+        summary: str,
+        *,
+        issue_type: str,
+        labels: list[str],
+        description: str,
+    ) -> str: ...
 
 
 class HttpJiraTransport:
@@ -120,6 +156,36 @@ class HttpJiraTransport:
             f"/rest/api/3/issue/{ticket_key}/transitions",
             json={"transition": {"id": transition}},
         )
+
+    def create_issue(
+        self,
+        project_key: str,
+        summary: str,
+        *,
+        issue_type: str,
+        labels: list[str],
+        description: str,
+    ) -> str:
+        if re.fullmatch(JIRA_PROJECT_KEY_PATTERN, project_key) is None:
+            raise ValueError("Invalid Jira project key")
+        response = self._request(
+            "POST",
+            "/rest/api/3/issue",
+            json={
+                "fields": {
+                    "project": {"key": project_key},
+                    "issuetype": {"name": issue_type},
+                    "summary": summary,
+                    "labels": list(labels),
+                    "description": _description_doc(description),
+                }
+            },
+        )
+        payload = response.json()
+        key = payload.get("key") if isinstance(payload, dict) else None
+        if not isinstance(key, str) or re.fullmatch(JIRA_TICKET_KEY_PATTERN, key) is None:
+            raise ValueError("Jira create_issue response is missing a valid key")
+        return key
 
     def search_issues(self, project: str, max_results: int) -> list[JiraBoardIssue]:
         if re.fullmatch(JIRA_PROJECT_KEY_PATTERN, project) is None:
@@ -269,6 +335,7 @@ class FakeJiraTransport:
     ) -> None:
         self.comments: list[JiraComment] = []
         self.transitions: list[JiraTransition] = []
+        self.created: list[JiraCreatedIssue] = []
         self.issues = issues or []
         self.boards = boards or []
 
@@ -277,6 +344,26 @@ class FakeJiraTransport:
 
     def transition(self, ticket_key: str, transition: str) -> None:
         self.transitions.append(JiraTransition(ticket_key, transition))
+
+    def create_issue(
+        self,
+        project_key: str,
+        summary: str,
+        *,
+        issue_type: str,
+        labels: list[str],
+        description: str,
+    ) -> str:
+        issue = JiraCreatedIssue(
+            project=project_key,
+            key=f"{project_key}-{1000 + len(self.created)}",
+            summary=summary,
+            issue_type=issue_type,
+            labels=tuple(labels),
+            description=description,
+        )
+        self.created.append(issue)
+        return issue.key
 
     def search_issues(self, project: str, max_results: int) -> list[JiraBoardIssue]:
         return [issue for issue in self.issues if issue.project == project][:max_results]
@@ -335,3 +422,33 @@ class JiraTools:
         self._receipts[idempotency_key] = receipt
         return receipt
 
+    def create_ticket(
+        self,
+        context: RequestContext,
+        *,
+        project: str,
+        summary: str,
+        issue_type: str,
+        labels: list[str],
+        description: str,
+        idempotency_key: str,
+    ) -> ToolReceipt:
+        """File a new ticket; a claimed-elsewhere replay returns an empty key."""
+
+        del context
+        receipt = self._receipts.get(idempotency_key)
+        if receipt:
+            return receipt
+        if self._idempotency.claim(f"jira:create:{idempotency_key}"):
+            ticket_key = self._transport.create_issue(
+                project,
+                summary,
+                issue_type=issue_type,
+                labels=labels,
+                description=description,
+            )
+            receipt = ToolReceipt("jira_create", ticket_key, idempotency_key)
+        else:
+            receipt = ToolReceipt("jira_create", "", idempotency_key, status="replayed")
+        self._receipts[idempotency_key] = receipt
+        return receipt

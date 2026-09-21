@@ -43,6 +43,7 @@ from .repositories import (
 from .runs import RunService, RunServiceConfig, build_memory_run_service
 from .runs.api import build_runs_router
 from .settings import Settings
+from .spawn import CrossDomainSpawner, SpawnPlan
 
 
 def create_app(
@@ -53,6 +54,7 @@ def create_app(
     jira: JiraTools | None = None,
     jira_reader: JiraIssueReader | None = None,
     dispatcher: DeterministicDispatcher | None = None,
+    spawner: CrossDomainSpawner | None = None,
     auth_verifier: BearerVerifier | None = None,
     approval_repository: ApprovalRepository | None = None,
     case_repository: CaseRepository | None = None,
@@ -75,7 +77,8 @@ def create_app(
     ticket_queue = queue or MemoryQueue()
     jira_tools = jira or JiraTools(FakeJiraTransport(), MemoryIdempotencyStore())
     board_reader = jira_reader or FakeJiraTransport()
-    router = dispatcher or DeterministicDispatcher()
+    router = dispatcher or DeterministicDispatcher(policy_dir=config.policy_dir or None)
+    spawn_planner = spawner or CrossDomainSpawner()
     app = FastAPI(title="AllRounderAgent API", version="0.1.0")
     app.add_middleware(
         CORSMiddleware,
@@ -282,6 +285,44 @@ def create_app(
                 correlation_id=context.correlation_id,
                 ticket_key=ticket.key,
             )
+        spawn_plan = spawn_planner.plan(routed)
+        if spawn_plan is not None:
+            try:
+                spawn_receipt = await asyncio.to_thread(
+                    jira_tools.create_ticket,
+                    context,
+                    project=spawn_plan.target_project,
+                    summary=spawn_plan.summary,
+                    issue_type=spawn_plan.issue_type,
+                    labels=list(spawn_plan.labels),
+                    description=spawn_plan.description,
+                    idempotency_key=f"spawn:{spawn_plan.correlation_id}",
+                )
+                if spawn_receipt.ticket_key:
+                    await asyncio.to_thread(
+                        jira_tools.comment,
+                        context,
+                        ticket.key,
+                        _spawn_comment(spawn_plan, spawn_receipt.ticket_key),
+                        idempotency_key=f"spawn-link:{spawn_plan.correlation_id}",
+                    )
+                logger.info(
+                    "jira_cross_domain_spawn",
+                    request_id=context.request_id,
+                    correlation_id=context.correlation_id,
+                    ticket_key=ticket.key,
+                    spawned_key=spawn_receipt.ticket_key,
+                    spawn_correlation_id=spawn_plan.correlation_id,
+                    signals=list(spawn_plan.signals),
+                    status=spawn_receipt.status,
+                )
+            except Exception:
+                logger.exception(
+                    "jira_cross_domain_spawn_failed",
+                    request_id=context.request_id,
+                    correlation_id=context.correlation_id,
+                    ticket_key=ticket.key,
+                )
         logger.info(
             "jira_webhook_accepted",
             request_id=context.request_id,
@@ -355,6 +396,14 @@ def _routing_comment(domain: str, rationale: str) -> str:
     return (
         f"Routed to the {domain} comment-only workflow. "
         f"No external action was performed. {rationale}"
+    )
+
+
+def _spawn_comment(plan: SpawnPlan, spawned_key: str) -> str:
+    return (
+        f"Filed linked ticket {spawned_key} in {plan.target_project} for the defect "
+        f"signals in this report (correlation {plan.correlation_id}). The customer "
+        "thread and evidence stay on this ticket."
     )
 
 

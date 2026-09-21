@@ -6075,3 +6075,933 @@ export function VendorCreateSurface({
     </div>
   );
 }
+
+/* ------------------------------------ security lane (SOC alert triage -> containment) */
+
+/** Alert-channel labels for the ingest header. */
+export const ALERT_SOURCE_LABELS: Record<string, string> = {
+  edr: "EDR",
+  siem: "SIEM",
+  email: "Email",
+  cloud: "Cloud",
+};
+
+export function securitySourceLabel(source: string): string {
+  return ALERT_SOURCE_LABELS[source] ?? source.toUpperCase();
+}
+
+export type SecurityCheckStatus = "pass" | "flag" | "fail";
+
+const SECURITY_CHECK_STATUSES: readonly SecurityCheckStatus[] = ["pass", "flag", "fail"];
+
+function securityCheckStatus(value: unknown): SecurityCheckStatus | null {
+  return typeof value === "string" && (SECURITY_CHECK_STATUSES as readonly string[]).includes(value)
+    ? (value as SecurityCheckStatus)
+    : null;
+}
+
+export type SecurityIngestCheckView = {
+  id: string;
+  label: string;
+  status: SecurityCheckStatus;
+  detail: string;
+};
+
+export type SecurityIngestView = {
+  alertId: string;
+  alertSource: string;
+  title: string;
+  host: string | null;
+  user: string | null;
+  indicators: string[];
+  provenance: string;
+  checks: SecurityIngestCheckView[];
+  seenBefore: boolean;
+  priorCaseId: string | null;
+  summary: string;
+};
+
+export function parseSecurityIngest(artifact: Record<string, unknown>): SecurityIngestView | null {
+  const alertId = asString(artifact["alertId"]);
+  if (alertId === null) return null;
+  const checks: SecurityIngestCheckView[] = [];
+  if (Array.isArray(artifact["checks"])) {
+    for (const item of artifact["checks"]) {
+      const record = asRecord(item);
+      const status = record === null ? null : securityCheckStatus(record["status"]);
+      const id = record === null ? null : asString(record["id"]);
+      if (record === null || status === null || id === null) continue;
+      checks.push({
+        id,
+        label: asString(record["label"]) ?? id,
+        status,
+        detail: asString(record["detail"]) ?? "",
+      });
+    }
+  }
+  const dedupe = asRecord(artifact["dedupe"]);
+  return {
+    alertId,
+    alertSource: asString(artifact["alertSource"]) ?? "",
+    title: asString(artifact["title"]) ?? "",
+    host: asString(artifact["host"]),
+    user: asString(artifact["user"]),
+    indicators: asStringArray(artifact["indicators"]),
+    provenance: asString(artifact["provenance"]) ?? "",
+    checks,
+    seenBefore: dedupe !== null && dedupe["seenBefore"] === true,
+    priorCaseId: dedupe === null ? null : asString(dedupe["priorCaseId"]),
+    summary: asString(artifact["summary"]) ?? "",
+  };
+}
+
+/** Step 1 — the normalized alert: dedupe, provenance, indicators, validation checks. */
+export function SecurityIngestSurface({ artifact }: { artifact: Record<string, unknown> }) {
+  const parsed = parseSecurityIngest(artifact);
+
+  if (parsed === null) {
+    return <p className="step-empty">The normalized alert is not available yet.</p>;
+  }
+  const failed = parsed.checks.filter((check) => check.status === "fail").length;
+
+  return (
+    <div className="security-surface">
+      <div className="security-head">
+        <span className="security-source-pill">{securitySourceLabel(parsed.alertSource)}</span>
+        <strong>{parsed.title}</strong>
+        <span className="file-count-badge">{parsed.alertId}</span>
+      </div>
+      <dl className="security-kv">
+        <div>
+          <dt>Host</dt>
+          <dd>{parsed.host ?? "unassigned"}</dd>
+        </div>
+        <div>
+          <dt>User</dt>
+          <dd>{parsed.user ?? "unknown"}</dd>
+        </div>
+        <div>
+          <dt>Provenance</dt>
+          <dd>{parsed.provenance}</dd>
+        </div>
+        <div>
+          <dt>Dedupe</dt>
+          <dd>
+            {parsed.seenBefore
+              ? `Seen before — prior case ${parsed.priorCaseId ?? "unknown"}`
+              : "First occurrence"}
+          </dd>
+        </div>
+      </dl>
+      {parsed.indicators.length > 0 && (
+        <>
+          <h4 className="a11y-section-head">{`Indicators · ${parsed.indicators.length}`}</h4>
+          <div className="security-chip-row">
+            {parsed.indicators.map((indicator) => (
+              <span key={indicator} className="security-chip security-mono">
+                {indicator}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+      <h4 className="a11y-section-head">
+        {failed > 0
+          ? `Validation checks · ${failed} failing`
+          : `Validation checks · all ${parsed.checks.length} clear`}
+      </h4>
+      <ul className="security-check-list">
+        {parsed.checks.map((check) => (
+          <li key={check.id} className={`security-check-row status-${check.status}`}>
+            <div className="security-check-head">
+              <span className={`security-status-pill status-${check.status}`}>{check.status}</span>
+              <strong>{check.label}</strong>
+            </div>
+            <Markdown text={check.detail} className="change-description" />
+          </li>
+        ))}
+      </ul>
+      <Markdown text={parsed.summary} className="analysis-summary" />
+    </div>
+  );
+}
+
+export const SECURITY_CLASSIFICATION_LABELS: Record<string, string> = {
+  tp: "True positive",
+  fp: "False positive",
+  benign: "Benign",
+  unknown: "Unknown",
+};
+
+export type SecurityMitreView = { id: string; name: string; tactic: string };
+
+export type SecurityTriageView = {
+  classification: string;
+  severity: string;
+  confidence: number | null;
+  mitreTechniques: SecurityMitreView[];
+  injectionFlags: string[];
+  rationale: string;
+  needsInvestigation: boolean;
+};
+
+export function parseSecurityTriage(artifact: Record<string, unknown>): SecurityTriageView | null {
+  const classification = asString(artifact["classification"]);
+  if (classification === null) return null;
+  const mitreTechniques: SecurityMitreView[] = [];
+  if (Array.isArray(artifact["mitreTechniques"])) {
+    for (const item of artifact["mitreTechniques"]) {
+      const record = asRecord(item);
+      const id = record === null ? null : asString(record["id"]);
+      if (record === null || id === null) continue;
+      mitreTechniques.push({
+        id,
+        name: asString(record["name"]) ?? "",
+        tactic: asString(record["tactic"]) ?? "",
+      });
+    }
+  }
+  return {
+    classification,
+    severity: asString(artifact["severity"]) ?? "low",
+    confidence: asNumber(artifact["confidence"]),
+    mitreTechniques,
+    injectionFlags: asStringArray(artifact["injectionFlags"]),
+    rationale: asString(artifact["rationale"]) ?? "",
+    needsInvestigation: artifact["needsInvestigation"] === true,
+  };
+}
+
+/** Step 2 — the triage verdict: classification pill, severity, ATT&CK chips, injection flags. */
+export function SecurityTriageSurface({ artifact }: { artifact: Record<string, unknown> }) {
+  const parsed = parseSecurityTriage(artifact);
+
+  if (parsed === null) {
+    return <p className="step-empty">The triage verdict is not available yet.</p>;
+  }
+  const flagged = parsed.injectionFlags.length > 0;
+
+  return (
+    <div className="security-surface">
+      <div className="security-head">
+        <span className={`security-class-pill class-${parsed.classification}`}>
+          {SECURITY_CLASSIFICATION_LABELS[parsed.classification] ?? parsed.classification}
+        </span>
+        <span className={`security-severity-badge severity-${parsed.severity}`}>{parsed.severity}</span>
+        {parsed.confidence !== null && (
+          <span className="verdict-confidence">{`confidence ${(parsed.confidence * 100).toFixed(0)}%`}</span>
+        )}
+        <span className="file-count-badge">
+          {parsed.needsInvestigation ? "Investigation required" : "No investigation needed"}
+        </span>
+      </div>
+      {flagged && (
+        <aside className="security-callout callout-danger">
+          <h4>Prompt-injection signals detected</h4>
+          <p>
+            {"The raw alert tried to steer the analyst: "}
+            <strong>{parsed.injectionFlags.join(", ")}</strong>
+            {". Flagged alerts are never auto-judged — the verdict is pinned and the disposition escalates to a human."}
+          </p>
+        </aside>
+      )}
+      {parsed.mitreTechniques.length > 0 && (
+        <>
+          <h4 className="a11y-section-head">{`ATT&CK map · ${parsed.mitreTechniques.length}`}</h4>
+          <ul className="security-mitre-list">
+            {parsed.mitreTechniques.map((technique) => (
+              <li key={technique.id} className="security-mitre-row">
+                <span className="security-mitre-id">{technique.id}</span>
+                <div className="security-mitre-body">
+                  <strong>{technique.name}</strong>
+                  <span className="security-mitre-tactic">{technique.tactic}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <h4 className="a11y-section-head">Analyst rationale</h4>
+      <Markdown text={parsed.rationale} className="analysis-summary" />
+    </div>
+  );
+}
+
+export type SecurityCitationView = { sourceId: string; span: string };
+
+function securityCitation(value: unknown): SecurityCitationView | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const sourceId = asString(record["sourceId"]);
+  const span = asString(record["span"]);
+  if (sourceId === null || span === null) return null;
+  return { sourceId, span };
+}
+
+export function securityCitationLabel(citation: SecurityCitationView): string {
+  return `${citation.sourceId}#${citation.span}`;
+}
+
+export type SecurityClaimView = {
+  claim: string;
+  sourceTool: string;
+  retrievedAt: string;
+  citation: SecurityCitationView;
+};
+
+export type SecurityTimelineView = { at: string; event: string; citation: SecurityCitationView };
+
+export type SecurityIndicatorView = {
+  indicator: string;
+  verdict: string;
+  detail: string;
+  sourceTool: string;
+  retrievedAt: string;
+  citation: SecurityCitationView;
+};
+
+export type SecurityInvestigateView = {
+  claims: SecurityClaimView[];
+  timeline: SecurityTimelineView[];
+  resolvedIndicators: SecurityIndicatorView[];
+  missingEvidence: string[];
+  unsourcedCount: number;
+  summary: string;
+};
+
+export function parseSecurityInvestigate(
+  artifact: Record<string, unknown>,
+): SecurityInvestigateView | null {
+  const claimsRaw = artifact["claims"];
+  if (!Array.isArray(claimsRaw) || claimsRaw.length === 0) return null;
+  const claims: SecurityClaimView[] = [];
+  for (const item of claimsRaw) {
+    const record = asRecord(item);
+    const citation = record === null ? null : securityCitation(record["snippetRef"]);
+    const claim = record === null ? null : asString(record["claim"]);
+    if (record === null || citation === null || claim === null) continue;
+    claims.push({
+      claim,
+      sourceTool: asString(record["sourceTool"]) ?? "",
+      retrievedAt: asString(record["retrievedAt"]) ?? "",
+      citation,
+    });
+  }
+  const timeline: SecurityTimelineView[] = [];
+  if (Array.isArray(artifact["timeline"])) {
+    for (const item of artifact["timeline"]) {
+      const record = asRecord(item);
+      const at = record === null ? null : asString(record["at"]);
+      const event = record === null ? null : asString(record["event"]);
+      const sourceId = record === null ? null : asString(record["sourceId"]);
+      const span = record === null ? null : asString(record["span"]);
+      if (record === null || at === null || event === null || sourceId === null || span === null) {
+        continue;
+      }
+      timeline.push({ at, event, citation: { sourceId, span } });
+    }
+  }
+  const resolvedIndicators: SecurityIndicatorView[] = [];
+  if (Array.isArray(artifact["resolvedIndicators"])) {
+    for (const item of artifact["resolvedIndicators"]) {
+      const record = asRecord(item);
+      const citation = record === null ? null : securityCitation(record["snippetRef"]);
+      const indicator = record === null ? null : asString(record["indicator"]);
+      if (record === null || citation === null || indicator === null) continue;
+      resolvedIndicators.push({
+        indicator,
+        verdict: asString(record["verdict"]) ?? "unknown",
+        detail: asString(record["detail"]) ?? "",
+        sourceTool: asString(record["sourceTool"]) ?? "",
+        retrievedAt: asString(record["retrievedAt"]) ?? "",
+        citation,
+      });
+    }
+  }
+  return {
+    claims,
+    timeline,
+    resolvedIndicators,
+    missingEvidence: asStringArray(artifact["missingEvidence"]),
+    unsourcedCount: asNumber(artifact["unsourcedCount"]) ?? 0,
+    summary: asString(artifact["summary"]) ?? "",
+  };
+}
+
+/** Step 3 — the cited evidence pack: timeline, claims, resolved indicators, evidence gaps. */
+export function SecurityInvestigateSurface({
+  artifact,
+  returnNote,
+}: {
+  artifact: Record<string, unknown>;
+  returnNote?: string | null;
+}) {
+  const parsed = parseSecurityInvestigate(artifact);
+
+  if (parsed === null) {
+    return <p className="step-empty">The evidence pack is not available yet.</p>;
+  }
+  const note = returnNote ?? "";
+  return (
+    <div className="security-surface">
+      {note.trim() !== "" && (
+        <aside className="security-callout callout-warn">
+          <h4>Returned from approval</h4>
+          <p>{note}</p>
+        </aside>
+      )}
+      <Markdown text={parsed.summary} className="analysis-summary" />
+      <div className="analysis-meta">
+        <span className="file-count-badge">{`${parsed.claims.length} cited claims`}</span>
+        <span className="file-count-badge">
+          {parsed.unsourcedCount === 0 ? "0 unsourced" : `${parsed.unsourcedCount} unsourced`}
+        </span>
+        <span className="file-count-badge">{`${parsed.timeline.length} timeline events`}</span>
+      </div>
+
+      {parsed.timeline.length > 0 && (
+        <>
+          <h4 className="a11y-section-head">Timeline</h4>
+          <ol className="security-timeline">
+            {parsed.timeline.map((entry, index) => (
+              <li key={`${entry.at}-${index}`} className="security-timeline-row">
+                <span className="security-timeline-at">{entry.at}</span>
+                <span className="security-timeline-event">{entry.event}</span>
+                <code className="security-citation">{securityCitationLabel(entry.citation)}</code>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+
+      <h4 className="a11y-section-head">{`Evidence claims · ${parsed.claims.length}`}</h4>
+      <ul className="security-claim-list">
+        {parsed.claims.map((claim, index) => (
+          <li key={`claim-${index}`} className="security-claim-row">
+            <Markdown text={claim.claim} className="change-description" />
+            <p className="security-claim-meta">
+              {`${claim.sourceTool === "" ? "tool" : claim.sourceTool} · retrieved ${claim.retrievedAt} · `}
+              <code className="security-citation">{securityCitationLabel(claim.citation)}</code>
+            </p>
+          </li>
+        ))}
+      </ul>
+
+      {parsed.resolvedIndicators.length > 0 && (
+        <>
+          <h4 className="a11y-section-head">Resolved indicators</h4>
+          <table className="dependency-table security-indicator-table">
+            <thead>
+              <tr>
+                <th>Indicator</th>
+                <th>Verdict</th>
+                <th>Detail</th>
+                <th>Citation</th>
+              </tr>
+            </thead>
+            <tbody>
+              {parsed.resolvedIndicators.map((indicator, index) => (
+                <tr key={`${indicator.indicator}-${index}`}>
+                  <td>
+                    <code>{indicator.indicator}</code>
+                  </td>
+                  <td>
+                    <span className={`security-verdict-pill verdict-${indicator.verdict}`}>
+                      {indicator.verdict}
+                    </span>
+                  </td>
+                  <td>{indicator.detail}</td>
+                  <td>
+                    <code className="security-citation">
+                      {securityCitationLabel(indicator.citation)}
+                    </code>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {parsed.missingEvidence.length > 0 && (
+        <aside className="security-callout callout-warn">
+          <h4>Missing evidence</h4>
+          <ul className="security-missing-list">
+            {parsed.missingEvidence.map((gap) => (
+              <li key={gap}>{gap}</li>
+            ))}
+          </ul>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+export type SecurityRiskFactorView = { id: string; label: string; points: number; detail: string };
+
+export type SecurityRiskView = {
+  score: number;
+  tier: string;
+  factors: SecurityRiskFactorView[];
+  blastRadius: string;
+  reversibility: string;
+  refused: boolean;
+};
+
+export type SecurityDecideView = {
+  action: string;
+  confidence: number | null;
+  reasoningClaims: number[];
+  risk: SecurityRiskView;
+  requiresHuman: boolean;
+  detectionProposal: string | null;
+  summary: string;
+};
+
+export function parseSecurityDecide(artifact: Record<string, unknown>): SecurityDecideView | null {
+  const action = asString(artifact["action"]);
+  const riskRecord = asRecord(artifact["risk"]);
+  if (action === null || riskRecord === null) return null;
+  const factors: SecurityRiskFactorView[] = [];
+  if (Array.isArray(riskRecord["factors"])) {
+    for (const item of riskRecord["factors"]) {
+      const record = asRecord(item);
+      const id = record === null ? null : asString(record["id"]);
+      if (record === null || id === null) continue;
+      factors.push({
+        id,
+        label: asString(record["label"]) ?? id,
+        points: asNumber(record["points"]) ?? 0,
+        detail: asString(record["detail"]) ?? "",
+      });
+    }
+  }
+  return {
+    action,
+    confidence: asNumber(artifact["confidence"]),
+    reasoningClaims: Array.isArray(artifact["reasoningClaims"])
+      ? artifact["reasoningClaims"].filter((item): item is number => typeof item === "number")
+      : [],
+    risk: {
+      score: asNumber(riskRecord["score"]) ?? 0,
+      tier: asString(riskRecord["tier"]) ?? "low",
+      factors,
+      blastRadius: asString(riskRecord["blastRadius"]) ?? "low",
+      reversibility: asString(riskRecord["reversibility"]) ?? "reversible",
+      refused: riskRecord["refused"] === true,
+    },
+    requiresHuman: artifact["requiresHuman"] === true,
+    detectionProposal: asString(artifact["detectionProposal"]),
+    summary: asString(artifact["summary"]) ?? "",
+  };
+}
+
+/** Step 4 — the disposition proposal: risk meter, factors, cited reasoning, detection advice. */
+export function SecurityDecideSurface({
+  artifact,
+  claims,
+}: {
+  artifact: Record<string, unknown>;
+  claims?: SecurityClaimView[];
+}) {
+  const parsed = parseSecurityDecide(artifact);
+
+  if (parsed === null) {
+    return <p className="step-empty">The disposition proposal is not available yet.</p>;
+  }
+  const scoreWidth = Math.min(100, Math.max(0, parsed.risk.score));
+
+  return (
+    <div className="security-surface">
+      <div className="security-head">
+        <span className={`security-action-pill action-${parsed.action}`}>{parsed.action}</span>
+        <span className={`security-severity-badge severity-${parsed.risk.tier}`}>{`tier ${parsed.risk.tier}`}</span>
+        {parsed.confidence !== null && (
+          <span className="verdict-confidence">{`confidence ${(parsed.confidence * 100).toFixed(0)}%`}</span>
+        )}
+        <span className="file-count-badge">
+          {parsed.requiresHuman ? "Human decision required" : "Automatic disposition"}
+        </span>
+      </div>
+      <div
+        className={`security-score-meter severity-${parsed.risk.tier}`}
+        role="img"
+        aria-label={`Risk score ${parsed.risk.score} of 100`}
+      >
+        <div className="security-score-fill" style={{ width: `${scoreWidth}%` }} />
+        <span className="security-score-value">{`${parsed.risk.score} / 100`}</span>
+      </div>
+      <p className="step-summary">
+        {`Blast radius ${parsed.risk.blastRadius} · ${parsed.risk.reversibility}${
+          parsed.risk.refused ? " · refused by the lane risk policy" : ""
+        }`}
+      </p>
+
+      {parsed.risk.factors.length > 0 && (
+        <>
+          <h4 className="a11y-section-head">Risk factors</h4>
+          <ul className="security-factor-list">
+            {parsed.risk.factors.map((factor) => (
+              <li key={factor.id} className="security-factor-row">
+                <div className="security-factor-head">
+                  <strong>{factor.label}</strong>
+                  <span className="line-pill">{`+${factor.points}`}</span>
+                </div>
+                <Markdown text={factor.detail} className="change-description" />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      {parsed.reasoningClaims.length > 0 && (
+        <>
+          <h4 className="a11y-section-head">Reasoning · cited claims</h4>
+          <ul className="security-claim-list">
+            {parsed.reasoningClaims.map((index) => {
+              const claim = claims === undefined ? undefined : claims[index];
+              return (
+                <li key={`reasoning-${index}`} className="security-claim-row">
+                  {claim === undefined ? (
+                    <p className="a11y-location">{`Claim #${index} — see the investigation pack`}</p>
+                  ) : (
+                    <>
+                      <Markdown text={claim.claim} className="change-description" />
+                      <p className="security-claim-meta">
+                        {`Claim #${index} · ${claim.sourceTool === "" ? "tool" : claim.sourceTool} · `}
+                        <code className="security-citation">{securityCitationLabel(claim.citation)}</code>
+                      </p>
+                    </>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+
+      {parsed.detectionProposal !== null && parsed.detectionProposal.trim() !== "" && (
+        <aside className="security-callout callout-info">
+          <h4>Detection-tuning proposal (advisory only — never executed)</h4>
+          <Markdown text={parsed.detectionProposal} className="change-description" />
+        </aside>
+      )}
+      <Markdown text={parsed.summary} className="analysis-summary" />
+    </div>
+  );
+}
+
+export type SecuritySignerState = "pending" | "approved" | "rejected";
+
+const SECURITY_SIGNER_STATES: readonly SecuritySignerState[] = ["pending", "approved", "rejected"];
+
+function securitySignerState(value: unknown): SecuritySignerState | null {
+  return typeof value === "string" && (SECURITY_SIGNER_STATES as readonly string[]).includes(value)
+    ? (value as SecuritySignerState)
+    : null;
+}
+
+export type SecuritySignerView = {
+  role: string;
+  name: string;
+  state: SecuritySignerState;
+  approvedAt: string | null;
+  comment: string | null;
+};
+
+export type SecurityApproveShape = {
+  alertId: string;
+  action: string;
+  tier: string;
+  requiredSigners: string[];
+  signers: SecuritySignerView[];
+  allApproved: boolean;
+  summary: string;
+};
+
+export type SecurityApproveDraft = { signers: SecuritySignerView[] };
+
+export function parseSecurityApprove(artifact: Record<string, unknown>): SecurityApproveShape | null {
+  const alertId = asString(artifact["alertId"]);
+  if (alertId === null) return null;
+  const signers: SecuritySignerView[] = [];
+  if (Array.isArray(artifact["signers"])) {
+    for (const item of artifact["signers"]) {
+      const record = asRecord(item);
+      const role = record === null ? null : asString(record["role"]);
+      const state = record === null ? null : securitySignerState(record["state"]);
+      if (record === null || role === null || state === null) continue;
+      signers.push({
+        role,
+        name: asString(record["name"]) ?? role,
+        state,
+        approvedAt: asString(record["approvedAt"]),
+        comment: asString(record["comment"]),
+      });
+    }
+  }
+  return {
+    alertId,
+    action: asString(artifact["action"]) ?? "",
+    tier: asString(artifact["tier"]) ?? "low",
+    requiredSigners: asStringArray(artifact["requiredSigners"]),
+    signers,
+    allApproved: artifact["allApproved"] === true,
+    summary: asString(artifact["summary"]) ?? "",
+  };
+}
+
+function securityInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter((part) => part !== "");
+  const first = parts[0]?.charAt(0) ?? "?";
+  const last = parts.length > 1 ? parts[parts.length - 1]?.charAt(0) ?? "" : "";
+  return `${first}${last}`.toUpperCase();
+}
+
+/** Step 5 — the signer chain: approve every required role or reject to investigate. */
+export function SecurityApproveSurface({
+  artifact,
+  editable,
+  draft,
+  onChange,
+  returnFlow,
+}: {
+  artifact: Record<string, unknown>;
+  editable: boolean;
+  draft: SecurityApproveDraft | null;
+  onChange: (draft: SecurityApproveDraft) => void;
+  returnFlow?: { onReturn: (reason: string) => void; busy: boolean };
+}) {
+  const [returnReason, setReturnReason] = useState("");
+  const parsed = parseSecurityApprove(artifact);
+
+  if (parsed === null) {
+    return <p className="step-empty">The approval chain is not available yet.</p>;
+  }
+  const signers = draft?.signers ?? parsed.signers;
+  const allApproved =
+    signers.length > 0 &&
+    signers.every((signer) => signer.state === "approved" && signer.approvedAt !== null);
+
+  function setSigner(role: string, patch: Partial<SecuritySignerView>): void {
+    onChange({
+      signers: signers.map((signer) => (signer.role === role ? { ...signer, ...patch } : signer)),
+    });
+  }
+
+  function toggleApproval(signer: SecuritySignerView): void {
+    if (signer.state === "approved") {
+      setSigner(signer.role, { state: "pending", approvedAt: null, comment: null });
+      return;
+    }
+    setSigner(signer.role, {
+      state: "approved",
+      approvedAt: new Date().toISOString(),
+      comment: signer.comment ?? "Approved in review.",
+    });
+  }
+
+  return (
+    <div className="security-surface">
+      <Markdown text={parsed.summary} className="step-summary" />
+      <div className="analysis-meta">
+        <span className={`security-severity-badge severity-${parsed.tier}`}>{`tier ${parsed.tier}`}</span>
+        <span className="file-count-badge">{`action ${parsed.action}`}</span>
+        <span className="file-count-badge">{allApproved ? "All approved" : "Awaiting signers"}</span>
+      </div>
+
+      <ul className="security-chain-list">
+        {signers.map((signer) => (
+          <li key={signer.role} className={`security-chain-row state-${signer.state}`}>
+            <span className={`security-avatar state-${signer.state}`} aria-hidden="true">
+              {securityInitials(signer.name)}
+            </span>
+            <div className="security-chain-body">
+              <div className="security-chain-head">
+                <strong>{signer.name}</strong>
+                <span className="security-chain-role">{signer.role}</span>
+                <span className={`security-chain-state state-${signer.state}`}>{signer.state}</span>
+              </div>
+              <p className="a11y-location">
+                {signer.approvedAt === null ? "No signature recorded yet" : `Signed ${signer.approvedAt}`}
+              </p>
+              {signer.comment !== null && signer.comment.trim() !== "" && (
+                <Markdown text={signer.comment} className="change-description" />
+              )}
+              {editable && (
+                <div className="security-chain-actions">
+                  <button
+                    type="button"
+                    className={signer.state === "approved" ? "" : "approve"}
+                    onClick={() => toggleApproval(signer)}
+                  >
+                    {signer.state === "approved" ? "Undo approval" : "Approve"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      {editable && !allApproved && (
+        <p className="step-summary">
+          Every required signer must approve before containment can be previewed, or reject with a
+          reason to return this run to the evidence pack.
+        </p>
+      )}
+      {editable && returnFlow !== undefined && (
+        <div className="security-return-editor">
+          <label>
+            <span>Reject reason (returns the run to Investigate)</span>
+            <textarea
+              rows={2}
+              maxLength={2000}
+              value={returnReason}
+              placeholder="What must be re-examined before containment can be approved?"
+              onChange={(event) => setReturnReason(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className="danger"
+            disabled={returnFlow.busy || returnReason.trim() === ""}
+            onClick={() => returnFlow.onReturn(returnReason.trim().slice(0, 2000))}
+          >
+            Reject — return to Investigate
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export type SecurityPreviewView = {
+  alertId: string;
+  action: string;
+  outcome: string;
+  containmentId: string;
+  idempotencyKey: string;
+  target: string;
+  summary: string;
+};
+
+export function parseSecurityPreview(artifact: Record<string, unknown>): SecurityPreviewView | null {
+  const containmentId = asString(artifact["containmentId"]);
+  const alertId = asString(artifact["alertId"]);
+  if (containmentId === null || alertId === null) return null;
+  return {
+    alertId,
+    action: asString(artifact["action"]) ?? "",
+    outcome: asString(artifact["outcome"]) ?? "",
+    containmentId,
+    idempotencyKey: asString(artifact["idempotencyKey"]) ?? "",
+    target: asString(artifact["target"]) ?? "",
+    summary: asString(artifact["summary"]) ?? "",
+  };
+}
+
+export type SecurityReceiptView = SecurityPreviewView & {
+  registryRef: string;
+  completedAt: string;
+  evidenceRef: string;
+};
+
+export function parseSecurityReceipt(value: unknown): SecurityReceiptView | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const preview = parseSecurityPreview(record);
+  if (preview === null) return null;
+  return {
+    ...preview,
+    registryRef: asString(record["registryRef"]) ?? "",
+    completedAt: asString(record["completedAt"]) ?? "",
+    evidenceRef: asString(record["evidenceRef"]) ?? "",
+  };
+}
+
+/** Step 6 — the containment preview and its idempotent, replay-safe receipt. */
+export function SecurityContainSurface({
+  artifact,
+  receipt,
+  replayed,
+}: {
+  artifact: Record<string, unknown>;
+  receipt: SecurityReceiptView | null;
+  replayed: boolean;
+}) {
+  const preview = parseSecurityPreview(artifact);
+  const core = receipt ?? preview;
+
+  if (core === null) {
+    return <p className="step-empty">The containment preview is not available yet.</p>;
+  }
+
+  return (
+    <div className="security-surface">
+      <div className="security-head">
+        <span className={`security-outcome-pill outcome-${core.outcome}`}>{core.outcome}</span>
+        <span className="file-count-badge">{`action ${core.action}`}</span>
+        {receipt !== null ? (
+          <>
+            <span className="file-count-badge">Executed</span>
+            {replayed && <span className="security-replay-badge">already replayed</span>}
+          </>
+        ) : (
+          <span className="file-count-badge">Not executed</span>
+        )}
+      </div>
+      <Markdown text={core.summary} className="analysis-summary" />
+      <dl className="security-kv">
+        <div>
+          <dt>Alert</dt>
+          <dd>{core.alertId}</dd>
+        </div>
+        <div>
+          <dt>Containment ID</dt>
+          <dd>{core.containmentId}</dd>
+        </div>
+        <div>
+          <dt>Idempotency key</dt>
+          <dd>{core.idempotencyKey}</dd>
+        </div>
+        <div>
+          <dt>Target</dt>
+          <dd>{core.target}</dd>
+        </div>
+        {receipt !== null && (
+          <>
+            <div>
+              <dt>Completed at</dt>
+              <dd>{receipt.completedAt}</dd>
+            </div>
+            <div>
+              <dt>Registry reference</dt>
+              <dd>{receipt.registryRef}</dd>
+            </div>
+            <div>
+              <dt>Evidence reference</dt>
+              <dd>{receipt.evidenceRef}</dd>
+            </div>
+          </>
+        )}
+      </dl>
+      {receipt === null ? (
+        <p className="security-hint">
+          Idempotent — replaying this decision returns the original receipt and never re-executes the
+          containment.
+        </p>
+      ) : (
+        <article className="receipt-card">
+          <strong>{`Containment ${receipt.containmentId} recorded — outcome ${receipt.outcome}`}</strong>
+          <ul className="completion-files">
+            <li>{`Target ${receipt.target}`}</li>
+            <li>{`Completed ${receipt.completedAt}`}</li>
+            <li>{`Registry: ${receipt.registryRef}`}</li>
+            <li>{`Evidence: ${receipt.evidenceRef}`}</li>
+          </ul>
+        </article>
+      )}
+    </div>
+  );
+}

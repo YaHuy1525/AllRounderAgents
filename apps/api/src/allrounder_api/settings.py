@@ -65,4 +65,8 @@ class Settings(BaseSettings):
     runs_sweep_interval_seconds: int = Field(default=0, ge=0, le=86_400)
     runs_registry_ttl_seconds: int = Field(default=604_800, ge=3_600, le=2_592_000)
     runs_max_regenerations_per_step: int = Field(default=1, ge=0, le=10)
+    # Optional override for the governance policy directory (risk.yaml +
+    # tools.yaml). Empty means the loader walks up from the package, which
+    # finds the repo-root `policy/` in dev and `/app/policy` in the container.
+    policy_dir: str = ""
 

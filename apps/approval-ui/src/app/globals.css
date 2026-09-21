@@ -1963,6 +1963,231 @@ button[type="submit"]:hover:not(:disabled) { background: var(--primary); filter:
 }
 .hr-receipt { margin: 0; color: var(--ok); font-size: 12px; font-weight: 600; }
 
+/* --- security lane (ingest -> triage -> investigate -> decide -> approve -> contain) --- */
+.security-surface { display: grid; gap: 10px; }
+.security-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; }
+.security-source-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border: 1px solid transparent;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.security-kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin: 0; }
+.security-kv > div { display: grid; gap: 2px; }
+.security-kv dt { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; }
+.security-kv dd { margin: 0; font-size: 12.5px; overflow-wrap: anywhere; }
+.security-mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+.security-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.security-chip {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  background: var(--lift);
+  font-size: 11px;
+  font-weight: 600;
+}
+.security-status-pill, .security-class-pill, .security-severity-badge,
+.security-action-pill, .security-outcome-pill, .security-verdict-pill, .security-replay-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.security-status-pill.status-pass { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-status-pill.status-flag { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.security-status-pill.status-fail { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.security-class-pill.class-tp { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.security-class-pill.class-fp { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-class-pill.class-benign { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-class-pill.class-unknown { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.security-severity-badge.severity-low { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-severity-badge.severity-medium { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.security-severity-badge.severity-high { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.security-severity-badge.severity-critical { color: var(--danger); background: var(--danger-soft); border-color: var(--danger); }
+.security-action-pill.action-close { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-action-pill.action-escalate { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.security-action-pill.action-contain { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.security-action-pill.action-recommend { color: var(--primary); background: var(--primary-soft); border: 1px solid transparent; }
+.security-outcome-pill.outcome-contained { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-outcome-pill.outcome-closed { color: var(--muted); background: var(--fill); border-color: var(--line); }
+.security-outcome-pill.outcome-escalated { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.security-outcome-pill.outcome-recommended { color: var(--primary); background: var(--primary-soft); border: 1px solid transparent; }
+.security-verdict-pill.verdict-malicious { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.security-verdict-pill.verdict-suspicious { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.security-verdict-pill.verdict-benign { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-verdict-pill.verdict-unknown { color: var(--muted); background: var(--fill); border-color: var(--line); }
+.security-replay-badge { color: var(--primary); background: var(--primary-soft); border: 1px solid transparent; }
+.security-check-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.security-check-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  background: var(--lift);
+}
+.security-check-row.status-pass { border-left-color: var(--ok); }
+.security-check-row.status-flag { border-left-color: var(--warn); }
+.security-check-row.status-fail { border-left-color: var(--danger); }
+.security-check-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; }
+.security-callout {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.security-callout h4 { margin: 0; font-size: 12.5px; }
+.security-callout p { margin: 0; }
+.security-callout.callout-danger { border-color: var(--danger-line); border-left-color: var(--danger); background: var(--danger-soft); }
+.security-callout.callout-warn { border-color: var(--warn-line); border-left-color: var(--warn); background: var(--warn-soft); }
+.security-callout.callout-info { border-left-color: var(--primary); background: var(--primary-soft); }
+.security-mitre-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.security-mitre-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  background: var(--lift);
+}
+.security-mitre-id { color: var(--primary); font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size: 12px; font-weight: 800; }
+.security-mitre-body { display: grid; gap: 2px; }
+.security-mitre-tactic { color: var(--muted); font-size: 11px; }
+.security-timeline { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.security-timeline-row {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  background: var(--lift);
+}
+.security-timeline-at { color: var(--muted); font-size: 11px; font-weight: 700; }
+.security-timeline-event { font-size: 12.5px; }
+.security-citation {
+  color: var(--muted);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.security-claim-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.security-claim-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  background: var(--lift);
+}
+.security-claim-meta { margin: 0; color: var(--muted); font-size: 11px; }
+.security-missing-list { display: grid; gap: 3px; margin: 0; padding-left: 18px; }
+.security-indicator-table td code { font-size: 11.5px; }
+.security-score-meter {
+  position: relative;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--fill);
+  overflow: hidden;
+}
+.security-score-fill { display: block; height: 100%; border-radius: 999px 0 0 999px; background: var(--primary); }
+.security-score-meter.severity-low .security-score-fill { background: var(--ok); }
+.security-score-meter.severity-medium .security-score-fill { background: var(--warn); }
+.security-score-meter.severity-high .security-score-fill { background: var(--danger); }
+.security-score-meter.severity-critical .security-score-fill { background: var(--danger); }
+.security-score-value {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.security-factor-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.security-factor-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  background: var(--lift);
+}
+.security-factor-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.security-chain-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.security-chain-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--lift);
+}
+.security-chain-row.state-pending { border-left-color: var(--warn); }
+.security-chain-row.state-approved { border-left-color: var(--ok); }
+.security-chain-row.state-rejected { border-left-color: var(--danger); }
+.security-avatar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--fill);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.security-avatar.state-pending { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.security-avatar.state-approved { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-avatar.state-rejected { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.security-chain-body { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.security-chain-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; }
+.security-chain-role { color: var(--muted); font-size: 11.5px; }
+.security-chain-state {
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.security-chain-state.state-pending { color: var(--warn); background: var(--warn-soft); border-color: var(--warn-line); }
+.security-chain-state.state-approved { color: var(--ok); background: var(--ok-soft); border-color: var(--ok-line); }
+.security-chain-state.state-rejected { color: var(--danger); background: var(--danger-soft); border-color: var(--danger-line); }
+.security-chain-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.security-return-editor {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--fill);
+}
+.security-return-editor label { display: grid; gap: 4px; font-size: 11.5px; }
+.security-return-editor label > span { color: var(--danger); font-weight: 600; }
+.security-return-editor button { justify-self: start; }
+.security-hint { margin: 0; color: var(--muted); font-size: 11.5px; }
+
 .sr-only {
   position: absolute;
   width: 1px;

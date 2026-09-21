@@ -76,6 +76,21 @@ const domainTerms: Readonly<Record<Exclude<Domain, "unknown">, ReadonlySet<strin
     "faq",
     "help",
   ]),
+  security: new Set([
+    "alert",
+    "ioc",
+    "malware",
+    "phishing",
+    "ransomware",
+    "siem",
+    "edr",
+    "intrusion",
+    "mitre",
+    "cve",
+    "exploit",
+    "soc",
+    "triage",
+  ]),
 };
 
 const projectDomains: Readonly<Record<string, Exclude<Domain, "unknown">>> = {
@@ -83,6 +98,7 @@ const projectDomains: Readonly<Record<string, Exclude<Domain, "unknown">>> = {
   FIN: "finance",
   MKT: "marketing",
   SUP: "support",
+  SEC: "security",
 };
 
 const steps = [
@@ -215,12 +231,24 @@ function safeFallbackVerdict(ticket: Ticket): TriageVerdict {
 
 function preflight(action: string): RiskScore {
   const lowered = action.toLowerCase();
-  const irreversible = ["irreversible", "payment", "delete", "publish"].some((term) =>
-    lowered.includes(term),
-  );
-  const highBlast = ["production", "global", "payment", "publish"].some((term) =>
-    lowered.includes(term),
-  );
+  const irreversible = [
+    "irreversible",
+    "payment",
+    "delete",
+    "publish",
+    "isolate",
+    "quarantine",
+    "revoke",
+    "disable",
+  ].some((term) => lowered.includes(term));
+  const highBlast = [
+    "production",
+    "global",
+    "payment",
+    "publish",
+    "fleet",
+    "domain controller",
+  ].some((term) => lowered.includes(term));
   const score = irreversible && highBlast ? 90 : irreversible || highBlast ? 55 : 10;
   return RiskScoreSchema.parse({
     action,

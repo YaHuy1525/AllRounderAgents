@@ -1,0 +1,78 @@
+# Tool permission matrix, v1 (Master Plan Phase 5 — Governance hardening).
+#
+# Every tool an agent surface may call declares its scope, approval class and
+# idempotency discipline. apps/api/tests/test_governance.py walks this file and
+# asserts:
+#   * every write on a transport appears here (no undeclared tools),
+#   * every side-effecting workflow step maps to `run.side-effect`,
+#   * every `approval` tool in the matrix has a denial path exercised in the
+#     suite (receipt verification, never the caller's claim).
+#
+# Classes:
+#   auto       — deterministic, idempotent, no human receipt needed
+#   approval   — acts only with a signed receipt bound to scope + action hash
+#   refuse     — never auto-runs (policy refuses; human task is created)
+#   read-only  — cannot mutate anything; no idempotency needed
+version: 1
+
+tools:
+  - name: jira.comment
+    description: Post a routing/spawn receipt comment on a Jira issue.
+    scope: jira-projects
+    class: auto
+    idempotent: true
+    idempotency_key: eventId
+
+  - name: jira.transition
+    description: Move a Jira issue through its workflow.
+    scope: jira-projects
+    class: auto
+    idempotent: true
+    idempotency_key: eventId
+
+  - name: jira.create-ticket
+    description: File the cross-domain spawn ticket (support -> bug) with evidence.
+    scope: jira-projects
+    class: auto
+    idempotent: true
+    idempotency_key: correlationId
+
+  - name: support.send
+    description: Send an approved support reply.
+    scope: support:send
+    class: approval
+    idempotent: true
+    idempotency_key: draftHash
+
+  - name: finance.post
+    description: Post the approved journal to the sandbox ledger.
+    scope: finance:post
+    class: approval
+    idempotent: true
+    idempotency_key: ledgerKey
+
+  - name: run.side-effect
+    description: >-
+      Any workflow side effect (template scope `{workflow}:{step}`, e.g.
+      security:contain). Acts only with the signed receipt for that scope.
+    scope: "{workflow}:{step}"
+    class: approval
+    idempotent: true
+    idempotency_key: actionHash
+
+  # Read-only defaults: none of these can mutate Jira, GitHub or the knowledge
+  # store — they are the only tools research steps hold.
+  - name: jira.read
+    description: Search issues, list boards, read board issues.
+    scope: jira-projects
+    class: read-only
+
+  - name: github.read
+    description: List allowlisted repositories, PRs and file contents for review.
+    scope: repo-allowlist
+    class: read-only
+
+  - name: knowledge.retrieve
+    description: Hybrid retrieval over the knowledge store (citations returned).
+    scope: knowledge-domains
+    class: read-only

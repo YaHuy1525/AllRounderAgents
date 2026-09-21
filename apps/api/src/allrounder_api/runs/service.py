@@ -12,7 +12,10 @@ Driving model — restart/resume with a decision envelope:
 * Proceed/Edit decisions are backed by single-use HMAC receipts bound to
   ``(approvalId, runId, caseId, action, scope)`` and recorded under
   ``(runId, stepId, actionHash)`` so a replay returns the original record and
-  never duplicates a side effect.
+  never duplicates a side effect. Side-effecting steps carry their own
+  ``workflow:step`` scope (e.g. ``security:contain``) and the receipt is
+  re-verified right before the run is driven — the executor never acts on an
+  unverified token (defense in depth).
 * Ceiling slots are held only while a pass is in flight; queued runs are
   promoted FIFO and always know their visible position.
 """
@@ -33,6 +36,7 @@ from ..auth import Principal
 from ..logging import get_logger
 from ..repositories import ApprovalRecord, ApprovalRepository, CaseRepository
 from .ceilings import RUN_SLOT, ConcurrencyCeiling
+from .definitions import side_effect_scope
 from .events import RunEventBus
 from .locks import TargetLockStore
 from .mastra_client import MastraClientError, MastraRunClient, action_hash
@@ -51,6 +55,13 @@ class RunConflictError(Exception):
     """The requested transition is invalid for the run's current state."""
 
 
+# Security lane metric allowlists keep the label sets bounded even if an
+# engine ever emits an enum value outside the contract.
+SECURITY_CLASSIFICATIONS = frozenset({"tp", "fp", "benign", "unknown"})
+SECURITY_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+SECURITY_CONTAINMENT_OUTCOMES = frozenset({"contained", "closed", "escalated", "recommended"})
+
+
 class UnknownWorkflowError(ValueError):
     def __init__(self, workflow: str) -> None:
         super().__init__(f"Unknown workflow {workflow!r}")
@@ -67,6 +78,12 @@ class RunMetrics(Protocol):
     def record_run(self, *, workflow: str, status: str) -> None: ...
 
     def record_run_decision(self, *, workflow: str, action: str) -> None: ...
+
+    def record_security_triage(
+        self, *, classification: str, severity: str, injection: bool
+    ) -> None: ...
+
+    def record_security_containment(self, *, outcome: str, replayed: bool) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -204,6 +221,11 @@ class RunService:
                         run=await self._reload(run_id), receipt=receipt, replayed=True
                     )
                 self._record_decision(run, action)
+                # Defense in depth: the executor re-verifies the signed
+                # receipt with the side-effect scope before the run is driven
+                # (same discipline as the finance:post / support:send
+                # executors — a side effect never acts on an unverified token).
+                self._verify_side_effect_receipt(run, step, action, edits)
             elif action == "regenerate":
                 if step.regenerations >= self._config.max_regenerations_per_step:
                     raise RunConflictError(
@@ -262,15 +284,7 @@ class RunService:
         comment: str | None,
     ) -> tuple[str, bool]:
         artifact_hash = _content_hash(step.artifact or {})
-        action_dict: dict[str, object] = {
-            "workflow": run.workflow,
-            "runId": run.run_id,
-            "stepId": step.step_id,
-            "action": action,
-            "artifactHash": artifact_hash,
-        }
-        if edits is not None:
-            action_dict["editsHash"] = _content_hash(edits)
+        action_dict = self._action_dict(run, step, action, edits)
         digest = action_hash(action_dict)
         replay = await self._receipts.replay(run.run_id, step.step_id, digest)
         if replay is not None:
@@ -280,7 +294,7 @@ class RunService:
             return step.receipt or "", True
         now = self._clock()
         approval_id = str(uuid4())
-        scope = f"run:{run.workflow}"
+        scope = self._receipt_scope(run, step.step_id)
         expiry = now + timedelta(seconds=self._config.receipt_ttl_seconds)
         await self._approvals.create(
             ApprovalRecord(
@@ -394,6 +408,70 @@ class RunService:
             raise UnknownWorkflowError(run.workflow)
         return definition
 
+    def _action_dict(
+        self, run: WorkflowRun, step: RunStep, action: str, edits: dict[str, object] | None
+    ) -> dict[str, object]:
+        """The exact action a step's receipt is bound to (hash-stable)."""
+        action_dict: dict[str, object] = {
+            "workflow": run.workflow,
+            "runId": run.run_id,
+            "stepId": step.step_id,
+            "action": action,
+            "artifactHash": _content_hash(step.artifact or {}),
+        }
+        if edits is not None:
+            action_dict["editsHash"] = _content_hash(edits)
+        return action_dict
+
+    def _receipt_scope(self, run: WorkflowRun, step_id: str) -> str:
+        """Side-effecting steps carry their own ``workflow:step`` permission
+        (e.g. ``security:contain``); review-only steps stay run-scoped."""
+        try:
+            side_effecting = self._definition(run).step(step_id).side_effecting
+        except KeyError:  # pragma: no cover - decide() validates the step first
+            side_effecting = False
+        if side_effecting:
+            return side_effect_scope(run.workflow, step_id)
+        return f"run:{run.workflow}"
+
+    def _verify_side_effect_receipt(
+        self,
+        run: WorkflowRun,
+        step: RunStep,
+        action: str,
+        edits: dict[str, object] | None,
+    ) -> None:
+        """Re-verify the signed receipt before a side effect is allowed to act.
+
+        Mirrors the ``finance:post`` / ``support:send`` executor discipline:
+        the signature, the exact action dict and the side-effect scope
+        (``security:contain`` for the security lane) are checked again right
+        before the run is driven, so a mislabelled scope or a tampered record
+        can never reach the executor.
+        """
+        try:
+            side_effecting = self._definition(run).step(step.step_id).side_effecting
+        except KeyError:  # pragma: no cover - decide() validates the step first
+            return
+        if not side_effecting:
+            return
+        decision = step.decision or {}
+        approval_id = decision.get("approvalId")
+        try:
+            self._signer.validate(
+                step.receipt or "",
+                approval_id=str(approval_id) if approval_id is not None else "",
+                case_id=run.case_id,
+                action=self._action_dict(run, step, action, edits),
+                scope=self._receipt_scope(run, step.step_id),
+                run_id=run.run_id,
+                now=self._clock(),
+            )
+        except ReceiptError as error:  # pragma: no cover - defensive re-check
+            raise RunConflictError(
+                f"Side-effect receipt for step {step.step_id!r} failed re-verification"
+            ) from error
+
     def _run_lock(self, run_id: str) -> asyncio.Lock:
         return self._run_locks.setdefault(run_id, asyncio.Lock())
 
@@ -475,7 +553,17 @@ class RunService:
             return
         run = latest
         for step_id, effect in outcome.effects.items():
+            previous = run.side_effects.get(step_id)
             run.side_effects[step_id] = effect
+            # A containment receipt re-delivered unchanged means the idempotent
+            # replay path answered instead of the executor; surface that as a
+            # metric so a replay spike is visible long before it is a bug.
+            if (
+                run.workflow == "security"
+                and step_id == "contain"
+                and isinstance(effect.get("receipt"), dict)
+            ):
+                self._record_security_containment(run, replayed=previous == effect)
         if outcome.status == "suspended" and outcome.step_id is not None:
             try:
                 suspended = run.step(outcome.step_id)
@@ -489,6 +577,8 @@ class RunService:
             suspended.state = "awaiting_human"
             if outcome.artifact is not None:
                 suspended.artifact = outcome.artifact
+                if run.workflow == "security" and suspended.step_id == "triage":
+                    self._record_security_triage(outcome.artifact)
             suspended.updated_at = self._clock()
             run.status = "awaiting_human"
             run.queue_position = None
@@ -687,6 +777,49 @@ class RunService:
     def _record_terminal(self, run: WorkflowRun) -> None:
         if self._metrics is not None:
             self._metrics.record_run(workflow=run.workflow, status=run.status)
+
+    def _record_security_triage(self, artifact: dict[str, object]) -> None:
+        if self._metrics is None:
+            return
+        classification = artifact.get("classification")
+        severity = artifact.get("severity")
+        if not isinstance(classification, str) or classification not in SECURITY_CLASSIFICATIONS:
+            return
+        if not isinstance(severity, str) or severity not in SECURITY_SEVERITIES:
+            return
+        flags = artifact.get("injectionFlags")
+        self._metrics.record_security_triage(
+            classification=classification,
+            severity=severity,
+            injection=isinstance(flags, list) and len(flags) > 0,
+        )
+
+    def _record_security_containment(self, run: WorkflowRun, *, replayed: bool) -> None:
+        if self._metrics is None:
+            return
+        self._metrics.record_security_containment(
+            outcome=self._security_containment_outcome(run), replayed=replayed
+        )
+
+    def _security_containment_outcome(self, run: WorkflowRun) -> str:
+        # Prefer the stored receipt; scripted receipts may omit ``outcome``, in
+        # which case the contain step's artifact (the approved preview) carries it.
+        effect = run.side_effects.get("contain")
+        if isinstance(effect, dict):
+            receipt = effect.get("receipt")
+            if isinstance(receipt, dict):
+                outcome = receipt.get("outcome")
+                if isinstance(outcome, str) and outcome in SECURITY_CONTAINMENT_OUTCOMES:
+                    return outcome
+        for step in run.steps:
+            if step.step_id != "contain":
+                continue
+            artifact = step.artifact
+            if isinstance(artifact, dict):
+                outcome = artifact.get("outcome")
+                if isinstance(outcome, str) and outcome in SECURITY_CONTAINMENT_OUTCOMES:
+                    return outcome
+        return "unknown"
 
     async def _save(self, run: WorkflowRun) -> None:
         await self._registry.save(run)
