@@ -1,0 +1,37 @@
+# Overrides for the kube-prometheus-stack chart. Chart defaults target big
+# clusters; these keep the local footprint small.
+
+prometheus:
+  prometheusSpec:
+    # Chart default is 10 days of samples — on a laptop that is just disk noise
+    # you will never query. Six hours keeps the pod light.
+    retention: 6h
+    # Discover ServiceMonitors in ALL namespaces. Without this, Prometheus only
+    # looks in its own namespace and never sees `allrounder/api`.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+grafana:
+  # Admin credentials live in secret `kube-prometheus-stack-grafana`
+  # (you read the password in §10).
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    hosts:
+      - grafana.127.0.0.1.nip.io
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi

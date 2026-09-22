@@ -1,0 +1,7 @@
+# JSON6902 patch: swap the two placeholder hosts for nip.io names.
+- op: replace
+  path: /spec/rules/0/host
+  value: api.127.0.0.1.nip.io
+- op: replace
+  path: /spec/rules/1/host
+  value: app.127.0.0.1.nip.io

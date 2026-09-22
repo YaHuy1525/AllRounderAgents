@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Cluster-neutral description of the app: no namespace, placeholder hostnames,
+# placeholder image tags. An overlay (§5) makes it concrete for one cluster.
+resources:
+  - api.yaml
+  - mastra.yaml
+  - ui.yaml
+  - redis.yaml
+  - ingress.yaml

@@ -1,0 +1,62 @@
+# Two ArgoCD Applications = two independently-synced units of deployment.
+# Applied by hand exactly once (§9.7); after that, ArgoCD owns everything
+# these objects point at.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: allrounder
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YaHuy1525/AllRounderAgents.git
+    targetRevision: main
+    path: deploy/k8s/overlays/local
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: allrounder
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: observability
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  sources:
+    # 1) The git repo itself, aliased so source 3 can read files from it
+    #    via $values/<path>.
+    - repoURL: https://github.com/YaHuy1525/AllRounderAgents.git
+      targetRevision: main
+      ref: values
+    # 2) Our own extras: ServiceMonitor + dashboard ConfigMap + values.yaml.
+    - repoURL: https://github.com/YaHuy1525/AllRounderAgents.git
+      targetRevision: main
+      path: deploy/observability
+    # 3) The upstream chart, pinned to the version verified for this guide.
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: "91.4.1"
+      helm:
+        releaseName: kube-prometheus-stack
+        valueFiles:
+          - $values/deploy/observability/values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

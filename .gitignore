@@ -46,3 +46,5 @@ supabase/.branches/
 supabase/.temp/
 /docs
 /apps/api/tests
+.mastra
+.qoder/

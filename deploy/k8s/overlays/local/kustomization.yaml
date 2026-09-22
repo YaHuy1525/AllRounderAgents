@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Everything this particular cluster needs: namespace, real hostnames,
+# pinned image tags.
+namespace: allrounder
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: Ingress
+      name: allrounder
+    path: ingress-patch.yaml
+
+images:
+  - name: ghcr.io/yahuy1525/allrounderagent-api
+    newTag: sha-placeholder
+  - name: ghcr.io/yahuy1525/allrounderagent-mastra
+    newTag: sha-placeholder
+  - name: ghcr.io/yahuy1525/allrounderagent-ui
+    newTag: sha-placeholder

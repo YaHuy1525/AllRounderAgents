@@ -1,0 +1,110 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # Loop breaker 1: deploy-only or docs-only changes must not rebuild
+      # images - and that includes CD's own commit-back below.
+      - "deploy/**"
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write    # push the image-pin commit back to main
+  packages: write    # push images to GHCR
+
+concurrency:
+  group: cd-main
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: allrounderagent-api
+            dockerfile: Dockerfile.api
+            buildArgs: ""
+          - image: allrounderagent-mastra
+            dockerfile: Dockerfile.mastra
+            buildArgs: ""
+          - image: allrounderagent-ui
+            dockerfile: apps/approval-ui/Dockerfile
+            # Browser-safe values baked into the static UI at build time.
+            # They come from repo Variables (§1.3), never from secrets.
+            buildArgs: |
+              NEXT_PUBLIC_SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+              NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+              NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL || 'http://api.127.0.0.1.nip.io' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag + lowercase owner
+        id: meta
+        run: |
+          # GHCR paths must be lowercase; the second line lowercases the owner
+          # no matter how it is spelled on GitHub.
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ghcr.io/${{ steps.meta.outputs.owner }}/${{ matrix.image }}:sha-${{ steps.meta.outputs.sha }}
+            ghcr.io/${{ steps.meta.outputs.owner }}/${{ matrix.image }}:latest
+          build-args: |
+            ${{ matrix.buildArgs }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  promote:
+    # The subtle half: images are useless until something tells the cluster
+    # which tag to run. This job edits exactly the file ArgoCD watches.
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image tag + lowercase owner
+        id: meta
+        run: |
+          echo "sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: imranismail/setup-kustomize@v2
+
+      - name: Pin the overlay to the freshly built images
+        working-directory: deploy/k8s/overlays/local
+        run: |
+          IMG="ghcr.io/${{ steps.meta.outputs.owner }}"
+          SHA="${{ steps.meta.outputs.sha }}"
+          kustomize edit set image $IMG/allrounderagent-api=$IMG/allrounderagent-api:sha-$SHA
+          kustomize edit set image $IMG/allrounderagent-mastra=$IMG/allrounderagent-mastra:sha-$SHA
+          kustomize edit set image $IMG/allrounderagent-ui=$IMG/allrounderagent-ui:sha-$SHA
+
+      - name: Commit the pin back
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/k8s/overlays/local/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Overlay already pinned to sha-${{ steps.meta.outputs.sha }}; nothing to commit."
+            exit 0
+          fi
+          # Loop breaker 2: [skip ci] suppresses CI on this robot commit.
+          git commit -m "cd: pin images to sha-${{ steps.meta.outputs.sha }} [skip ci]"
+          git push

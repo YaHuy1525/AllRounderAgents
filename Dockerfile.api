@@ -13,6 +13,10 @@ COPY pyproject.toml README.md ./
 COPY apps/api/src ./apps/api/src
 COPY policy ./policy
 
+# Governance policy ships in this image at /app/policy. The loader's
+# package walk-up cannot see it from site-packages, so pin the path.
+ENV POLICY_DIR=/app/policy
+
 RUN python -m pip install --no-cache-dir .
 
 USER allrounder
