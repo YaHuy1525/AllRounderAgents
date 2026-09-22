@@ -94,6 +94,11 @@
       "minLength": 1,
       "title": "Summary",
       "type": "string"
+    },
+    "tenantId": {
+      "type": "string",
+      "minLength": 1,
+      "title": "Tenantid"
     }
   },
   "required": [
