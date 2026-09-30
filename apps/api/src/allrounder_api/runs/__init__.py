@@ -8,6 +8,7 @@ API → Mastra start/resume bridge; the router exposes it over HTTP.
 from __future__ import annotations
 
 from .api import build_runs_router
+from .archive import MemoryRunArchive, NullRunArchive, PostgresRunArchive, RunArchive
 from .ceilings import (
     APPLY_SLOT,
     RUN_SLOT,
@@ -22,6 +23,7 @@ from .definitions import (
     HR_HELP_WORKFLOW,
     ISSUES_WORKFLOW,
     LEAVE_WORKFLOW,
+    MSP_WORKFLOW,
     OFFBOARDING_WORKFLOW,
     ONBOARDING_WORKFLOW,
     REVIEW_WORKFLOW,
@@ -58,6 +60,7 @@ from .service import (
     RunService,
     RunServiceConfig,
     UnknownWorkflowError,
+    content_hash,
 )
 
 __all__ = [
@@ -70,6 +73,7 @@ __all__ = [
     "HR_HELP_WORKFLOW",
     "ISSUES_WORKFLOW",
     "LEAVE_WORKFLOW",
+    "MSP_WORKFLOW",
     "OFFBOARDING_WORKFLOW",
     "ONBOARDING_WORKFLOW",
     "REVIEW_WORKFLOW",
@@ -88,14 +92,18 @@ __all__ = [
     "MastraOutcome",
     "MastraRunClient",
     "MemoryConcurrencyCeiling",
+    "MemoryRunArchive",
     "MemoryRunReceiptStore",
     "MemoryTargetLockStore",
+    "NullRunArchive",
+    "PostgresRunArchive",
     "RedisConcurrencyCeiling",
     "RedisRunEventBus",
     "RedisRunReceiptStore",
     "RedisRunRegistry",
     "RedisTargetLockStore",
     "RunConflictError",
+    "RunArchive",
     "RunEventBus",
     "RunMetrics",
     "RunReceiptStore",
@@ -113,4 +121,5 @@ __all__ = [
     "build_memory_run_service",
     "build_redis_run_service",
     "build_runs_router",
+    "content_hash",
 ]

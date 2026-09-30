@@ -45,6 +45,13 @@ temp/
 supabase/.branches/
 supabase/.temp/
 /docs
-/apps/api/tests
+/apps/api/tests/*
+!/apps/api/tests/test_judging.py
 .mastra
 .qoder/
+/fixtures
+
+# Judge eval harness: generated reports and judgment cache stay local;
+# candidates and baselines are committed.
+evals/judge/.cache/
+evals/judge/reports/

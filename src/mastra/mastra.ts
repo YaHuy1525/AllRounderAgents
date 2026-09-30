@@ -20,6 +20,9 @@ import { MemoryEmployeeDirectory } from "./agents/hr/directory.js";
 import { createHrHelpFlow, type HrHelpFlowDeps } from "./agents/hr-help/flow.js";
 import { MemoryHrHelpRegistry } from "./agents/hr-help/tools/hr-help-registry.js";
 import { MemoryHrPolicyRetriever } from "./agents/hr-help/tools/hr-policy.js";
+import { createBillsFlow, type BillsFlowDeps } from "./agents/bills/flow.js";
+import { MemoryBillsLedger } from "./agents/bills/tools/ledger.js";
+import { createMspFlow, type MspFlowDeps } from "./agents/msp/flow.js";
 import { createLeaveFlow, type LeaveFlowDeps } from "./agents/leave/flow.js";
 import { MemoryLeaveRegistry } from "./agents/leave/tools/leave-registry.js";
 import { createOffboardingFlow, type OffboardingFlowDeps } from "./agents/offboarding/flow.js";
@@ -42,6 +45,8 @@ import {
   MemoryThreatIntel,
   type CaseHistory,
 } from "./agents/security/tools/seams.js";
+import { MemoryDeskAdapter } from "./desks/memory.js";
+import { MemoryMailSender } from "./mail/memory.js";
 
 /**
  * The Mastra HTTP server answers 504 after `server.timeout`, defaulting to
@@ -125,7 +130,12 @@ function buildSecurityCaseHistory(storage: MastraCompositeStore): CaseHistory {
  * in-memory registries while HR help runs on the fixture policy corpus and
  * its in-memory answer registry (the HR lanes make no network calls). The
  * security lane always runs on the fixture seams, with the case history
- * upgraded to Mastra Memory whenever `DATABASE_URL` is set (§5.1).
+ * upgraded to Mastra Memory whenever `DATABASE_URL` is set (§5.1). The MSP
+ * lane always runs on the in-memory desk and mailbox, with the host upgrading
+ * to the Jira Cloud adapter and the on-disk outbox when the JIRA_* and MAIL_*
+ * variables are set. Bills always runs on the in-memory ledger default (the
+ * host injects the Xero ledger and the platform vendor registry), and the
+ * post step is receipt-gated either way.
  */
 export function createAllRounderMastra(
   deps: {
@@ -142,6 +152,8 @@ export function createAllRounderMastra(
     offboarding?: OffboardingFlowDeps;
     screening?: ScreeningFlowDeps;
     hrHelp?: HrHelpFlowDeps;
+    msp?: MspFlowDeps;
+    bills?: BillsFlowDeps;
     security?: SecurityFlowDeps;
   } = {},
 ) {
@@ -194,6 +206,13 @@ export function createAllRounderMastra(
           registry: new MemoryHrHelpRegistry(),
         },
       ),
+      mspFlow: createMspFlow(
+        deps.msp ?? {
+          desk: new MemoryDeskAdapter(),
+          mail: new MemoryMailSender(),
+        },
+      ),
+      billsFlow: createBillsFlow(deps.bills ?? { ledger: new MemoryBillsLedger() }),
       securityFlow: createSecurityFlow(
         deps.security ?? {
           telemetry: new MemoryTelemetrySearch(),

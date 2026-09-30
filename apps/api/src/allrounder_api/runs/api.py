@@ -8,13 +8,13 @@ import json
 from collections.abc import AsyncIterator
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..auth import AuthenticationError, BearerVerifier, Principal
 from ..jira import JIRA_TICKET_KEY_PATTERN
-from .models import TERMINAL_RUN_STATUSES, WorkflowRun
+from .models import TERMINAL_RUN_STATUSES, WorkflowRun, run_snapshot, run_summary
 from .service import RunConflictError, RunService, UnknownWorkflowError
 
 _SSE_HEADERS = {"X-Accel-Buffering": "no", "Cache-Control": "no-store"}
@@ -88,14 +88,43 @@ def build_runs_router(
     @router.get("")
     async def list_runs(
         ticket: str | None = None,
+        scope: Literal["active", "history"] = "active",
+        workflow: str | None = None,
+        status: Literal[
+            "queued",
+            "running",
+            "awaiting_human",
+            "blocked",
+            "completed",
+            "failed",
+            "cancelled",
+        ]
+        | None = None,
+        limit: int = Query(default=50, ge=1, le=200),
+        cursor: str | None = None,
         identity: Principal = Depends(principal),
     ) -> dict[str, object]:
         require_role(identity, "viewer", "approver", "agent", "admin")
         if ticket is not None:
-            runs = await service.list_for_ticket(ticket, identity.tenant_id)
-        else:
-            runs = await service.list_active(identity.tenant_id)
-        return {"runs": [_run_summary(run) for run in runs]}
+            runs = await service.list_for_ticket(ticket, identity.tenant_id, limit)
+            rows = _filter_summaries(
+                [_run_summary(run) for run in runs], workflow=workflow, status=status
+            )
+            return {"runs": rows[:limit], "nextCursor": None}
+        if scope == "history":
+            rows, next_cursor = await service.list_history(
+                identity.tenant_id,
+                workflow=workflow,
+                status=status,
+                limit=limit,
+                cursor=cursor,
+            )
+            return {"runs": rows, "nextCursor": next_cursor}
+        runs = await service.list_active(identity.tenant_id)
+        rows = _filter_summaries(
+            [_run_summary(run) for run in runs], workflow=workflow, status=status
+        )
+        return {"runs": rows[:limit], "nextCursor": None}
 
     @router.get("/{run_id}")
     async def get_run(
@@ -195,35 +224,27 @@ def build_runs_router(
     return router
 
 
+def _filter_summaries(
+    rows: list[dict[str, object]],
+    *,
+    workflow: str | None,
+    status: str | None,
+) -> list[dict[str, object]]:
+    if workflow is not None:
+        rows = [row for row in rows if row["workflow"] == workflow]
+    if status is not None:
+        rows = [row for row in rows if row["status"] == status]
+    return rows
+
+
 def _run_summary(run: WorkflowRun) -> dict[str, object]:
-    current = run.current_step()
-    return {
-        "runId": run.run_id,
-        "workflow": run.workflow,
-        "ticketKey": run.ticket_key,
-        "status": run.status,
-        "queuePosition": run.queue_position,
-        "currentStepId": current.step_id if current is not None else None,
-        "stepCount": len(run.steps),
-        "stepsDone": sum(1 for step in run.steps if step.state == "done"),
-        "startedAt": run.started_at.isoformat(),
-        "finishedAt": run.finished_at.isoformat() if run.finished_at else None,
-    }
+    # Shared with the history merge so every list row has one shape.
+    return run_summary(run)
 
 
 def _run_detail(run: WorkflowRun) -> dict[str, object]:
-    return {
-        **_run_summary(run),
-        "caseId": run.case_id,
-        "attempt": run.attempt,
-        "heartbeatAt": run.heartbeat_at.isoformat(),
-        "lockTarget": run.lock_target,
-        "lockedBy": run.lock_owner,
-        "outcome": run.outcome,
-        "cancelReason": run.cancel_reason,
-        "sideEffects": run.side_effects,
-        "steps": [step.to_dict() for step in run.steps],
-    }
+    # Same shape the enriched SSE events embed under "run" (runs.models).
+    return run_snapshot(run)
 
 
 def _sse_event(payload: dict[str, object]) -> str:

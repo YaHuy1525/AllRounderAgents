@@ -1,4 +1,4 @@
-export const DEFAULT_AGENT_MODEL = "openrouter/nex-agi/nex-n2.5-pro:free" as const;
+export const DEFAULT_AGENT_MODEL = "openrouter/deepseek/deepseek-v4-flash" as const;
 
 /**
  * Router id only: @mastra/core's provider registry pins OpenRouter's base URL

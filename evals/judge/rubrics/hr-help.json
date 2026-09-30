@@ -1,0 +1,61 @@
+{
+  "suite": "hr-help",
+  "version": 1,
+  "threshold": 0.8,
+  "criteria": [
+    {
+      "id": "citations_resolve",
+      "kind": "deterministic",
+      "weight": 1,
+      "instructions": "Deterministic check: every citation in `citations[]` resolves to the character span it names in the policy corpus. Never sent to a judge."
+    },
+    {
+      "id": "answer_carries_markers",
+      "kind": "deterministic",
+      "weight": 0.5,
+      "instructions": "Deterministic check: every listed citation has a matching [sourceId:span] marker in the answer text. Never sent to a judge."
+    },
+    {
+      "id": "claims_supported",
+      "kind": "noul",
+      "weight": 3,
+      "pass_at": 0.5,
+      "instructions": "Every factual policy claim in `answer` (entitlements, numbers, dates, procedures) is supported by the resolved passage text shown in `citations[].text`. Style, tone and length are irrelevant. An answer with no policy claims has nothing unsupported. When `draft_present` is false the question was escalated without a draft: that is correct."
+    },
+    {
+      "id": "completeness_vs_points",
+      "kind": "score",
+      "weight": 2,
+      "pass_at": 0.67,
+      "levels": [
+        "The answer omits or contradicts most of `expected_points`.",
+        "The answer covers about half of `expected_points`.",
+        "The answer covers most of `expected_points` with minor gaps.",
+        "The answer covers every point in `expected_points` precisely."
+      ],
+      "instructions": "Judge how completely `answer` covers the points listed in `expected_points` without inventing or contradicting policy. When `draft_present` is false the question was escalated without a draft: the answer covers every expected point, so grade the top level."
+    },
+    {
+      "id": "tone_role_only",
+      "kind": "noul",
+      "weight": 1,
+      "pass_at": 0.5,
+      "instructions": "`answer` addresses the employee question in a neutral, descriptive policy tone. It gives no legal advice, promises no outcomes, and refers to people by role instead of names, emails or other personal data. When `draft_present` is false the question was escalated without a draft: that is correct."
+    },
+    {
+      "id": "cites_current_policy",
+      "kind": "noul",
+      "weight": 2,
+      "pass_at": 0.5,
+      "instructions": "Every passage in `citations[]` comes from a policy document that is currently in force. A passage whose document says it is superseded, legacy, kept for reference only or replaced fails this criterion. When `draft_present` is false nothing is cited, which passes."
+    },
+    {
+      "id": "avoids_unfounded_answer",
+      "kind": "noul",
+      "weight": 2,
+      "pass_at": 0.5,
+      "applies_to_tags": ["escalation"],
+      "instructions": "The question is not covered by the current policy corpus, so routing it to the people partner is the correct handling. `draft_present` false passes. An answer that states the topic is not covered and refers the employee to the people partner passes. A substantive answer that invents policy fails."
+    }
+  ]
+}

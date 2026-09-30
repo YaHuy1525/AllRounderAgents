@@ -33,6 +33,14 @@ spec:
               value: "4111"
             - name: MASTRA_HOST
               value: 0.0.0.0
+            # In-cluster API Service: the MSP draft step grounds through
+            # POST /knowledge/search and the bills lane checks senders via
+            # POST /msp/vendors/lookup, both with the KNOWLEDGE_SERVICE_TOKEN
+            # secret that bootstrap-secrets.ps1 ships into allrounder-secrets.
+            # The XERO_* keys ride along via envFrom (config: tenant id and
+            # account code, secret: client id and secret).
+            - name: KNOWLEDGE_API_URL
+              value: http://api:8000
           startupProbe:
             tcpSocket:
               port: http

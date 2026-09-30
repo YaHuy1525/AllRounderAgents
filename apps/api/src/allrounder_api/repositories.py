@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from psycopg import AsyncConnection
+from psycopg.errors import ForeignKeyViolation
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
@@ -188,6 +189,45 @@ class GithubAccountRecord:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+@dataclass
+class MspConnectionRecord:
+    """Per-tenant MSP connection settings (Console -> Settings -> MSP)."""
+
+    tenant_id: str
+    inbound_domain: str
+    display_name: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
+class MspClientRecord:
+    """One registered client ref of an MSP tenant (mailbox -> desk mapping)."""
+
+    tenant_id: str
+    client_ref: str
+    display_name: str = ""
+    contact_email: str = ""
+    desk_project: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
+class MspVendorRecord:
+    """One registered vendor of an MSP tenant (bills lane lookup + bank compare)."""
+
+    tenant_id: str
+    vendor_ref: str
+    name: str = ""
+    emails: list[str] = field(default_factory=list)
+    account_name: str = ""
+    bsb: str = ""
+    account_number: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
 class CaseRepository(Protocol):
     async def create(self, case: CaseRecord) -> CaseRecord: ...
     async def append_event(
@@ -236,6 +276,22 @@ class GithubAccountRepository(Protocol):
     async def create(self, account: GithubAccountRecord) -> GithubAccountRecord: ...
     async def delete(self, account_id: str, tenant_id: str) -> None: ...
     async def set_default(self, account_id: str, tenant_id: str) -> GithubAccountRecord: ...
+
+
+class MspConnectionsRepository(Protocol):
+    async def get_connection(self, tenant_id: str) -> MspConnectionRecord: ...
+    async def upsert_connection(
+        self, connection: MspConnectionRecord
+    ) -> MspConnectionRecord: ...
+    async def list_clients(self, tenant_id: str) -> list[MspClientRecord]: ...
+    async def upsert_client(self, client: MspClientRecord) -> MspClientRecord: ...
+    async def delete_client(self, tenant_id: str, client_ref: str) -> None: ...
+    async def list_vendors(self, tenant_id: str) -> list[MspVendorRecord]: ...
+    async def upsert_vendor(self, vendor: MspVendorRecord) -> MspVendorRecord: ...
+    async def delete_vendor(self, tenant_id: str, vendor_ref: str) -> None: ...
+    async def find_vendor_by_email(
+        self, tenant_id: str, email: str
+    ) -> MspVendorRecord | None: ...
 
 
 class InMemoryCaseRepository:
@@ -442,6 +498,93 @@ class InMemoryGithubAccountRepository:
         return deepcopy(self._accounts[account_id])
 
 
+class InMemoryMspConnectionsRepository:
+    def __init__(self) -> None:
+        self._connections: dict[str, MspConnectionRecord] = {}
+        self._clients: dict[tuple[str, str], MspClientRecord] = {}
+        self._vendors: dict[tuple[str, str], MspVendorRecord] = {}
+
+    async def get_connection(self, tenant_id: str) -> MspConnectionRecord:
+        record = self._connections.get(tenant_id)
+        if record is None:
+            raise KeyError("MSP connection not found")
+        return deepcopy(record)
+
+    async def upsert_connection(
+        self, connection: MspConnectionRecord
+    ) -> MspConnectionRecord:
+        safe = deepcopy(connection)
+        existing = self._connections.get(connection.tenant_id)
+        if existing is not None:
+            safe.created_at = existing.created_at
+        safe.updated_at = datetime.now(UTC)
+        self._connections[safe.tenant_id] = safe
+        return deepcopy(safe)
+
+    async def list_clients(self, tenant_id: str) -> list[MspClientRecord]:
+        rows = [
+            deepcopy(item)
+            for (owner, _), item in self._clients.items()
+            if owner == tenant_id
+        ]
+        rows.sort(key=lambda item: item.client_ref)
+        return rows
+
+    async def upsert_client(self, client: MspClientRecord) -> MspClientRecord:
+        # Mirrors the msp_clients -> msp_connections foreign key.
+        if client.tenant_id not in self._connections:
+            raise KeyError("MSP connection not found")
+        safe = deepcopy(client)
+        existing = self._clients.get((client.tenant_id, client.client_ref))
+        if existing is not None:
+            safe.created_at = existing.created_at
+        safe.updated_at = datetime.now(UTC)
+        self._clients[(safe.tenant_id, safe.client_ref)] = safe
+        return deepcopy(safe)
+
+    async def delete_client(self, tenant_id: str, client_ref: str) -> None:
+        if (tenant_id, client_ref) not in self._clients:
+            raise KeyError("MSP client not found")
+        del self._clients[(tenant_id, client_ref)]
+
+    async def list_vendors(self, tenant_id: str) -> list[MspVendorRecord]:
+        rows = [
+            deepcopy(item)
+            for (owner, _), item in self._vendors.items()
+            if owner == tenant_id
+        ]
+        rows.sort(key=lambda item: item.vendor_ref)
+        return rows
+
+    async def upsert_vendor(self, vendor: MspVendorRecord) -> MspVendorRecord:
+        # Mirrors the msp_vendors -> msp_connections foreign key.
+        if vendor.tenant_id not in self._connections:
+            raise KeyError("MSP connection not found")
+        safe = deepcopy(vendor)
+        existing = self._vendors.get((vendor.tenant_id, vendor.vendor_ref))
+        if existing is not None:
+            safe.created_at = existing.created_at
+        safe.updated_at = datetime.now(UTC)
+        self._vendors[(safe.tenant_id, safe.vendor_ref)] = safe
+        return deepcopy(safe)
+
+    async def delete_vendor(self, tenant_id: str, vendor_ref: str) -> None:
+        if (tenant_id, vendor_ref) not in self._vendors:
+            raise KeyError("MSP vendor not found")
+        del self._vendors[(tenant_id, vendor_ref)]
+
+    async def find_vendor_by_email(
+        self, tenant_id: str, email: str
+    ) -> MspVendorRecord | None:
+        wanted = email.strip().lower()
+        for (owner, _), item in self._vendors.items():
+            if owner != tenant_id:
+                continue
+            if any(candidate.strip().lower() == wanted for candidate in item.emails):
+                return deepcopy(item)
+        return None
+
+
 class PostgresRepositories:
     """Parameterized async repositories over the Supabase direct Postgres URL."""
 
@@ -490,13 +633,18 @@ class PostgresRepositories:
         if not isinstance(cost, int) or isinstance(cost, bool) or cost < 0:
             raise ValueError("costUsdMicro must be a non-negative integer")
         async with self.pool.connection() as connection, connection.transaction():
-            await connection.execute(
-                """
-                insert into public.case_events (case_id, actor, kind, payload, cost_usd_micro)
-                values (%s, %s, %s, %s::jsonb, %s)
-                """,
-                (case_id, actor, kind, json.dumps(safe), cost),
-            )
+            try:
+                await connection.execute(
+                    """
+                    insert into public.case_events (case_id, actor, kind, payload, cost_usd_micro)
+                    values (%s, %s, %s, %s::jsonb, %s)
+                    """,
+                    (case_id, actor, kind, json.dumps(safe), cost),
+                )
+            except ForeignKeyViolation as error:
+                # Same contract as the in-memory repo: a missing case raises
+                # KeyError so callers log and skip instead of failing the run.
+                raise KeyError("Case not found") from error
             await connection.execute(
                 """
                 update public.cases
@@ -717,6 +865,211 @@ class PostgresRepositories:
             )
         return await self.get_github_account(account_id, tenant_id)
 
+    async def get_msp_connection(self, tenant_id: str) -> MspConnectionRecord:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, inbound_domain, display_name, created_at, updated_at
+                from public.msp_connections
+                where tenant_id = %s
+                """,
+                (tenant_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("MSP connection not found")
+        return _msp_connection_from_row(row)
+
+    async def upsert_msp_connection(
+        self, record: MspConnectionRecord
+    ) -> MspConnectionRecord:
+        async with self.pool.connection() as connection:
+            await connection.execute(
+                """
+                insert into public.msp_connections
+                  (tenant_id, inbound_domain, display_name, created_at, updated_at)
+                values (%s, %s, %s, %s, now())
+                on conflict (tenant_id) do update
+                set inbound_domain = excluded.inbound_domain,
+                    display_name = excluded.display_name,
+                    updated_at = now()
+                """,
+                (
+                    record.tenant_id,
+                    record.inbound_domain,
+                    record.display_name,
+                    record.created_at,
+                ),
+            )
+        return await self.get_msp_connection(record.tenant_id)
+
+    async def list_msp_clients(self, tenant_id: str) -> list[MspClientRecord]:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, client_ref, display_name, contact_email, desk_project,
+                       created_at, updated_at
+                from public.msp_clients
+                where tenant_id = %s
+                order by client_ref
+                """,
+                (tenant_id,),
+            )
+            rows = await cursor.fetchall()
+        return [_msp_client_from_row(row) for row in rows]
+
+    async def upsert_msp_client(self, record: MspClientRecord) -> MspClientRecord:
+        async with self.pool.connection() as connection:
+            try:
+                await connection.execute(
+                    """
+                    insert into public.msp_clients
+                      (tenant_id, client_ref, display_name, contact_email,
+                       desk_project, created_at, updated_at)
+                    values (%s, %s, %s, %s, %s, %s, now())
+                    on conflict (tenant_id, client_ref) do update
+                    set display_name = excluded.display_name,
+                        contact_email = excluded.contact_email,
+                        desk_project = excluded.desk_project,
+                        updated_at = now()
+                    """,
+                    (
+                        record.tenant_id,
+                        record.client_ref,
+                        record.display_name,
+                        record.contact_email,
+                        record.desk_project,
+                        record.created_at,
+                    ),
+                )
+            except ForeignKeyViolation as error:
+                raise KeyError("MSP connection not found") from error
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, client_ref, display_name, contact_email, desk_project,
+                       created_at, updated_at
+                from public.msp_clients
+                where tenant_id = %s and client_ref = %s
+                """,
+                (record.tenant_id, record.client_ref),
+            )
+            row = await cursor.fetchone()
+        if row is None:  # pragma: no cover - the write above just happened
+            raise KeyError("MSP client not found")
+        return _msp_client_from_row(row)
+
+    async def delete_msp_client(self, tenant_id: str, client_ref: str) -> None:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                delete from public.msp_clients
+                where tenant_id = %s and client_ref = %s
+                returning client_ref
+                """,
+                (tenant_id, client_ref),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("MSP client not found")
+
+    async def list_msp_vendors(self, tenant_id: str) -> list[MspVendorRecord]:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, vendor_ref, name, emails, account_name, bsb,
+                       account_number, created_at, updated_at
+                from public.msp_vendors
+                where tenant_id = %s
+                order by vendor_ref
+                """,
+                (tenant_id,),
+            )
+            rows = await cursor.fetchall()
+        return [_msp_vendor_from_row(row) for row in rows]
+
+    async def upsert_msp_vendor(self, record: MspVendorRecord) -> MspVendorRecord:
+        async with self.pool.connection() as connection:
+            try:
+                await connection.execute(
+                    """
+                    insert into public.msp_vendors
+                      (tenant_id, vendor_ref, name, emails, account_name, bsb,
+                       account_number, created_at, updated_at)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, now())
+                    on conflict (tenant_id, vendor_ref) do update
+                    set name = excluded.name,
+                        emails = excluded.emails,
+                        account_name = excluded.account_name,
+                        bsb = excluded.bsb,
+                        account_number = excluded.account_number,
+                        updated_at = now()
+                    """,
+                    (
+                        record.tenant_id,
+                        record.vendor_ref,
+                        record.name,
+                        record.emails,
+                        record.account_name,
+                        record.bsb,
+                        record.account_number,
+                        record.created_at,
+                    ),
+                )
+            except ForeignKeyViolation as error:
+                raise KeyError("MSP connection not found") from error
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, vendor_ref, name, emails, account_name, bsb,
+                       account_number, created_at, updated_at
+                from public.msp_vendors
+                where tenant_id = %s and vendor_ref = %s
+                """,
+                (record.tenant_id, record.vendor_ref),
+            )
+            row = await cursor.fetchone()
+        if row is None:  # pragma: no cover - the write above just happened
+            raise KeyError("MSP vendor not found")
+        return _msp_vendor_from_row(row)
+
+    async def delete_msp_vendor(self, tenant_id: str, vendor_ref: str) -> None:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                delete from public.msp_vendors
+                where tenant_id = %s and vendor_ref = %s
+                returning vendor_ref
+                """,
+                (tenant_id, vendor_ref),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("MSP vendor not found")
+
+    async def find_msp_vendor_by_email(
+        self, tenant_id: str, email: str
+    ) -> MspVendorRecord | None:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, vendor_ref, name, emails, account_name, bsb,
+                       account_number, created_at, updated_at
+                from public.msp_vendors
+                where tenant_id = %s
+                  and exists (
+                      select 1 from unnest(emails) as candidate
+                      where lower(candidate) = lower(%s)
+                  )
+                limit 1
+                """,
+                (tenant_id, email),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return _msp_vendor_from_row(row)
+
 
 class PostgresCaseRepository:
     def __init__(self, database: PostgresRepositories) -> None:
@@ -914,6 +1267,64 @@ class PostgresGithubAccountRepository:
 
     async def set_default(self, account_id: str, tenant_id: str) -> GithubAccountRecord:
         return await self._database.set_default_github_account(account_id, tenant_id)
+
+
+class PostgresMspConnectionsRepository:
+    def __init__(self, database: PostgresRepositories) -> None:
+        self._database = database
+
+    async def get_connection(self, tenant_id: str) -> MspConnectionRecord:
+        return await self._database.get_msp_connection(tenant_id)
+
+    async def upsert_connection(
+        self, connection: MspConnectionRecord
+    ) -> MspConnectionRecord:
+        return await self._database.upsert_msp_connection(connection)
+
+    async def list_clients(self, tenant_id: str) -> list[MspClientRecord]:
+        return await self._database.list_msp_clients(tenant_id)
+
+    async def upsert_client(self, client: MspClientRecord) -> MspClientRecord:
+        return await self._database.upsert_msp_client(client)
+
+    async def delete_client(self, tenant_id: str, client_ref: str) -> None:
+        await self._database.delete_msp_client(tenant_id, client_ref)
+
+
+def _msp_connection_from_row(row: dict[str, Any]) -> MspConnectionRecord:
+    return MspConnectionRecord(
+        tenant_id=str(row["tenant_id"]),
+        inbound_domain=str(row["inbound_domain"]),
+        display_name=str(row["display_name"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _msp_client_from_row(row: dict[str, Any]) -> MspClientRecord:
+    return MspClientRecord(
+        tenant_id=str(row["tenant_id"]),
+        client_ref=str(row["client_ref"]),
+        display_name=str(row["display_name"]),
+        contact_email=str(row["contact_email"]),
+        desk_project=str(row["desk_project"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _msp_vendor_from_row(row: dict[str, Any]) -> MspVendorRecord:
+    return MspVendorRecord(
+        tenant_id=str(row["tenant_id"]),
+        vendor_ref=str(row["vendor_ref"]),
+        name=str(row["name"]),
+        emails=[str(candidate) for candidate in row["emails"]],
+        account_name=str(row["account_name"]),
+        bsb=str(row["bsb"]),
+        account_number=str(row["account_number"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
 
 
 def _github_account_from_row(row: dict[str, Any]) -> GithubAccountRecord:

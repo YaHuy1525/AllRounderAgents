@@ -1,0 +1,17 @@
+{
+  "name": "senior-frontend",
+  "displayName": "Senior Frontend",
+  "version": "0.1.0",
+  "description": "Frontend development skill for modern React, Next.js, TypeScript, and Tailwind CSS apps: component scaffolding, performance optimization, bundle analysis, and UI best practices.",
+  "descriptionZh": "面向 React、Next.js、TypeScript 与 Tailwind CSS 的现代前端开发技能：组件脚手架、性能优化、打包分析与 UI 最佳实践。",
+  "author": {
+    "name": "davila7"
+  },
+  "homepage": "https://app.aitmpl.com/component/skill/development/senior-frontend",
+  "repository": "https://github.com/davila7/claude-code-templates",
+  "logo": "./assets/avatar.svg",
+  "keywords": ["qoder-plugin", "skill", "frontend", "react", "nextjs", "tailwind"],
+  "category": "developer-tools",
+  "tags": ["skill"],
+  "skills": "./skills/"
+}

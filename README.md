@@ -47,8 +47,8 @@ apps/
                         (Rovo MCP + REST), Supabase persistence
   approval-ui/          Next.js (App Router) console, statically exported (out/):
                         Jira board + approval queue + per-run workflow panel
-src/mastra/             Mastra agent plane: agents (36 across 17 lanes, incl. the HR,
-                        vendors and security lanes), flows (incl. the review and
+src/mastra/             Mastra agent plane: agents (37 across 18 lanes, incl. the MSP,
+                        HR, vendors and security lanes), flows (incl. the review and
                         issues lanes), GitHub MCP/REST tools, dev host instance
                         (instance.ts)
 contracts/jsonschema/   Canonical Pydantic JSON Schemas: ticket, risk-score,
@@ -56,10 +56,17 @@ contracts/jsonschema/   Canonical Pydantic JSON Schemas: ticket, risk-score,
 policy/                 Versioned governance policy: risk.yaml (thresholds, per-domain
                         floors, sensitive markers, cross-domain spawn rule) and
                         tools.yaml (the tool permission matrix)
-supabase/migrations/    10 ordered SQL migrations: foundation → phase 3 finance →
+supabase/migrations/    14 ordered SQL migrations: foundation → phase 3 finance →
                         chat feedback → runs (run registry + steps, RLS forced) →
-                        GitHub accounts → hybrid KB retrieval
+                        GitHub accounts → run archive → hybrid KB retrieval →
+                        text case ids → MSP connections/clients → MSP knowledge
+                        partitions
 fixtures/               Shared payloads used by Python and TypeScript parity tests
+fixtures/agentcompany/  Pinned TheAgentCompany import: 18 personas, 13 projects,
+                        175 task artifact bundles (scripts/import-agentcompany.mjs),
+                        plus a services harvest (ownCloud documents, RocketChat
+                        workspace, GitLab issues/MRs/wikis) extracted offline from
+                        the prebuilt service images (scripts/harvest-agentcompany-services.mjs)
 evals/                  Golden cases: dispatcher routing (scripts/golden-eval.py,
                         CI gate) and HR lane deterministic engines (replayed by
                         src/mastra/agents/hr/lane-evals.test.ts)
@@ -85,7 +92,7 @@ gate → close with evidence — and differs only in agents, tools, and gate cal
 | Finance | `glAgent`, `treasuryAgent`, `taxAgent`, `auditAgent` | Ledger/bank reconciliation → exception RCA → specialist findings → audit pack → approval-gated sandbox posting. | Shipped — `financeFlow` always registered |
 | Support | `supportResearcherAgent`, `supportDrafterAgent` | Cited pgvector retrieval → draft → approval station → send with a signed single-use receipt. | Shipped |
 | Marketing | `marketingResearcherAgent`, `marketingDrafterAgent`, `brandGuardrailAgent` | Brief research, drafting, brand-guardrail checks, contracts defined. | Agents scaffolded; workflow not yet wired |
-| PR Review | `reviewReviewerAgent` | PR picker → review options → AI verdict, strengths, improvements and inline comments → posted-review receipt; follow-ups re-review deltas only. | Shipped — `reviewFlow` registers when GitHub policy + `GITHUB_TOKEN` are set |
+| PR Review | `reviewReviewerAgent` | PR picker → review options → AI verdict, strengths, improvements and inline comments → posted-review receipt; PRs authored by the token's own account post as comment reviews (GitHub rejects self-approval); follow-ups re-review deltas only. | Shipped — `reviewFlow` registers when GitHub policy + `GITHUB_TOKEN` are set |
 | Issue Resolution | `issueAnalystAgent`, `issueEngineerAgent` | Bug-ticket selection → similar-updates callout and affected-files analysis with a regression-test cross-link → guarded patch with validators and a single repair pass → Draft PR, ticket transition and case record. | Shipped — `issuesFlow` registers when GitHub policy + `GITHUB_TOKEN` are set |
 | Feature Implementation | `featurePlannerAgent`, `featureEngineerAgent` | Feature-ticket chips with an acceptance-criteria checklist → scope & design cards (UI / API & Data / State & Logic / Tests / Docs & Flags) with guidance → planned changes with diffs, cross-cutting notes, verdict and validators → Draft PR with per-criterion coverage and the PR Review cross-link. | Shipped — `featuresFlow` registers when GitHub policy + `GITHUB_TOKEN` are set |
 | Leave | `leaveAdvisorAgent` | Leave intake → deterministic policy check (working days, balance, coverage, blackout, notice) → manager approval → idempotent calendar booking + payroll export row. | Shipped — `leaveFlow` always registered |
@@ -94,9 +101,11 @@ gate → close with evidence — and differs only in agents, tools, and gate cal
 | Screening | `hrGuardrailAgent` | Requisition rubric (weighted criteria, must-haves) → per-candidate verdicts with citations → guardrail review for protected-attribute and non-rubric language → shortlist → idempotent interview invites. | Shipped — `screeningFlow` always registered |
 | HR Help | `hrHelpDrafterAgent`, `hrHelpGuardrailAgent` | Question intake → fixture policy retrieval with citations (sourceId + span, stale flag, score) → cited answer draft → people-partner approval → idempotent send with receipt. | Shipped — `hrHelpFlow` always registered |
 | Security (SOC) | `alertTriageAgent`, `investigationAgent`, `containmentAdvisorAgent`, `reportingAgent` | SOC alert pipeline: ingest with dedupe + provenance → deterministic triage (weighted signal rules, ATT&CK mapping, prompt-injection flags) → investigation with cited claims and resolved indicators → risk-scored disposition (`requiresHuman` on refuses) → signer-matrix approval → idempotent containment receipt (stable `SEC-…` id; replay returns the original). | Shipped — `securityFlow` always registered (fixture seams; case history upgrades to Mastra Memory with `DATABASE_URL`) |
+| MSP (client email ops) | `mspDrafterAgent` (the draft step is the lane's only model call) | Client email in (`POST /intake/email`) → desk ticket → cited draft reply from the client's knowledge partition, with the escalation ladder (empty retrieval, stale evidence, unsupported claims) → console approval with a signed receipt → reply from the MSP mailbox, idempotent per action hash → per-client per-month audit pack (JSON + PDF). | Shipped — `mspFlow` always registered; the desk, mailbox and knowledge seams degrade to in-memory sandboxes when unconfigured |
+| Bills (vendor invoice ops) | `billExtractorAgent` (the extract step is the lane's only model call) | Vendor invoice email in (`POST /intake/vendor-email`) → cited extraction with the escalation ladder (empty extraction, missing fields, unverified vendor, changed bank details) → vendor registry lookup with bank-detail comparison → bookkeeper approval with a signed receipt → Xero `ACCPAY` bill created as `DRAFT` only, idempotent per `ledgerKey`, posting receipt with the Xero bill id. | Shipped. `billsFlow` always registered. The Xero ledger and vendor registry degrade to in-memory sandboxes when unconfigured |
 
 The Mastra dev host (`src/mastra/instance.ts`) always registers `financeFlow`, `vendorsFlow`,
-`securityFlow` and the five HR lanes (`leaveFlow`, `onboardingFlow`, `offboardingFlow`,
+`securityFlow`, `mspFlow`, `billsFlow` and the five HR lanes (`leaveFlow`, `onboardingFlow`, `offboardingFlow`,
 `screeningFlow`, `hrHelpFlow`); `codingFlow`, `reviewFlow`, `issuesFlow`, `featuresFlow`,
 `dependenciesFlow` and `accessibilityFlow` register only when the `GITHUB_*` policy env block
 is present (coding also needs MCP or REST credentials), and coding uses the GitHub MCP backend
@@ -118,6 +127,31 @@ implementation, not the flows or the artifacts. For HR Help the documented upgra
 to swap the fixture retriever for the existing pgvector knowledge store under an `hr`
 domain; the citation discipline (`sourceId` + `span`, stale flag, score) already matches
 the support lane's contract.
+
+### Simulated company dataset
+
+`fixtures/agentcompany/` imports TheAgentCompany (CMU, MIT licensed) at a pinned
+commit as a second simulated company: 18 personas, 13 project repos, and 175
+bundles whose `files/` folders carry the originals' spreadsheets, CSVs and notes.
+`scripts/import-agentcompany.mjs` rebuilds the dataset byte for byte (blobs are
+cached under `node_modules/.cache`; `--from-cache` rebuilds offline and
+`MANIFEST.json` pins the upstream commit plus a sha256 per file), and
+`tasks/catalog.json` maps every task to a role and a lane so finance, HR and dev
+work items can all run against one coherent company.
+
+`fixtures/agentcompany/services/` adds the service data those tasks reference:
+ownCloud documents, the RocketChat workspace (35 rooms, 18 accounts, 19 Sotopia
+personas) and the GitLab instance (14 projects, 26,771 issues, 40,502 merge
+requests, 107 wiki pages). `scripts/harvest-agentcompany-services.mjs` extracts
+it offline: the ownCloud and RocketChat data come from `docker cp` plus a
+mongo restore of the baked dump, and the GitLab data comes from downloading only
+the `COPY . /assets` image layer (4.18 GiB, chunked and sha256-verified) and
+unpacking the project export tarballs. No service is ever booted, no credentials
+are needed, and `services/HARVEST.json` pins the image digests and a sha256 per
+extracted file. Plane ships as 1184-byte placeholder stubs in the public image,
+so it is documented as unavailable; repository bundles, project uploads and
+issue/MR notes or diffs stay out (size), and issue/MR descriptions are capped at
+800 characters. Both scripts are offline-idempotent and re-runnable.
 
 ### Security lane (SOC)
 
@@ -180,6 +214,7 @@ test failure, and a threshold change is a policy-version bump.
 | `support.send` | approval | `support:send` | draft hash |
 | `finance.post` | approval | `finance:post` | ledger key |
 | `run.side-effect` | approval | `{workflow}:{step}` (e.g. `security:contain`) | action hash |
+| `auditpack.export` | auto | `audit-packs` | pack key |
 | `jira.read` · `github.read` · `knowledge.retrieve` | read-only | project / repo allowlist / KB domains | — |
 
 The matrix suite asserts every transport write maps to a matrix entry, every
@@ -272,10 +307,14 @@ Supabase Postgres connection string), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY
 `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`, `WEBHOOK_SECRET`,
 `APPROVAL_HMAC_SECRET` (≥ 32 random bytes, stable across restarts), `REDIS_URL`,
 `CORS_ALLOW_ORIGINS` (exact-origin JSON list; wildcards unsupported),
-`TRUSTED_PROXY_IPS`, `RATE_LIMIT_PER_MINUTE`, `POLICY_DIR` (optional policy override;
+`TRUSTED_PROXY_IPS`, `RATE_LIMIT_PER_MINUTE` plus `RATE_LIMIT_WINDOW_SECONDS` /
+`RATE_LIMIT_MAX_TRACKED_KEYS`, `POLICY_DIR` (optional policy override;
 empty resolves the repo-root `policy/`), the `JIRA_*` / `ATLASSIAN_MCP_URL` /
 `JIRA_CLOUD_ID` block, `MODEL_*`, `OPENROUTER_API_KEY`, `EMBEDDING_MODEL`,
-`EMBEDDING_DIMENSIONS=1536`, and the `GITHUB_*` block.
+`EMBEDDING_DIMENSIONS=1536`, the `RETRIEVAL_*` tuning block (`RETRIEVAL_RRF_K`,
+`RETRIEVAL_RECALL_K`, `RETRIEVAL_RERANK_MODEL`, `RETRIEVAL_TENANT_OVERRIDES` as
+JSON), the `MAIL_FROM` / `MAIL_OUTBOX_DIR` mailbox seam, the
+`KNOWLEDGE_SERVICE_TOKEN` / `KNOWLEDGE_API_URL` pair, and the `GITHUB_*` block.
 
 **Browser-safe** (only these three): `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`,
 `VITE_API_URL`. `next.config.ts` bridges them to `NEXT_PUBLIC_SUPABASE_URL`,
@@ -286,6 +325,12 @@ key.
 `MODEL_NAME`, `MODEL_BASE_URL`, `EMBEDDING_MODEL`, and `EMBEDDING_DIMENSIONS=1536` pin
 provider behavior and the migration's vector shape; keep them unchanged until a deliberate
 re-embedding migration.
+
+The MSP reply draft grounds through the API's `POST /knowledge/search`, guarded by
+`KNOWLEDGE_SERVICE_TOKEN` (the route stays unmounted without it); the Mastra host calls
+it at `KNOWLEDGE_API_URL` (compose overrides the localhost default with the in-network
+address). With the pair unset, drafts carry no retrieval and every draft escalates for a
+human edit instead of failing.
 
 ## Apply Supabase migrations
 
@@ -298,8 +343,11 @@ supabase db push
 The migrations create the Foundation/Phase 0 webhook queue and audit tables, Phase 1
 support + RAG (pgvector knowledge store), Phase 2 tenant-scoped coding runs (RCA evidence,
 patch manifests, Draft PR receipts, durable idempotency), hardening, Phase 3 finance
-(runs, audit packs, postings), and the parallel-safe run registry
-(`202609120008_runs.sql`: `runs` + `run_steps`, RLS forced, no browser grants). Every
+(runs, audit packs, postings), the parallel-safe run registry
+(`202609120008_runs.sql`: `runs` + `run_steps`, RLS forced, no browser grants), and the
+MSP connection/client registry (`202609300012_msp_connections.sql`) with the per-client
+knowledge partitions (`202610010013_kb_msp_domain.sql` widens the `kb_documents` domain
+check to accept `msp:<clientRef>` alongside the phase-1 domains). Every
 table has RLS enabled and forced; the API connects server-side.
 
 In Supabase Auth, assign authorization only in signed `app_metadata`, for example
@@ -312,6 +360,9 @@ Seed guidance: ingest versioned support docs and redacted resolved tickets throu
 Retrieval is hybrid: pgvector cosine fused with the generated `content_tsv` lexical
 arm through reciprocal rank fusion, with an optional Cohere `rerank-v3.5` rerank;
 a reranker outage degrades to the fused order (`rerank_degraded`) rather than failing.
+Tuning defaults come from `RETRIEVAL_RRF_K` / `RETRIEVAL_RECALL_K` and the reranker
+model follows `RETRIEVAL_RERANK_MODEL`; teams can change them per tenant through
+`RETRIEVAL_TENANT_OVERRIDES` (`{"tenant-a":{"recall_k":50}}`) without a redeploy.
 
 ## Jira credentials + seed
 
@@ -419,9 +470,12 @@ ingress/load-balancer IPs whose `X-Forwarded-For` the API may trust.
 
 ## API surface
 
-All endpoints below `/approvals`, `/coding`, `/finance`, `/runs`, `/jira`, and `/chat` require a
-Supabase bearer token with tenant roles from signed `app_metadata`; `/health` and
-`/metrics` stay unauthenticated. The API adds security headers, per-IP rate limiting
+All endpoints below `/approvals`, `/coding`, `/finance`, `/runs`, `/jira`, `/chat`,
+`/intake`, and `/msp` require a Supabase bearer token with tenant roles from signed
+`app_metadata`; `/health` and `/metrics` stay unauthenticated. `POST /knowledge/search`
+is service-to-service: it mounts only when `KNOWLEDGE_SERVICE_TOKEN` is set, rejects
+any other bearer, and answers an empty scope with empty passages rather than an error.
+The API adds security headers, per-IP rate limiting
 (Redis fixed window in production, in-process sliding window otherwise; a JSON `429` body
 plus a `Retry-After` header in seconds when exceeded), and no-store caching. Outbound
 Jira, MCP, and model calls retry transient
@@ -455,6 +509,14 @@ failures (transport errors and HTTP 429/5xx) with full-jitter backoff and honor
 | GET | `/tickets/{ticket_key}/status` | Ticket state across lanes |
 | POST | `/support/drafts/start` | Start a cited support draft |
 | POST | `/support/send` | Send only with a signed single-use receipt |
+| POST | `/intake/email` | Email intake front door: normalizes one inbound mail, derives the client ref from the recipient local part and a deterministic ticket key, writes the case first, then starts the MSP run (parks at step one; a replayed delivery returns `deduped`) |
+| POST | `/intake/vendor-email` | Vendor invoice front door for the bills lane: derives the vendor ref from the sender domain and a deterministic `BILL-` ticket key, writes the bill case first, then starts the bills run (parks at step one; a replayed delivery returns `deduped`) |
+| GET · PUT | `/msp/connections` | MSP connection settings: the tenant's inbound domain (the console equivalent of `scripts/msp-onboard.py`) |
+| POST · DELETE | `/msp/clients` · `/msp/clients/{clientRef}` | Register (idempotent) or remove one client ref with its desk project mapping |
+| GET · POST · DELETE | `/msp/vendors` · `/msp/vendors/{vendorRef}` | Vendor registry for the bills lane: list, upsert (idempotent by ref, emails normalized) and remove |
+| POST | `/msp/vendors/lookup` | Service-only vendor lookup for the bills extract step (`tenantId`, `email`); only the `KNOWLEDGE_SERVICE_TOKEN` bearer is accepted, and the route is unmounted unless that token is set |
+| GET | `/msp/audit-pack` | Per-client per-month audit pack built from the immutable trail (`clientRef`, `month`, `format=json|pdf`) |
+| POST | `/knowledge/search` | Service-to-service retrieval for the MSP draft step (`tenantId`, `domain`, `query`, `k`); only the `KNOWLEDGE_SERVICE_TOKEN` bearer is accepted |
 
 There is no direct arbitrary patch/posting endpoint: coding and finance actions are
 started as runs and only execute through their gates.
@@ -484,7 +546,7 @@ npx vitest run src/mastra
 
 ## Docker
 
-The Compose stack runs the FastAPI service, the static UI, Redis, and an ops pair:
+The Compose stack runs the Mastra host (all workflows + agents), the FastAPI service, the static UI, Redis, and an ops pair:
 Prometheus (~15 s scrape of `api:8000/metrics`) and Grafana with a provisioned
 datasource plus the **AllRounder chat and API health** dashboard (`chat-stream`, including
 the security row: triage verdicts, escalate rate, injection-flag rate and containment
@@ -499,13 +561,14 @@ docker compose ps
 ```
 
 Open the UI at `http://localhost:3000`, the health endpoint at
-`http://localhost:8000/health`, Prometheus at `http://localhost:9090`, and Grafana at
-`http://localhost:3001` (admin login from `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`,
-defaulting to `admin` / `admin` for local use). The UI image receives only the
-browser-safe `NEXT_PUBLIC_*` build arguments (mapped from the root `VITE_*` values in
-`compose.yaml`); backend secrets remain in the API container at runtime. Stop with
-`docker compose down`; add `--volumes` only when you intentionally want to delete Redis,
-Prometheus, or Grafana state.
+`http://localhost:8000/health`, the Mastra API at `http://localhost:4111` (the API
+container reaches it inside the Compose network at `http://mastra:4111`), Prometheus at
+`http://localhost:9090`, and Grafana at `http://localhost:3001` (admin login from
+`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`, defaulting to `admin` / `admin` for
+local use). The UI image receives only the browser-safe `NEXT_PUBLIC_*` build arguments
+(mapped from the root `VITE_*` values in `compose.yaml`); backend secrets remain in the
+API and Mastra containers at runtime. Stop with `docker compose down`; add `--volumes`
+only when you intentionally want to delete Redis, Prometheus, or Grafana state.
 
 ### Launching your first workflow run
 
@@ -518,10 +581,12 @@ before dispatching, so no manual seeding is needed. To launch one locally:
    `approver`, or `admin`; starting runs needs `agent`/`admin`) and a `tenant_id` listed
    in `JIRA_TENANT_PROJECT_ALLOWLIST` — the board and run endpoints authorize from the
    signed JWT only.
-2. Run the Mastra host on the same machine (`npm run dev:mastra`) and point the API
-   container at it in `.env` (`MASTRA_BASE_URL=http://host.docker.internal:4111`), then
-   `docker compose up -d api` — without a reachable Mastra host, starting a run cannot
-   dispatch.
+2. The Compose stack starts the Mastra host itself (the `mastra` service built from
+   `Dockerfile.mastra`): `compose.yaml` overrides the API container's
+   `MASTRA_BASE_URL` to `http://mastra:4111`, so no host process is required. For
+   host-side API development, run `npm run dev:mastra` and use the `.env` value
+   (`MASTRA_BASE_URL=http://host.docker.internal:4111`) — without a reachable Mastra
+   host, starting a run cannot dispatch.
 3. Open a ticket and start the run: pick a workflow from the card, fill the inputs, and
    **Start run** — the run suspends at step one and the action bar
    (Back / Edit / Regenerate / Proceed / Abort) drives every checkpoint with a signed
@@ -565,6 +630,62 @@ Jira (`JIRA_*` configured), the same flow runs from a real SUP ticket with `cras
 `stack trace` in its text; `jira.create-ticket` in the permission matrix keeps it
 correlation-id idempotent and `test_governance.py` pins the whole matrix.
 
+### MSP client email and bills pilot path
+
+The M1 to M4 walk, from a fresh tenant to the weekly written report and a receipted
+Xero draft bill. Full detail lives in the [pilot playbook](docs/AllRounderAgent_MSP_Pilot_Playbook_20261001.md),
+the [tenant runbook](docs/AllRounderAgent_MSP_Tenant_Runbook_20260930.md) and the
+[bills lane guide](docs/AllRounderAgent_MSP_Bills_Lane_Guide_20261001.md):
+
+```powershell
+# 1. Wire the tenant, its one pilot client and its first vendor
+#    (Settings -> MSP connection edits the same rows)
+python scripts/msp-onboard.py --tenant mspco --domain in.mspco.example `
+    --client acme --client-name "Acme Support" --client-project ACME `
+    --vendor acmepower --vendor-name "Acme Power Pty Ltd" `
+    --vendor-email billing@acmepower.example --vendor-bsb 012-345 `
+    --vendor-account-number 12345678
+
+# 2. Seed the client runbook into its own msp:acme knowledge partition
+#    (requires the KNOWLEDGE_SERVICE_TOKEN / KNOWLEDGE_API_URL pair, see Configure)
+python scripts/msp-kb-seed.py --tenant mspco --client acme `
+    --file .\runbooks\acme-runbook.md --query "vpn drops"
+
+# 3. Prove the lane: one email in through POST /intake/email, then walk or auto-run it
+python scripts/msp-demo.py --client acme --token $env:MSP_TOKEN
+python scripts/msp-demo.py --client acme --token $env:MSP_TOKEN --auto --fresh
+
+# 4. The weekly written report, built from the same trail the audit pack exports
+python scripts/msp-report.py --tenant mspco --client acme --week last `
+    --out .\reports\msp-week-3.md
+
+# 5. The bills lane: a vendor invoice in, a Xero draft bill out behind an approval
+#    (the XERO_* triple from Configure points it at a real org, otherwise the
+#    memory ledger stands in and the posting receipt says so)
+python scripts/msp-invoice.py --vendor "Acme Power Pty Ltd" --number 4417 --amount 220.00
+python scripts/msp-bill-demo.py --vendor acmepower --token $env:MSP_TOKEN
+python scripts/msp-bill-demo.py --vendor acmepower --token $env:MSP_TOKEN --auto --fresh
+```
+
+Every forwarded email files a case plus a deterministic `MSP-` ticket and parks the run
+at `intake`. The draft step grounds through `POST /knowledge/search` in the client's own
+partition and escalates (`empty_retrieval`, `stale_evidence`, `unsupported_claim`,
+`empty_draft`) rather than guessing. The approved reply is staged as a ready-to-send
+`.eml` in `MAIL_OUTBOX_DIR`, the seed script's `--query` probe proves retrieval before a
+pilot starts, and the weekly report exits non-zero whenever a send lacks a verified
+receipt so the zero-unapproved-sends bar is machine checked, not eyeballed.
+
+Every forwarded vendor invoice files a `bill-<vendorRef>-` case plus a deterministic
+`BILL-` ticket and parks the bills run at `intake` (`intake → extract → approve →
+post`). The extract step reconciles the invoice against the vendor registry
+(`msp_vendors`) and escalates `bank_details_changed` whenever a stated BSB or account
+number disagrees with the registered one, alongside `empty_extraction`, `missing_fields`
+and `vendor_unverified`. Nothing auto-posts: the post step needs an approved receipt and
+writes a Xero `ACCPAY` bill as `DRAFT` only, idempotent per `ledgerKey`. The vendor
+lookup is service-token guarded and degrades to a null answer, which escalates rather
+than guesses. The [bills lane guide](docs/AllRounderAgent_MSP_Bills_Lane_Guide_20261001.md)
+covers the wiring, the escalation handling and the second-MSP delta.
+
 ## Load testing & evals
 
 Chat load tests use k6 (`scripts/loadtest/k6-chat.js`, see the
@@ -603,6 +724,16 @@ YARA text, IOC lists — must pass untouched). All three replay through
   prerequisites, §13 the third-party call register with the GitHub/Jira trade-offs.
 - `AllRounderAgent_SOC_Lane_Plan_20260917.md` — the security/SOC lane: engines,
   contracts, guardrails, corpora, and the S0–S4 phase plan with the demo path.
+- `AllRounderAgent_MSP_Ops_Startup_Plan_20260930.md` — the MSP track: positioning,
+  pricing, the desk seam, the M1–M5 build plan and the decision gates.
+- `AllRounderAgent_MSP_Tenant_Runbook_20260930.md` — wire a fresh MSP tenant to a
+  downloaded audit pack in under 2 hours (scripts, forwarder, console checks).
+- `AllRounderAgent_MSP_Pilot_Playbook_20261001.md` — the two week live pilot:
+  knowledge seam switch, daily review rhythm, weekly written report, and the
+  definition-of-done tracker for 50 plus emails and zero unapproved sends.
+- `AllRounderAgent_MSP_Bills_Lane_Guide_20261001.md` — the bills lane (M4): vendor
+  registry, bank-detail change detection, the approval receipt and the Xero
+  draft-bill boundary, plus the second-MSP onboarding delta and its tracker.
 
 ## Status & known limits
 
@@ -649,5 +780,26 @@ YARA text, IOC lists — must pass untouched). All three replay through
   deterministic cross-domain spawn (support → linked bug with evidence,
   `test_spawn.py`), and the read-only defaults audit. The dispatcher contains no magic
   numbers — thresholds change by policy-version bump.
+- The MSP client email lane (plan: `docs/AllRounderAgent_MSP_Ops_Startup_Plan_20260930.md`)
+  is shipped through the M3 pilot bar: `POST /intake/email` files a case plus a
+  deterministic `MSP-` ticket and parks the run at `intake` (`intake → ticket → draft →
+  approve → send`), the draft grounds on the client's own `msp:<clientRef>` knowledge
+  partition through the token-guarded `POST /knowledge/search` (`scripts/msp-kb-seed.py`
+  seeds it, and the domain migration `202610010013` allows the partition), drafts
+  escalate rather than guess, replies stage as `.eml` files in the outbox (SMTP/Graph is
+  a later milestone), the weekly report (`scripts/msp-report.py`) re-verifies receipts
+  from the same trail the per-client monthly audit pack exports, and regenerate
+  decisions are recorded without counting as failed receipts. Live drafting needs a real
+  model key and the `KNOWLEDGE_*` pair; unconfigured, the lane degrades to sandboxes and
+  escalated drafts instead of failing.
+- The MSP bills lane (M4 of the same plan) is shipped: `POST /intake/vendor-email`
+  files a `bill-` case plus a deterministic `BILL-` ticket and parks the run at
+  `intake` (`intake → extract → approve → post`), the extract step reconciles the
+  invoice against the vendor registry (`msp_vendors`, migration `202610010014`)
+  and escalates `bank_details_changed` when a stated bank detail disagrees with the
+  registered one, and the post step writes a Xero `ACCPAY` bill as `DRAFT` only
+  behind a signed receipt, idempotent per `ledgerKey`. `xero.read` and `xero.post`
+  are declared and pinned by `test_governance.py`. Unconfigured, the ledger degrades
+  to an in-memory sandbox and nothing reaches Xero.
 - Board listing always uses read-only REST (Rovo MCP exposes no agile-board tools);
   legacy `JIRA_TRANSPORT=http` and `GITHUB_ACCESS=rest` fallbacks remain tested options.

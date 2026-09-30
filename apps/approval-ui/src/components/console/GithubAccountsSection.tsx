@@ -10,6 +10,9 @@ import {
   setDefaultGithubAccount,
   type GithubAccount,
 } from "@/lib/runs";
+import { ACCOUNT_HINT } from "@/lib/roles";
+
+import { IconGitBranch, IconLock } from "./icons";
 
 function accountErrorCopy(error: unknown): string {
   if (error instanceof ApiError) {
@@ -31,7 +34,7 @@ function accountErrorCopy(error: unknown): string {
  * stores them and lists return a hint, so changing a token means removing
  * and re-adding the account.
  */
-export function GithubAccountsSection() {
+export function GithubAccountsSection({ canManage = true }: { canManage?: boolean }) {
   const [accounts, setAccounts] = useState<GithubAccount[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [label, setLabel] = useState("");
@@ -65,6 +68,7 @@ export function GithubAccountsSection() {
 
   async function create(event: FormEvent): Promise<void> {
     event.preventDefault();
+    if (!canManage) return;
     setError(null);
     setNotice(null);
     if (label.trim().length === 0) {
@@ -126,15 +130,29 @@ export function GithubAccountsSection() {
 
   return (
     <section className="settings-section" id="github-accounts-section">
-      <header>
-        <h3>GitHub accounts</h3>
-        <p>
-          Register the GitHub identities runs may act as. Tokens are stored server-side and never
-          leave it — the list shows only a hint. Start cards preselect the default account.
-        </p>
+      <header className="settings-head">
+        <span className="settings-head-icon" aria-hidden="true">
+          <IconGitBranch />
+        </span>
+        <div>
+          <h3>GitHub accounts</h3>
+          <p>
+            Register the GitHub identities runs may act as. Tokens are stored server-side and never
+            leave it — the list shows only a hint. Start cards preselect the default account.
+          </p>
+        </div>
       </header>
+      {!canManage && (
+        <p className="role-hint" role="note">
+          <IconLock />
+          {ACCOUNT_HINT}
+        </p>
+      )}
       {accounts === null ? (
-        <p className="step-summary">Loading accounts…</p>
+        <p className="settings-loading">
+          <span className="spinner" aria-hidden="true" />
+          Loading accounts…
+        </p>
       ) : accounts.length === 0 ? (
         <p className="step-summary">
           {loadFailed
@@ -157,11 +175,21 @@ export function GithubAccountsSection() {
               </div>
               <div className="github-account-actions">
                 {!account.isDefault && (
-                  <button type="button" disabled={busy} onClick={() => void makeDefault(account)}>
+                  <button
+                    type="button"
+                    disabled={busy || !canManage}
+                    title={canManage ? undefined : ACCOUNT_HINT}
+                    onClick={() => void makeDefault(account)}
+                  >
                     Make default
                   </button>
                 )}
-                <button type="button" disabled={busy} onClick={() => void remove(account)}>
+                <button
+                  type="button"
+                  disabled={busy || !canManage}
+                  title={canManage ? undefined : ACCOUNT_HINT}
+                  onClick={() => void remove(account)}
+                >
                   Remove
                 </button>
               </div>
@@ -208,18 +236,23 @@ export function GithubAccountsSection() {
           </small>
         </label>
         <div className="settings-actions">
-          <button type="submit" disabled={busy}>
+          <button
+            type="submit"
+            disabled={busy || !canManage}
+            title={canManage ? undefined : ACCOUNT_HINT}
+          >
+            {busy && <span className="spinner on-solid" aria-hidden="true" />}
             {busy ? "Saving…" : "Add account"}
           </button>
         </div>
       </form>
       {notice !== null && (
-        <p className="step-summary" role="status">
+        <p className="settings-status ok" role="status">
           {notice}
         </p>
       )}
       {error !== null && (
-        <p className="run-action-error" role="alert">
+        <p className="settings-status error" role="alert">
           {error}
         </p>
       )}

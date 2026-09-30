@@ -15,6 +15,7 @@ from redis import Redis
 from .models import TERMINAL_RUN_STATUSES, WorkflowRun
 
 _TENANT_INDEX_CAP = 200
+_HISTORY_CAP = 500
 
 
 class RunRegistry(Protocol):
@@ -25,6 +26,7 @@ class RunRegistry(Protocol):
         self, ticket_key: str, tenant_id: str, limit: int = 50
     ) -> list[WorkflowRun]: ...
     async def list_active(self) -> list[WorkflowRun]: ...
+    async def list_recent(self, tenant_id: str, limit: int = 50) -> list[WorkflowRun]: ...
 
 
 def _clone(run: WorkflowRun) -> WorkflowRun:
@@ -70,6 +72,11 @@ class InMemoryRunRegistry:
             if run.status not in TERMINAL_RUN_STATUSES
         ]
 
+    async def list_recent(self, tenant_id: str, limit: int = 50) -> list[WorkflowRun]:
+        runs = [run for run in self._runs.values() if run.tenant_id == tenant_id]
+        runs.sort(key=lambda run: run.started_at, reverse=True)
+        return [_clone(run) for run in runs[:limit]]
+
 
 class RedisRunRegistry:
     """JSON-blob registry. Reads/writes are small and single-key scoped."""
@@ -87,6 +94,9 @@ class RedisRunRegistry:
     def _active_key(self) -> str:
         return "allrounder:runs:active"
 
+    def _history_key(self, tenant_id: str) -> str:
+        return f"allrounder:runs:history:{tenant_id}"
+
     async def save(self, run: WorkflowRun) -> None:
         payload = json.dumps(run.to_dict(), separators=(",", ":"))
         with self._client.pipeline() as pipe:
@@ -96,6 +106,11 @@ class RedisRunRegistry:
             pipe.lpush(index, run.run_id)
             pipe.ltrim(index, 0, _TENANT_INDEX_CAP - 1)
             pipe.expire(index, self._ttl)
+            history = self._history_key(run.tenant_id)
+            pipe.lrem(history, 0, run.run_id)
+            pipe.lpush(history, run.run_id)
+            pipe.ltrim(history, 0, _HISTORY_CAP - 1)
+            pipe.expire(history, self._ttl)
             if run.status in TERMINAL_RUN_STATUSES:
                 pipe.srem(self._active_key(), run.run_id)
             else:
@@ -141,6 +156,18 @@ class RedisRunRegistry:
             run = WorkflowRun.from_dict(_loads(raw))
             if run.status not in TERMINAL_RUN_STATUSES:
                 runs.append(run)
+        return runs
+
+    async def list_recent(self, tenant_id: str, limit: int = 50) -> list[WorkflowRun]:
+        ids = cast(
+            "list[bytes]",
+            self._client.lrange(self._history_key(tenant_id), 0, limit - 1),
+        )
+        runs = []
+        for raw_id in ids:
+            raw = cast("bytes | str | None", self._client.get(self._key(_text(raw_id))))
+            if raw is not None:
+                runs.append(WorkflowRun.from_dict(_loads(raw)))
         return runs
 
 

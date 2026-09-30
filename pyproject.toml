@@ -18,6 +18,8 @@ dependencies = [
   "pydantic-settings>=2.7,<3",
   "PyYAML>=6.0,<7",
   "redis>=5.2,<6",
+  # Audit pack PDF rendering (allrounder_api.audit_pack).
+  "reportlab>=4.2,<6",
   "structlog>=25.1,<26",
   "uvicorn>=0.34,<1",
 ]
@@ -30,6 +32,9 @@ dev = [
   "pytest-cov>=6,<7",
   "ruff>=0.9,<1",
   "types-PyYAML>=6.0,<7",
+  # Judge-based eval harness only (scripts/judge-eval.py). The API runtime
+  # never imports it: judging.py loads the SDK lazily inside JevJudge.
+  "typesafe-sdk>=0.7,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -52,6 +57,10 @@ show_missing = true
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# qoder-plugins holds vendored third-party plugin packages (scripts copied
+# verbatim from their upstream sources). They are not part of the API package
+# and are kept byte-faithful, so they stay outside the lint surface.
+extend-exclude = ["qoder-plugins"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
@@ -62,3 +71,7 @@ strict = true
 packages = ["allrounder_api"]
 explicit_package_bases = true
 mypy_path = ["apps/api/src"]
+
+[[tool.mypy.overrides]]
+module = ["typesafe_sdk", "typesafe_sdk.*", "reportlab", "reportlab.*"]
+ignore_missing_imports = true

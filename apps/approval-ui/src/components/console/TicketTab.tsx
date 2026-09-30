@@ -19,10 +19,21 @@ import {
   type TicketStatus,
 } from "@/lib/cases";
 import type { Approval } from "@/lib/models";
+import { DECIDE_HINT } from "@/lib/roles";
 import { listRuns, type RunDetail, type RunSummary } from "@/lib/runs";
 
-import { IconCode } from "./icons";
-import { RunPanel, StartRunCard } from "./RunPanel";
+import {
+  IconCheck,
+  IconCode,
+  IconClose,
+  IconExternalLink,
+  IconLock,
+  IconXCircle,
+} from "./icons";
+import { JsonView } from "./JsonView";
+import { PayloadView } from "./PayloadView";
+import { RunInspector } from "./RunInspector";
+import { StartRunCard, StepRail } from "./RunPanel";
 
 type CaseState =
   | { status: "loading" }
@@ -43,6 +54,14 @@ function formatTimestamp(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+/** Flags gates that expire within the half hour so their card can emphasize it. */
+function expirySoon(value: string): boolean {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const diff = date.getTime() - Date.now();
+  return diff > 0 && diff < 30 * 60 * 1000;
+}
+
 function EventPayload({ event }: { event: CaseEvent }) {
   return (
     <article className="step-event">
@@ -51,7 +70,9 @@ function EventPayload({ event }: { event: CaseEvent }) {
         <span className="event-actor">{event.actor}</span>
         <span className="event-time">{formatTimestamp(event.created_at)}</span>
       </header>
-      <pre className="event-payload">{JSON.stringify(event.payload, null, 2)}</pre>
+      <div className="event-payload">
+        <PayloadView value={event.payload} />
+      </div>
     </article>
   );
 }
@@ -66,10 +87,16 @@ export function TicketTab({
   issue,
   approvals,
   onDecide,
+  canDecide = true,
+  canStart = true,
 }: {
   issue: JiraIssue;
   approvals: Approval[];
   onDecide: (id: string, decision: "approved" | "rejected") => Promise<void>;
+  /** False disables the gate buttons; the server stays source of truth. */
+  canDecide?: boolean;
+  /** False disables the run launcher; the server stays source of truth. */
+  canStart?: boolean;
 }) {
   const [caseState, setCaseState] = useState<CaseState>({ status: "loading" });
   const [caseTick, setCaseTick] = useState(0);
@@ -205,6 +232,7 @@ export function TicketTab({
 
       {caseState.status === "loading" && (
         <p className="ticket-notice" role="status">
+          <span className="spinner" aria-hidden="true" />
           Loading the run record…
         </p>
       )}
@@ -220,7 +248,7 @@ export function TicketTab({
       )}
 
       {runs.length > 0 ? (
-        <RunPanel
+        <RunInspector
           issue={issue}
           runs={runs}
           debugOpen={debugOpen}
@@ -238,67 +266,55 @@ export function TicketTab({
                 void refreshRuns();
                 setCaseTick((tick) => tick + 1);
               }}
+              canStart={canStart}
             />
           )}
 
-          <div className="stepper-row">
-            <ol className="stepper" aria-label="Run steps">
-              {steps.map((step, index) => {
-                const state = states[index] ?? "future";
-                return (
-                  <li key={step.id} className={`step step-${state}`}>
-                    <button
-                      type="button"
-                      className="step-button"
-                      aria-expanded={activeStepId === step.id}
-                      onClick={() => focusStep(step)}
-                    >
-                      <span className="step-dot" aria-hidden="true">
-                        {state === "done" ? "✓" : index + 1}
-                      </span>
-                      <span className="step-label">
-                        {step.label}
-                        <span className="sr-only">{` — ${STEP_STATE_COPY[state]}`}</span>
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-            <button
-              type="button"
-              className="debug-toggle"
-              aria-expanded={debugOpen}
-              onClick={() => setDebugOpen((open) => !open)}
-            >
-              <IconCode />
-              <span>Debug Info</span>
-            </button>
-          </div>
+          <div className="run-workbench">
+            <div className="ticket-rail-col">
+              <StepRail
+                label="Run steps"
+                steps={steps.map((step, index) => ({
+                  id: step.id,
+                  title: step.label,
+                  state: states[index] ?? "future",
+                }))}
+                activeId={activeStepId}
+                onSelect={(id) => {
+                  const step = steps.find((item) => item.id === id);
+                  if (step !== undefined) focusStep(step);
+                }}
+              />
+              <button
+                type="button"
+                className="debug-toggle"
+                aria-expanded={debugOpen}
+                onClick={() => setDebugOpen((open) => !open)}
+              >
+                <IconCode />
+                <span>Debug Info</span>
+              </button>
+            </div>
 
-          <div className="step-panels">
             {activeStep === null ? null : (
               <section
-                className="step-panel expanded"
+                className="run-step-view anim-fade-up"
+                key={activeStep.id}
                 ref={(node) => {
                   if (node) panelRefs.current.set(activeStep.id, node);
                   else panelRefs.current.delete(activeStep.id);
                 }}
               >
-                <header>
-                  <button
-                    type="button"
-                    className="step-panel-toggle"
-                    aria-expanded
-                    onClick={() => focusStep(activeStep)}
-                  >
-                    <span className={`step-state state-${activeState}`}>
-                      {STEP_STATE_COPY[activeState]}
-                    </span>
-                    <h3>{activeStep.label}</h3>
-                  </button>
+                <header className="run-step-head">
+                  <span className={`step-state state-${activeState}`}>
+                    {STEP_STATE_COPY[activeState]}
+                  </span>
+                  <h3>{activeStep.label}</h3>
+                  <span className="run-step-meta">
+                    {`Step ${activeIndex + 1} of ${steps.length}`}
+                  </span>
                 </header>
-                <div className="step-panel-body">
+                <div className="run-step-body">
                   {activeStep.id === "input" && (
                     <dl className="ticket-facts">
                       {ticketFacts(issue).map((fact) => (
@@ -317,37 +333,84 @@ export function TicketTab({
                       ) : (
                         relatedApprovals.map((approval) => (
                           <article key={approval.id} className="gate-card">
-                            <p className="gate-meta">
-                              {`Scope ${approval.scope} · approver ${approval.approver} · expires ${formatTimestamp(approval.expiresAt)}`}
-                            </p>
-                            <pre className="event-payload">
-                              {JSON.stringify(approval.action, null, 2)}
-                            </pre>
+                            <header className="gate-card-head">
+                              <span
+                                className={`gate-status ${
+                                  approval.decision === null
+                                    ? "gate-pending"
+                                    : approval.decision === "approved"
+                                      ? "gate-approved"
+                                      : "gate-rejected"
+                                }`}
+                              >
+                                {approval.decision === null
+                                  ? "Pending"
+                                  : approval.decision === "approved"
+                                    ? "Approved"
+                                    : "Rejected"}
+                              </span>
+                              <div className="gate-meta">
+                                <span>{`Scope ${approval.scope}`}</span>
+                                <span>{`Approver ${approval.approver}`}</span>
+                                <span
+                                  className={
+                                    expirySoon(approval.expiresAt)
+                                      ? "gate-expiry soon"
+                                      : "gate-expiry"
+                                  }
+                                >
+                                  {`Expires ${formatTimestamp(approval.expiresAt)}`}
+                                </span>
+                              </div>
+                            </header>
+                            <div className="event-payload gate-action">
+                              <PayloadView value={approval.action} />
+                            </div>
                             <p className="gate-evidence">
-                              {`Evidence: ${
-                                approval.evidence
-                                  .map((item) => `${item.sourceId}:${item.span}`)
-                                  .join(", ") || "none"
-                              }`}
+                              <span className="gate-evidence-label">Evidence:</span>
+                              {approval.evidence.length === 0 ? (
+                                <span className="evidence-chip evidence-none">none</span>
+                              ) : (
+                                approval.evidence.map((item) => (
+                                  <span
+                                    key={`${item.sourceId}:${item.span}`}
+                                    className="evidence-chip" title={`${item.sourceId}:${item.span}`}
+                                  >
+                                    {`${item.sourceId}:${item.span}`}
+                                  </span>
+                                ))
+                              )}
                             </p>
                             {approval.decision === null ? (
-                              <div className="gate-actions">
-                                <button
-                                  type="button"
-                                  className="approve"
-                                  disabled={decidingId !== null}
-                                  onClick={() => void decide(approval.id, "approved")}
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={decidingId !== null}
-                                  onClick={() => void decide(approval.id, "rejected")}
-                                >
-                                  Reject
-                                </button>
-                              </div>
+                              <>
+                                <div className="gate-actions">
+                                  <button
+                                    type="button"
+                                    className="approve"
+                                    disabled={decidingId !== null || !canDecide}
+                                    title={canDecide ? undefined : DECIDE_HINT}
+                                    onClick={() => void decide(approval.id, "approved")}
+                                  >
+                                    <IconCheck />
+                                    <span>Approve</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={decidingId !== null || !canDecide}
+                                    title={canDecide ? undefined : DECIDE_HINT}
+                                    onClick={() => void decide(approval.id, "rejected")}
+                                  >
+                                    <IconXCircle />
+                                    <span>Reject</span>
+                                  </button>
+                                </div>
+                                {!canDecide && (
+                                  <p className="role-hint" role="note">
+                                    <IconLock />
+                                    {DECIDE_HINT}
+                                  </p>
+                                )}
+                              </>
                             ) : (
                               <strong className="gate-decision">
                                 {`Decision: ${approval.decision}${
@@ -378,7 +441,8 @@ export function TicketTab({
                       {resultLinks.map((link) => (
                         <li key={link}>
                           <a href={link} target="_blank" rel="noopener noreferrer">
-                            {link}
+                            <IconExternalLink />
+                            <span>{link}</span>
                           </a>
                         </li>
                       ))}
@@ -402,20 +466,17 @@ export function TicketTab({
           <header>
             <h3>Case and run JSON</h3>
             <button type="button" onClick={() => setDebugOpen(false)}>
-              Close
+              <IconClose />
+              <span>Close</span>
             </button>
           </header>
-          <pre>
-            {JSON.stringify(
-              {
-                case: record ?? { note: "No case record loaded for this ticket." },
-                runs,
-                activeRun,
-              },
-              null,
-              2,
-            )}
-          </pre>
+          <JsonView
+            value={{
+              case: record ?? { note: "No case record loaded for this ticket." },
+              runs,
+              activeRun,
+            }}
+          />
         </div>
       )}
     </section>

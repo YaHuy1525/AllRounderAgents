@@ -31,4 +31,26 @@ describe("ticket card rendering", () => {
     expect(html).toContain("ENG-9");
     expect(html).toContain("Details");
   });
+
+  it("renders platform chips as plain spans without a run handler", () => {
+    const html = renderToString(
+      <TicketCard issue={maliciousIssue} onOpenDetails={() => {}} platforms={["github", "okta"]} />,
+    );
+    expect(html).toContain("GitHub");
+    expect(html).toContain("Okta");
+    expect(html).not.toContain("ticket-platform-chip");
+  });
+
+  it("turns platform chips into run deep links when a handler is provided", () => {
+    const html = renderToString(
+      <TicketCard
+        issue={maliciousIssue}
+        onOpenDetails={() => {}}
+        platforms={["github"]}
+        onOpenRun={() => {}}
+      />,
+    );
+    expect(html).toContain("ticket-platform-chip");
+    expect(html).toContain("Open the latest run");
+  });
 });

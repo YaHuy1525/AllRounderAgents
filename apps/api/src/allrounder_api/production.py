@@ -12,7 +12,7 @@ from .finance_runs import PostgresFinanceRunRepository
 from .idempotency import RedisIdempotencyStore
 from .jira import HttpJiraTransport, JiraTools
 from .jira_mcp import McpJiraTransport
-from .knowledge import OpenAICompatibleAdapter
+from .knowledge import OpenAICompatibleAdapter, PostgresKnowledgeStore, RetrievalTuning
 from .metrics import MetricsRegistry
 from .persistence import PostgresTicketQueue, PsycopgExecutor
 from .rate_limit import RedisRateLimiter
@@ -24,7 +24,7 @@ from .repositories import (
     PostgresRepositories,
     PostgresSupportSendRepository,
 )
-from .runs import RunServiceConfig, build_redis_run_service
+from .runs import PostgresRunArchive, RunServiceConfig, build_redis_run_service
 from .settings import Settings
 
 
@@ -65,6 +65,7 @@ def create_production_app() -> FastAPI:
     redis_async_client = AsyncRedis.from_url(settings.redis_url)
     executor = PsycopgExecutor(database_url)
     repositories = PostgresRepositories(database_url)
+    run_archive = PostgresRunArchive(database_url)
     signer = ApprovalReceiptSigner(approval_secret.encode())
     metrics = MetricsRegistry()
     approval_repository = PostgresApprovalRepository(repositories)
@@ -97,6 +98,18 @@ def create_production_app() -> FastAPI:
             dimensions=settings.embedding_dimensions,
             chat_model=settings.model_name,
         )
+    knowledge_token = settings.knowledge_service_token.get_secret_value()
+    knowledge_store: PostgresKnowledgeStore | None = None
+    if knowledge_token and chat_completer is not None:
+        # The MSP draft step grounds through POST /knowledge/search. Both the
+        # token and an embedding provider are required: with either missing the
+        # route stays unmounted and live drafts escalate instead of failing.
+        knowledge_store = PostgresKnowledgeStore(
+            database_url,
+            chat_completer,
+            tuning=RetrievalTuning.from_settings(settings),
+            tenant_overrides=settings.retrieval_tenant_overrides,
+        )
     app = create_app(
         settings=settings,
         dedupe=RedisIdempotencyStore(redis_client),
@@ -121,13 +134,21 @@ def create_production_app() -> FastAPI:
         github_accounts=PostgresGithubAccountRepository(repositories),
         chat_completer=chat_completer,
         metrics=metrics,
-        rate_limiter=RedisRateLimiter(redis_client, settings.rate_limit_per_minute),
+        knowledge_retriever=knowledge_store,
+        knowledge_service_token=knowledge_token or None,
+        rate_limiter=RedisRateLimiter(
+            redis_client,
+            settings.rate_limit_per_minute,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_tracked_keys=settings.rate_limit_max_tracked_keys,
+        ),
         runs_service=build_redis_run_service(
             client=redis_client,
             events_client=redis_async_client,
             signer=signer,
             approvals=approval_repository,
             cases=case_repository,
+            archive=run_archive,
             mastra_base_url=settings.mastra_base_url,
             mastra_timeout_seconds=settings.mastra_request_timeout_seconds,
             max_concurrent=settings.runs_max_concurrent,
@@ -145,8 +166,13 @@ def create_production_app() -> FastAPI:
         ),
     )
     app.router.add_event_handler("startup", repositories.open)
+    app.router.add_event_handler("startup", run_archive.open)
+    if knowledge_store is not None:
+        app.router.add_event_handler("startup", knowledge_store.open)
+        app.router.add_event_handler("shutdown", knowledge_store.close)
     app.router.add_event_handler("shutdown", executor.close)
     app.router.add_event_handler("shutdown", repositories.close)
+    app.router.add_event_handler("shutdown", run_archive.close)
     app.router.add_event_handler("shutdown", jira_transport.close)
     app.router.add_event_handler("shutdown", redis_client.close)
     app.router.add_event_handler("shutdown", redis_async_client.aclose)

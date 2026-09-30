@@ -3,6 +3,8 @@ import type { Workspace } from "@/lib/models";
 import type { JiraPrefs, UiPrefs } from "@/lib/prefs";
 
 import { GithubAccountsSection } from "./GithubAccountsSection";
+import { MspConnectionsSection } from "./MspConnectionsSection";
+import { IconAlert, IconBoard, IconSettings } from "./icons";
 
 type SettingsViewProps = {
   workspace: Workspace;
@@ -14,6 +16,8 @@ type SettingsViewProps = {
   onProjectChange: (project: string) => void;
   onBoardChange: (boardId: string) => void;
   onUiChange: (patch: Partial<UiPrefs>) => void;
+  /** Role gate for server-mutating settings; the server stays source of truth. */
+  canManage?: boolean;
 };
 
 const REFRESH_OPTIONS = [
@@ -44,6 +48,7 @@ export function SettingsView({
   onProjectChange,
   onBoardChange,
   onUiChange,
+  canManage = true,
 }: SettingsViewProps) {
   const project = prefs.project || workspace.projects[0] || "";
   const boards = workspace.boards.filter((board) => board.project === project);
@@ -65,9 +70,14 @@ export function SettingsView({
       </div>
 
       <section className="settings-section">
-        <header>
-          <h3>App config</h3>
-          <p>Local preferences persist in this browser; the API base URL comes from the build environment.</p>
+        <header className="settings-head">
+          <span className="settings-head-icon" aria-hidden="true">
+            <IconSettings />
+          </span>
+          <div>
+            <h3>App config</h3>
+            <p>Local preferences persist in this browser; the API base URL comes from the build environment.</p>
+          </div>
         </header>
         <form
           id="settings-form"
@@ -158,12 +168,17 @@ export function SettingsView({
       </section>
 
       <section className="settings-section">
-        <header>
-          <h3>Lane config</h3>
-          <p>
-            Managed by server config — thresholds, allowlists and risk bands come from the API and
-            stay read-only here. The form is structured so a future PUT endpoint can bind to it.
-          </p>
+        <header className="settings-head">
+          <span className="settings-head-icon" aria-hidden="true">
+            <IconBoard />
+          </span>
+          <div>
+            <h3>Lane config</h3>
+            <p>
+              Managed by server config — thresholds, allowlists and risk bands come from the API and
+              stay read-only here. The form is structured so a future PUT endpoint can bind to it.
+            </p>
+          </div>
         </header>
         <div className="lane-config">
           {LANES.map((lane) => (
@@ -190,11 +205,18 @@ export function SettingsView({
         </div>
       </section>
 
-      <GithubAccountsSection />
+      <GithubAccountsSection canManage={canManage} />
+
+      <MspConnectionsSection canManage={canManage} />
 
       <section className="settings-section">
-        <header>
-          <h3>Notifications</h3>
+        <header className="settings-head">
+          <span className="settings-head-icon" aria-hidden="true">
+            <IconAlert />
+          </span>
+          <div>
+            <h3>Notifications</h3>
+          </div>
         </header>
         <label className="toggle-row" htmlFor="settings-badge">
           <input

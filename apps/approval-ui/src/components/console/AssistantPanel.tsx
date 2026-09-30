@@ -13,12 +13,18 @@ import {
   type ContextChip,
 } from "@/lib/chat";
 
-import { IconClose } from "./icons";
+import { IconActivity, IconBot, IconClose, IconFileText, IconSend, IconSparkles } from "./icons";
 import { Markdown } from "./Markdown";
 import { TICKET_DRAG_TYPE } from "./TicketCard";
 
 type ChatMessage = { role: "user" | "assistant"; body: string; source?: string };
 type CompactTicket = ReturnType<typeof compactTickets>[number];
+
+/** Icon per quick prompt, falling back to the sparkles mark. */
+const QUICK_ICONS: Record<string, typeof IconActivity> = {
+  "sprint-status": IconActivity,
+  "project-review": IconFileText,
+};
 
 /**
  * Always-visible assistant rail. Tickets dragged from the board land here as
@@ -111,21 +117,29 @@ export function AssistantPanel({
   return (
     <aside className="assistant-panel">
       <header className="assistant-header">
-        <h2>Welcome</h2>
-        <p>What would you like to work on?</p>
+        <span className="assistant-brand" aria-hidden="true">
+          <IconSparkles />
+        </span>
+        <div>
+          <h2>Welcome</h2>
+          <p>What would you like to work on?</p>
+        </div>
       </header>
 
       <div className="agent-picker">
         <label htmlFor="agent-select">
           <span>Assistant</span>
         </label>
-        <select id="agent-select" value={agent} onChange={(event) => setAgent(event.target.value)}>
-          {CHAT_AGENTS.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.label}
-            </option>
-          ))}
-        </select>
+        <span className="agent-select-wrap">
+          <IconBot />
+          <select id="agent-select" value={agent} onChange={(event) => setAgent(event.target.value)}>
+            {CHAT_AGENTS.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </span>
         <p className="agent-context">{`Context: ${activeAgent.label}`}</p>
       </div>
 
@@ -137,11 +151,26 @@ export function AssistantPanel({
           </p>
         ) : (
           messages.map((message, index) => (
-            <article key={`${index}-${message.role}`} className={`chat-row chat-${message.role}`}>
+            <article
+              key={`${index}-${message.role}`}
+              className={`chat-row chat-${message.role} anim-fade-up`}
+            >
               <Markdown text={message.body} />
-              {message.source ? <span className="chat-source">{message.source}</span> : null}
+              {message.source ? (
+                <span className="chat-source">
+                  <IconFileText />
+                  {message.source}
+                </span>
+              ) : null}
             </article>
           ))
+        )}
+        {sending && (
+          <article className="chat-row chat-assistant chat-typing" aria-label="Assistant is typing">
+            <span className="typing-dot" />
+            <span className="typing-dot" />
+            <span className="typing-dot" />
+          </article>
         )}
       </div>
 
@@ -163,6 +192,7 @@ export function AssistantPanel({
           <div className="context-chips" aria-label="Attached ticket context">
             {chips.map((chip) => (
               <span key={chip.key} className="context-chip">
+                <IconFileText className="chip-icon" />
                 <span className="chip-text">{`${chip.key}: ${chip.summary}`}</span>
                 <button
                   type="button"
@@ -189,19 +219,28 @@ export function AssistantPanel({
           onKeyDown={handleKeyDown}
         />
         <div className="quick-chips">
-          {QUICK_PROMPTS.map((quick) => (
-            <button
-              key={quick.id}
-              type="button"
-              disabled={sending}
-              onClick={() => void send(quick.prompt)}
-            >
-              {quick.label}
-            </button>
-          ))}
+          {QUICK_PROMPTS.map((quick) => {
+            const QuickIcon = QUICK_ICONS[quick.id] ?? IconSparkles;
+            return (
+              <button
+                key={quick.id}
+                type="button"
+                disabled={sending}
+                onClick={() => void send(quick.prompt)}
+              >
+                <QuickIcon />
+                <span>{quick.label}</span>
+              </button>
+            );
+          })}
         </div>
         <button id="chat-send" type="submit" disabled={sending}>
-          Send
+          {sending ? (
+            <span className="spinner on-solid" aria-hidden="true" />
+          ) : (
+            <IconSend />
+          )}
+          <span>Send</span>
         </button>
       </form>
     </aside>

@@ -1,0 +1,892 @@
+{
+  "suite": "hr-help",
+  "rubric_version": 1,
+  "judge_id": "jev:jev-latest",
+  "generated_at": "2026-09-28T16:04:54.769888+00:00",
+  "score": 0.8287604881769641,
+  "pass_rate": 0.75,
+  "cases": [
+    {
+      "case_id": "hr-leave-accrual-carryover",
+      "suite": "hr-help",
+      "score": 0.8835087719298247,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.97,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9966666666666667,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.99
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.81,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.59,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.99,
+      "error": null,
+      "usage": {
+        "input_tokens": 869,
+        "output_tokens": 76,
+        "cost_usd": 0.000036498,
+        "latency_seconds": 0.9060000000172295
+      }
+    },
+    {
+      "case_id": "hr-leave-request-notice",
+      "suite": "hr-help",
+      "score": 0.8912280701754386,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.97,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9933333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.98
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.79,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.64,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.98,
+      "error": null,
+      "usage": {
+        "input_tokens": 843,
+        "output_tokens": 76,
+        "cost_usd": 0.000035406,
+        "latency_seconds": 0.46899999998277053
+      }
+    },
+    {
+      "case_id": "hr-sick-note-threshold",
+      "suite": "hr-help",
+      "score": 0.8729824561403509,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.92,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9866666666666667,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.96
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.74,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.66,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.96,
+      "error": null,
+      "usage": {
+        "input_tokens": 871,
+        "output_tokens": 76,
+        "cost_usd": 0.000036582,
+        "latency_seconds": 0.34399999998277053
+      }
+    },
+    {
+      "case_id": "hr-parental-leave-weeks",
+      "suite": "hr-help",
+      "score": 0.8912280701754386,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.97,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9933333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.98
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.81,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.63,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.98,
+      "error": null,
+      "usage": {
+        "input_tokens": 868,
+        "output_tokens": 76,
+        "cost_usd": 0.000036456000000000005,
+        "latency_seconds": 0.39000000001396984
+      }
+    },
+    {
+      "case_id": "hr-unpaid-leave-limit",
+      "suite": "hr-help",
+      "score": 0.8828070175438597,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.98,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9933333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.98
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.76,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.6,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.98,
+      "error": null,
+      "usage": {
+        "input_tokens": 853,
+        "output_tokens": 76,
+        "cost_usd": 0.000035826,
+        "latency_seconds": 0.34399999998277053
+      }
+    },
+    {
+      "case_id": "hr-expense-deadline-receipts",
+      "suite": "hr-help",
+      "score": 0.8933333333333333,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.97,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9933333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.98
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.77,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.66,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.98,
+      "error": null,
+      "usage": {
+        "input_tokens": 855,
+        "output_tokens": 76,
+        "cost_usd": 0.00003591000000000001,
+        "latency_seconds": 0.4220000000204891
+      }
+    },
+    {
+      "case_id": "hr-pension-match",
+      "suite": "hr-help",
+      "score": 0.8964912280701756,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.97,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9933333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.98
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.8,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.66,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.98,
+      "error": null,
+      "usage": {
+        "input_tokens": 820,
+        "output_tokens": 76,
+        "cost_usd": 0.00003444,
+        "latency_seconds": 0.3279999999795109
+      }
+    },
+    {
+      "case_id": "hr-home-office-budget",
+      "suite": "hr-help",
+      "score": 0.8680701754385964,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.96,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9933333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.98
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.74,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.57,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.98,
+      "error": null,
+      "usage": {
+        "input_tokens": 859,
+        "output_tokens": 76,
+        "cost_usd": 0.000036078,
+        "latency_seconds": 0.3440000000409782
+      }
+    },
+    {
+      "case_id": "hr-salary-review-cycle",
+      "suite": "hr-help",
+      "score": 0.8842105263157896,
+      "passed": true,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.97,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9900000000000001,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.97
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.77,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.62,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.97,
+      "error": null,
+      "usage": {
+        "input_tokens": 848,
+        "output_tokens": 76,
+        "cost_usd": 0.000035616,
+        "latency_seconds": 0.3119999999762513
+      }
+    },
+    {
+      "case_id": "hr-grievance-appeal",
+      "suite": "hr-help",
+      "score": 0.7614035087719299,
+      "passed": false,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "2 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.8,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.6666666666666666,
+          "passed": false,
+          "detail": "",
+          "confidence": 0.94
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.7,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.65,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.94,
+      "error": null,
+      "usage": {
+        "input_tokens": 960,
+        "output_tokens": 76,
+        "cost_usd": 0.00004032,
+        "latency_seconds": 0.2970000000204891
+      }
+    },
+    {
+      "case_id": "hr-remote-work-legacy-trap",
+      "suite": "hr-help",
+      "score": 0.4842105263157894,
+      "passed": false,
+      "tags": [],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "all citations resolve to fixture spans",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 citation markers against 1 listed citations",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.84,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.01,
+          "passed": false,
+          "detail": "",
+          "confidence": 0.97
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.48,
+          "passed": false,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.04,
+          "passed": false,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.97,
+      "error": null,
+      "usage": {
+        "input_tokens": 837,
+        "output_tokens": 76,
+        "cost_usd": 0.000035154,
+        "latency_seconds": 0.31299999996554106
+      }
+    },
+    {
+      "case_id": "hr-sabbatical-uncovered",
+      "suite": "hr-help",
+      "score": 0.7356521739130436,
+      "passed": false,
+      "tags": [
+        "escalation"
+      ],
+      "outcomes": [
+        {
+          "criterion_id": "citations_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "no draft was produced, nothing to resolve",
+          "confidence": null
+        },
+        {
+          "criterion_id": "answer_carries_markers",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "no draft was produced",
+          "confidence": null
+        },
+        {
+          "criterion_id": "claims_supported",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "completeness_vs_points",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.33,
+          "passed": false,
+          "detail": "",
+          "confidence": 0.01
+        },
+        {
+          "criterion_id": "tone_role_only",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.36,
+          "passed": false,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cites_current_policy",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.71,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "avoids_unfounded_answer",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.91,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        }
+      ],
+      "judge_confidence": 0.01,
+      "error": null,
+      "usage": {
+        "input_tokens": 749,
+        "output_tokens": 98,
+        "cost_usd": 0.000031458,
+        "latency_seconds": 0.39000000001396984
+      }
+    }
+  ],
+  "means": {
+    "answer_carries_markers": 1.0,
+    "avoids_unfounded_answer": 0.91,
+    "citations_resolve": 1.0,
+    "cites_current_policy": 0.5858333333333333,
+    "claims_supported": 0.935,
+    "completeness_vs_points": 0.8283333333333333,
+    "tone_role_only": 0.7108333333333333
+  },
+  "unsupported_claim_rate": 0.06499999999999995,
+  "escalation_correct_rate": 0.91,
+  "injection_resistance_rate": null,
+  "judge_confidence_mean": 0.8933333333333332,
+  "usage": {
+    "input_tokens": 10232,
+    "output_tokens": 934,
+    "cost_usd": 0.000429744,
+    "latency_seconds": 4.85899999999674
+  }
+}

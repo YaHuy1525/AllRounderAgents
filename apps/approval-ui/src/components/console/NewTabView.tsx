@@ -3,8 +3,10 @@
 import { useMemo, useState } from "react";
 
 import type { JiraIssue } from "@/lib/board";
+import { START_RUN_HINT } from "@/lib/roles";
 import { RUNNABLE_WORKFLOWS, workflowsForTicket } from "@/lib/runs";
 
+import { IconLock, IconPlay, IconSearch } from "./icons";
 import { StartRunCard } from "./RunPanel";
 
 /**
@@ -16,10 +18,15 @@ export function NewTabView({
   issues,
   status,
   onOpenTicket,
+  initialWorkflowId,
+  canStart = true,
 }: {
   issues: JiraIssue[];
   status: string;
   onOpenTicket: (issue: JiraIssue) => void;
+  initialWorkflowId?: string;
+  /** False disables the run launcher; the server stays source of truth. */
+  canStart?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -45,6 +52,18 @@ export function NewTabView({
     return RUNNABLE_WORKFLOWS.filter((item) => ids.includes(item.id));
   }, [selected]);
 
+  // A "Start run" CTA opens this tab with its workflow preselected; the
+  // ticket's supported list wins when the two disagree.
+  const initialWorkflow = useMemo(() => {
+    if (
+      initialWorkflowId !== undefined &&
+      supported.some((item) => item.id === initialWorkflowId)
+    ) {
+      return initialWorkflowId;
+    }
+    return supported[0]?.id;
+  }, [supported, initialWorkflowId]);
+
   return (
     <section id="new-tab-view" className="panel-view new-tab-view">
       <div className="panel-heading">
@@ -55,6 +74,12 @@ export function NewTabView({
           the ticket tab and pauses at every checkpoint for your review.
         </p>
       </div>
+      {!canStart && (
+        <p className="role-hint" role="note">
+          <IconLock />
+          {START_RUN_HINT}
+        </p>
+      )}
 
       <div className="start-panel-grid">
         <section className="picker-pane" aria-label="Choose a ticket">
@@ -64,13 +89,16 @@ export function NewTabView({
           </header>
           <label className="search-field">
             <span>Search tickets</span>
-            <input
-              id="new-tab-search"
-              type="search"
-              placeholder="Key, title, type or label"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
+            <span className="search-input">
+              <IconSearch />
+              <input
+                id="new-tab-search"
+                type="search"
+                placeholder="Key, title, type or label"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </span>
           </label>
           <div className="ticket-list">
             {filtered.length === 0 ? (
@@ -109,18 +137,22 @@ export function NewTabView({
               <ul className="workflow-list">
                 {supported.map((item) => (
                   <li key={item.id} className="workflow-card">
-                    <h4>{item.label}</h4>
+                    <h4>
+                      <IconPlay />
+                      {item.label}
+                    </h4>
                     <p>{item.description}</p>
                   </li>
                 ))}
               </ul>
               <StartRunCard
-                key={selected.key}
+                key={`${selected.key}:${initialWorkflow ?? ""}`}
                 issue={selected}
                 caseId={null}
-                initialWorkflow={supported[0]?.id}
+                initialWorkflow={initialWorkflow}
                 workflowOptions={supported.map((item) => ({ id: item.id, label: item.label }))}
                 onStarted={() => onOpenTicket(selected)}
+                canStart={canStart}
               />
             </>
           )}

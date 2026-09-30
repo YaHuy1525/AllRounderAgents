@@ -7,16 +7,16 @@ import ipaddress
 import json
 import secrets
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 
 from .approvals import ApprovalReceiptSigner
-from .auth import BearerVerifier, FakeBearerVerifier
+from .auth import AuthenticationError, BearerVerifier, FakeBearerVerifier
 from .board_chat import ChatCompleter
 from .coding_runs import CodingRunRepository, InMemoryCodingRunRepository
 from .context import RequestContext
@@ -25,9 +25,9 @@ from .finance_runs import FinanceRunRepository, InMemoryFinanceRunRepository
 from .idempotency import IdempotencyStore, MemoryIdempotencyStore
 from .jira import FakeJiraTransport, JiraIssueReader, JiraTools
 from .logging import configure_logging, get_logger
-from .metrics import METRICS_CONTENT_TYPE, MetricsRegistry
+from .metrics import METRICS_CONTENT_TYPE, MetricsRegistry, empty_summary
 from .queueing import MemoryQueue, TicketQueue
-from .rate_limit import WINDOW_SECONDS, InMemoryRateLimiter, RateLimiter
+from .rate_limit import InMemoryRateLimiter, RateLimiter
 from .repositories import (
     ApprovalRepository,
     CaseRepository,
@@ -37,13 +37,23 @@ from .repositories import (
     InMemoryCaseRepository,
     InMemoryFeedbackRepository,
     InMemoryGithubAccountRepository,
+    InMemoryMspConnectionsRepository,
     InMemorySupportSendRepository,
+    MspConnectionsRepository,
     SupportSendRepository,
 )
-from .runs import RunService, RunServiceConfig, build_memory_run_service
+from .runs import WORKFLOW_DEFINITIONS, RunService, RunServiceConfig, build_memory_run_service
 from .runs.api import build_runs_router
 from .settings import Settings
 from .spawn import CrossDomainSpawner, SpawnPlan
+from .workflows import build_workflows_router
+
+if TYPE_CHECKING:
+    from .knowledge_api import KnowledgeRetriever
+
+# Roles allowed to read the JSON metrics summary; the raw /metrics exposition
+# stays unauthenticated for the Prometheus scraper.
+_METRICS_VIEW_ROLES = frozenset({"viewer", "approver", "agent", "admin"})
 
 
 def create_app(
@@ -69,6 +79,9 @@ def create_app(
     runs_service: RunService | None = None,
     github_client: httpx.AsyncClient | None = None,
     github_accounts: GithubAccountRepository | None = None,
+    msp_connections: MspConnectionsRepository | None = None,
+    knowledge_retriever: KnowledgeRetriever | None = None,
+    knowledge_service_token: str | None = None,
 ) -> FastAPI:
     config = settings or Settings()
     configure_logging(config.log_level)
@@ -87,7 +100,11 @@ def create_app(
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
-    limiter = rate_limiter or InMemoryRateLimiter(config.rate_limit_per_minute)
+    limiter = rate_limiter or InMemoryRateLimiter(
+        config.rate_limit_per_minute,
+        window_seconds=config.rate_limit_window_seconds,
+        max_tracked_keys=config.rate_limit_max_tracked_keys,
+    )
 
     @app.middleware("http")
     async def security_boundary(request: Request, call_next: Any) -> Any:
@@ -95,7 +112,7 @@ def create_app(
         key = _rate_limit_key(request, config.trusted_proxy_ips)
         if not limiter.allow(key):
             response = JSONResponse({"detail": "Too many requests"}, status_code=429)
-            response.headers["Retry-After"] = str(WINDOW_SECONDS)
+            response.headers["Retry-After"] = str(limiter.window_seconds)
         else:
             response = await call_next(request)
         if metrics is not None:
@@ -117,9 +134,12 @@ def create_app(
         )
         return response
 
+    from .audit_pack import AuditPackBuilder
     from .chat_api import build_chat_router
     from .github_api import build_github_router
+    from .intake_api import build_intake_router
     from .jira_board_api import build_jira_board_router
+    from .msp_api import build_msp_router
     from .phase1_api import build_phase1_router
     from .phase2_api import build_phase2_router
     from .phase3_api import build_phase3_router
@@ -200,7 +220,45 @@ def create_app(
         ),
         metrics=metrics,
     )
+    # Derived view over the durable trail only: the archive (union the live
+    # registry), the case ledger and the receipts bound to each decision.
+    audit_packs = AuditPackBuilder(
+        archive=run_service.archive,
+        registry=run_service.registry,
+        signer=signer,
+        cases=cases,
+        workflows=WORKFLOW_DEFINITIONS,
+    )
     app.include_router(build_runs_router(verifier=verifier, service=run_service))
+    app.include_router(
+        build_intake_router(
+            verifier=verifier,
+            service=run_service,
+            dedupe=dedupe_store,
+            dedupe_ttl_seconds=config.dedupe_ttl_seconds,
+            cases=cases,
+        )
+    )
+    app.include_router(
+        build_msp_router(
+            verifier=verifier,
+            connections=msp_connections or InMemoryMspConnectionsRepository(),
+            audit_packs=audit_packs,
+            service_token=knowledge_service_token,
+        )
+    )
+    if knowledge_retriever is not None and knowledge_service_token:
+        # Service-to-service retrieval for the Mastra host; mounted only when
+        # both the retriever and the shared token are configured.
+        from .knowledge_api import build_knowledge_router
+
+        app.include_router(
+            build_knowledge_router(
+                retriever=knowledge_retriever,
+                service_token=knowledge_service_token,
+            )
+        )
+    app.include_router(build_workflows_router(verifier=verifier))
     if config.runs_sweep_interval_seconds > 0:
         _schedule_run_sweeper(app, run_service, config.runs_sweep_interval_seconds)
 
@@ -212,6 +270,23 @@ def create_app(
     def metrics_exposition() -> Response:
         content = metrics.render() if metrics is not None else b""
         return Response(content, media_type=METRICS_CONTENT_TYPE)
+
+    @app.get("/metrics/summary")
+    async def metrics_summary(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, object]:
+        if authorization is None or not authorization.startswith("Bearer "):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+        try:
+            identity = await verifier.verify(authorization[7:])
+        except AuthenticationError as error:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials") from error
+        if identity.roles.isdisjoint(_METRICS_VIEW_ROLES):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Not authorized")
+        if metrics is None:
+            return empty_summary()
+        active = await run_service.list_active(identity.tenant_id)
+        return metrics.summary(active_statuses=[run.status for run in active])
 
     @app.post("/webhooks/jira")
     async def jira_webhook(request: Request) -> dict[str, str | bool]:

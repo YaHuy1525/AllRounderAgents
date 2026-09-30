@@ -1,0 +1,4 @@
+Score each criterion against the state. Reply with strict JSON only.
+For every criterion id return an object with a numeric `value` in 0 to 1.
+1 means the criterion fully holds, 0 means it clearly fails.
+Judge only the provided state. Do not reward length or style.

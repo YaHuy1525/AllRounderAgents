@@ -17,6 +17,8 @@ import {
 import { actorAgent, investigatorAgent, validatorAgent } from "./programming/agents/index.js";
 import { issueAnalystAgent, issueEngineerAgent } from "./issues/agents/index.js";
 import { hrHelpDrafterAgent, hrHelpGuardrailAgent } from "./hr-help/agents/index.js";
+import { mspDrafterAgent } from "./msp/agents/index.js";
+import { billExtractorAgent } from "./bills/agents/index.js";
 import { leaveAdvisorAgent } from "./leave/agents/index.js";
 import { offboardingAuditAgent } from "./offboarding/agents/index.js";
 import { onboardingRiskAgent, onboardingVerifierAgent } from "./onboarding/agents/index.js";
@@ -56,6 +58,8 @@ export function allRounderAgents() {
     screeningGuardrail: hrGuardrailAgent,
     hrHelpDrafter: hrHelpDrafterAgent,
     hrHelpGuardrail: hrHelpGuardrailAgent,
+    mspDrafter: mspDrafterAgent,
+    billsExtractor: billExtractorAgent,
     financeGl: glAgent,
     financeTreasury: treasuryAgent,
     financeTax: taxAgent,

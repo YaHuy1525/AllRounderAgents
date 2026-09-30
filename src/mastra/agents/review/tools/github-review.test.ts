@@ -149,6 +149,82 @@ describe("GitHubReviewTools", () => {
     expect(body.comments).toBeUndefined();
   });
 
+  it("downgrades approve to a comment review when the author is the token's own user", async () => {
+    const { transport, tools } = harness((_method, path) =>
+      path === "/user"
+        ? { status: 200, body: { login: "YaHuy1525" } }
+        : { status: 200, body: { id: 99, html_url: "u" } },
+    );
+    await tools.writer.postReview({
+      repository: "acme/app",
+      number: 7,
+      commitSha: "a".repeat(40),
+      verdict: "approve",
+      body: "Looks great",
+      comments: [],
+      author: "yahuy1525",
+    });
+    const review = transport.calls.find((call) => call.method === "POST");
+    const body = review?.body as Record<string, unknown>;
+    expect(body.event).toBe("COMMENT");
+    expect(String(body.body)).toContain("Looks great");
+    expect(String(body.body)).toContain("posted as a comment review");
+
+    await tools.writer.postReview({
+      repository: "acme/app",
+      number: 7,
+      commitSha: "a".repeat(40),
+      verdict: "approve",
+      body: "Again",
+      comments: [],
+      author: "YaHuy1525",
+    });
+    expect(transport.calls.filter((call) => call.path === "/user")).toHaveLength(1);
+  });
+
+  it("keeps the verdict event when the author differs from the token's user", async () => {
+    const { transport, tools } = harness((_method, path) =>
+      path === "/user"
+        ? { status: 200, body: { login: "reviewer-bot" } }
+        : { status: 200, body: { id: 99, html_url: "u" } },
+    );
+    await tools.writer.postReview({
+      repository: "acme/app",
+      number: 7,
+      commitSha: "a".repeat(40),
+      verdict: "approve",
+      body: "Looks great",
+      comments: [],
+      author: "dev",
+    });
+    const review = transport.calls.find((call) => call.method === "POST");
+    const body = review?.body as Record<string, unknown>;
+    expect(body.event).toBe("APPROVE");
+    expect(body.body).toBe("Looks great");
+  });
+
+  it("surfaces GitHub's rejection reason on failure", async () => {
+    const { tools } = harness(() => ({
+      status: 422,
+      body: {
+        message: "Unprocessable Entity",
+        errors: ["Can not approve your own pull request"],
+      },
+    }));
+    await expect(
+      tools.writer.postReview({
+        repository: "acme/app",
+        number: 7,
+        commitSha: "a".repeat(40),
+        verdict: "comment",
+        body: "b",
+        comments: [],
+      }),
+    ).rejects.toThrow(
+      "GitHub request failed (422): Unprocessable Entity; Can not approve your own pull request",
+    );
+  });
+
   it("denies repositories outside the allowlist before any request", async () => {
     const { transport, tools } = harness(() => ({ status: 200, body: [] }));
     await expect(tools.reader.listCandidates("other/app", 10)).rejects.toBeInstanceOf(

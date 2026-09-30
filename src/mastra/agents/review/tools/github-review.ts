@@ -34,6 +34,8 @@ export interface PostReviewRequest {
   readonly verdict: ReviewVerdict;
   readonly body: string;
   readonly comments: readonly ReviewComment[];
+  /** PR author login; the review posts as a comment when it is the token's own user. */
+  readonly author?: string;
 }
 
 export interface PostedReview {
@@ -73,6 +75,23 @@ function assertRepository(
   return parsed;
 }
 
+/**
+ * GitHub error bodies explain the rejection (``message`` plus an ``errors``
+ * list, e.g. "Can not approve your own pull request"). Surface that detail —
+ * without it a failed run only carries the bare status.
+ */
+function failureDetail(response: { status: number; body: unknown }): string {
+  const item = asRecord(response.body);
+  const parts = [asString(item.message)];
+  if (Array.isArray(item.errors)) {
+    for (const error of item.errors) {
+      parts.push(typeof error === "string" ? error : asString(asRecord(error).message));
+    }
+  }
+  const detail = [...new Set(parts.filter((part) => part !== ""))].join("; ");
+  return detail === "" ? "" : `: ${detail}`;
+}
+
 function bodyObject(response: { status: number; body: unknown }): Record<string, unknown> {
   if (
     response.status < 200 ||
@@ -81,14 +100,14 @@ function bodyObject(response: { status: number; body: unknown }): Record<string,
     response.body === null ||
     Array.isArray(response.body)
   ) {
-    throw new Error(`GitHub request failed (${response.status})`);
+    throw new Error(`GitHub request failed (${response.status})${failureDetail(response)}`);
   }
   return response.body as Record<string, unknown>;
 }
 
 function bodyArray(response: { status: number; body: unknown }): unknown[] {
   if (response.status < 200 || response.status >= 300 || !Array.isArray(response.body)) {
-    throw new Error(`GitHub request failed (${response.status})`);
+    throw new Error(`GitHub request failed (${response.status})${failureDetail(response)}`);
   }
   return response.body;
 }
@@ -191,21 +210,51 @@ export class GitHubReviewReader implements ReviewReader {
   }
 }
 
+/**
+ * Appended when an approve/request-changes verdict posts as a comment instead:
+ * GitHub rejects both from the pull request's own author.
+ */
+const SELF_REVIEW_NOTE =
+  "\n\n---\n_Note: posted as a comment review — GitHub does not allow a pull-request"
+  + " author to approve or request changes on their own pull request._";
+
 export class GitHubReviewWriter implements ReviewWriter {
+  private loginLookup: Promise<string | undefined> | undefined;
+
   constructor(
     private readonly transport: GitHubTransport,
     private readonly policy: GitHubPolicy,
   ) {}
 
+  /** The token's login, fetched once; undefined when the lookup fails. */
+  private async authenticatedLogin(): Promise<string | undefined> {
+    this.loginLookup ??= this.transport
+      .request("GET", "/user", undefined, this.policy.timeoutMs)
+      .then((response) => {
+        if (response.status < 200 || response.status >= 300) return undefined;
+        const login = asString(asRecord(response.body).login);
+        return login === "" ? undefined : login;
+      })
+      .catch(() => undefined);
+    return this.loginLookup;
+  }
+
   async postReview(request: PostReviewRequest): Promise<PostedReview> {
     const { owner, repo } = assertRepository(this.policy, request.repository);
+    const event = REVIEW_EVENT_BY_VERDICT[request.verdict];
+    const login =
+      event === "COMMENT" || request.author === undefined
+        ? undefined
+        : await this.authenticatedLogin();
+    const selfAuthored =
+      login !== undefined && request.author?.toLowerCase() === login.toLowerCase();
     const response = await this.transport.request(
       "POST",
       `/repos/${owner}/${repo}/pulls/${request.number}/reviews`,
       {
         commit_id: request.commitSha,
-        event: REVIEW_EVENT_BY_VERDICT[request.verdict],
-        body: request.body,
+        event: selfAuthored ? "COMMENT" : event,
+        body: selfAuthored ? `${request.body}${SELF_REVIEW_NOTE}` : request.body,
         ...(request.comments.length === 0
           ? {}
           : {

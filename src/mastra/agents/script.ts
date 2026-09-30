@@ -43,7 +43,7 @@ interface LaneAgentConfig {
 
 /**
  * Shared agent wiring for every AllRounder lane:
- * - OpenRouter `nex-agi/nex-n2.5-pro:free` model (single source of truth in
+ * - OpenRouter `deepseek/deepseek-v4-flash` model (single source of truth in
  *   shared/model.ts).
  * - Zero-temperature generate/stream options for deterministic, analytical
  *   output (v1.64 names these `*Legacy`; `generate()` merges them).

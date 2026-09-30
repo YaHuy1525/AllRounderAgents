@@ -21,6 +21,12 @@ import type { FeaturesFlowDeps } from "./agents/features/flow.js";
 import { GitHubFeatureReader } from "./agents/features/tools/github-features.js";
 import type { IssuesFlowDeps } from "./agents/issues/flow.js";
 import { GitHubIssueReader, type IssueReader } from "./agents/issues/tools/github-issues.js";
+import type { BillsFlowDeps } from "./agents/bills/flow.js";
+import { MemoryBillsLedger } from "./agents/bills/tools/ledger.js";
+import { HttpVendorRegistry } from "./agents/bills/tools/vendors.js";
+import { HttpXeroLedger } from "./agents/bills/tools/xero.js";
+import type { MspFlowDeps } from "./agents/msp/flow.js";
+import { HttpMspKnowledge } from "./agents/msp/tools/knowledge.js";
 import type { CodingFlowDeps } from "./agents/programming/flow.js";
 import {
   FetchGitHubTransport,
@@ -30,6 +36,10 @@ import {
 import { McpGitHubBackend } from "./agents/programming/tools/mcp.js";
 import type { ReviewFlowDeps } from "./agents/review/flow.js";
 import { GitHubReviewTools } from "./agents/review/tools/github-review.js";
+import { JiraDeskAdapter } from "./desks/jira.js";
+import { MemoryDeskAdapter } from "./desks/memory.js";
+import { MemoryMailSender } from "./mail/memory.js";
+import { OutboxMailSender } from "./mail/outbox.js";
 
 /**
  * Host wiring for `mastra dev`: the coding, review, issues, features,
@@ -44,9 +54,16 @@ import { GitHubReviewTools } from "./agents/review/tools/github-review.js";
  * repository policy is GITHUB_REPOSITORY_ALLOWLIST plus every repository the
  * REST token can see, discovered once at startup; discovery failures degrade
  * to the allowlist. Each flow registers only when its prerequisites are
- * configured (see the GITHUB_* block in .env.example). Without them the
- * instance still boots with the finance and vendors flows, matching the
- * documented optional-flow contract in `createAllRounderMastra`.
+ * configured (see the GITHUB_* block in .env.example). The MSP lane always
+ * registers: it talks to the Jira Cloud desk when JIRA_BASE_URL, JIRA_EMAIL,
+ * JIRA_API_TOKEN and JIRA_PROJECT_KEY are set, writes replies to the outbox
+ * at MAIL_OUTBOX_DIR (MAIL_FROM names the sending mailbox) and otherwise
+ * keeps the in-memory desk and mailbox defaults. The bills lane always
+ * registers too: it posts draft bills to Xero when the XERO_* variables are
+ * set, keeps the in-memory ledger otherwise, and reads the vendor registry
+ * over the platform service bridge. Without the GitHub block the instance
+ * still boots with the finance and vendors flows, matching the documented
+ * optional-flow contract in `createAllRounderMastra`.
  */
 function readStringArrayEnv(name: string): string[] | undefined {
   const raw = process.env[name];
@@ -347,6 +364,135 @@ if (accessibility === undefined) {
   );
 }
 
+/**
+ * MSP lane wiring: the Jira Cloud adapter replaces the in-memory desk only
+ * when all four JIRA_* values are present (a half-configured block warns
+ * instead of silently demoting), and replies land as .eml files in
+ * MAIL_OUTBOX_DIR when that is set. With KNOWLEDGE_API_URL and
+ * KNOWLEDGE_SERVICE_TOKEN set, drafts ground on the platform knowledge API;
+ * otherwise the lane drafts from nothing and each draft escalates for a
+ * human edit. The memory defaults are the M1 sandbox.
+ */
+function buildMspDeps(): MspFlowDeps {
+  const baseUrl = process.env.JIRA_BASE_URL?.trim();
+  const email = process.env.JIRA_EMAIL?.trim();
+  const apiToken = process.env.JIRA_API_TOKEN?.trim();
+  const projectKey = process.env.JIRA_PROJECT_KEY?.trim();
+  const present = [baseUrl, email, apiToken, projectKey].filter(
+    (value) => value !== undefined && value !== "",
+  ).length;
+  let desk: MspFlowDeps["desk"] = new MemoryDeskAdapter();
+  if (present === 4) {
+    desk = new JiraDeskAdapter({
+      baseUrl: baseUrl as string,
+      email: email as string,
+      apiToken: apiToken as string,
+      projectKey: projectKey as string,
+    });
+    console.info(`[mastra] mspFlow uses the Jira Cloud desk (project ${projectKey}).`);
+  } else if (present > 0) {
+    console.warn(
+      "[mastra] JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN and JIRA_PROJECT_KEY must all"
+      + " be set together; mspFlow keeps the in-memory desk.",
+    );
+  }
+  const outboxDir = process.env.MAIL_OUTBOX_DIR?.trim();
+  const mailFrom = process.env.MAIL_FROM?.trim();
+  let mail: MspFlowDeps["mail"] = new MemoryMailSender();
+  if (outboxDir !== undefined && outboxDir !== "") {
+    mail = new OutboxMailSender({
+      dir: outboxDir,
+      address: mailFrom !== undefined && mailFrom !== ""
+        ? mailFrom
+        : "service-desk@msp.local",
+    });
+    console.info(`[mastra] mspFlow writes replies to the outbox at ${outboxDir}.`);
+  } else if (mailFrom !== undefined && mailFrom !== "") {
+    console.warn(
+      "[mastra] MAIL_FROM is set without MAIL_OUTBOX_DIR; mspFlow keeps the in-memory"
+      + " mailbox.",
+    );
+  }
+  const knowledgeUrl = process.env.KNOWLEDGE_API_URL?.trim();
+  const knowledgeToken = process.env.KNOWLEDGE_SERVICE_TOKEN?.trim();
+  let knowledge: MspFlowDeps["knowledge"];
+  if (
+    knowledgeUrl !== undefined && knowledgeUrl !== ""
+    && knowledgeToken !== undefined && knowledgeToken !== ""
+  ) {
+    knowledge = new HttpMspKnowledge({ baseUrl: knowledgeUrl, serviceToken: knowledgeToken });
+    console.info("[mastra] mspFlow grounds drafts through the platform knowledge API.");
+  } else if (
+    (knowledgeUrl !== undefined && knowledgeUrl !== "")
+    || (knowledgeToken !== undefined && knowledgeToken !== "")
+  ) {
+    console.warn(
+      "[mastra] KNOWLEDGE_API_URL and KNOWLEDGE_SERVICE_TOKEN must both be set;"
+      + " mspFlow drafts carry no retrieval and escalate for a human edit.",
+    );
+  }
+  return { desk, mail, ...(knowledge === undefined ? {} : { knowledge }) };
+}
+
+const msp = buildMspDeps();
+
+/**
+ * Bills lane wiring: the Xero ledger replaces the memory ledger when
+ * XERO_CLIENT_ID, XERO_CLIENT_SECRET and XERO_TENANT_ID are all present (a
+ * half-configured block warns instead of silently demoting), with
+ * XERO_ACCOUNT_CODE optionally stamping every posted line. The vendor
+ * registry reads the platform API over the shared service bridge
+ * (KNOWLEDGE_API_URL plus KNOWLEDGE_SERVICE_TOKEN, the same token the
+ * knowledge routes verify); without it the registry is absent and every bill
+ * escalates as vendor_unverified. The memory defaults are the M4 sandbox.
+ */
+function buildBillsDeps(): BillsFlowDeps {
+  const clientId = process.env.XERO_CLIENT_ID?.trim();
+  const clientSecret = process.env.XERO_CLIENT_SECRET?.trim();
+  const xeroTenantId = process.env.XERO_TENANT_ID?.trim();
+  const present = [clientId, clientSecret, xeroTenantId].filter(
+    (value) => value !== undefined && value !== "",
+  ).length;
+  let ledger: BillsFlowDeps["ledger"] = new MemoryBillsLedger();
+  if (present === 3) {
+    const accountCode = process.env.XERO_ACCOUNT_CODE?.trim();
+    ledger = new HttpXeroLedger({
+      clientId: clientId as string,
+      clientSecret: clientSecret as string,
+      tenantId: xeroTenantId as string,
+      ...(accountCode === undefined || accountCode === "" ? {} : { accountCode }),
+    });
+    console.info("[mastra] billsFlow posts draft bills to the Xero ledger.");
+  } else if (present > 0) {
+    console.warn(
+      "[mastra] XERO_CLIENT_ID, XERO_CLIENT_SECRET and XERO_TENANT_ID must all be set"
+      + " together; billsFlow keeps the in-memory ledger.",
+    );
+  }
+  const serviceUrl = process.env.KNOWLEDGE_API_URL?.trim();
+  const serviceToken = process.env.KNOWLEDGE_SERVICE_TOKEN?.trim();
+  let registry: BillsFlowDeps["registry"];
+  if (
+    serviceUrl !== undefined && serviceUrl !== ""
+    && serviceToken !== undefined && serviceToken !== ""
+  ) {
+    registry = new HttpVendorRegistry({ baseUrl: serviceUrl, serviceToken });
+    console.info("[mastra] billsFlow checks bills against the platform vendor registry.");
+  } else if (
+    (serviceUrl !== undefined && serviceUrl !== "")
+    || (serviceToken !== undefined && serviceToken !== "")
+  ) {
+    console.warn(
+      "[mastra] KNOWLEDGE_API_URL and KNOWLEDGE_SERVICE_TOKEN must both be set;"
+      + " billsFlow cannot reach the vendor registry and every bill escalates as"
+      + " vendor_unverified.",
+    );
+  }
+  return { ledger, ...(registry === undefined ? {} : { registry }) };
+}
+
+const bills = buildBillsDeps();
+
 export const mastra = createAllRounderMastra({
   ...(coding === undefined ? {} : { coding }),
   ...(review === undefined ? {} : { review }),
@@ -354,4 +500,6 @@ export const mastra = createAllRounderMastra({
   ...(features === undefined ? {} : { features }),
   ...(dependencies === undefined ? {} : { dependencies }),
   ...(accessibility === undefined ? {} : { accessibility }),
+  msp,
+  bills,
 });

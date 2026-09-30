@@ -94,3 +94,61 @@ def test_app_returns_429_when_the_limiter_denies() -> None:
     assert denied.status_code == 429
     assert denied.json() == {"detail": "Too many requests"}
     assert denied.headers["retry-after"] == "60"
+
+
+def test_in_memory_limiter_honors_custom_window_and_reports_it() -> None:
+    now = {"seconds": 0.0}
+    limiter = InMemoryRateLimiter(2, window_seconds=10, clock=lambda: now["seconds"])
+    assert limiter.window_seconds == 10
+    assert limiter.allow("ip")
+    assert limiter.allow("ip")
+    assert not limiter.allow("ip")
+    now["seconds"] += 11
+    assert limiter.allow("ip")
+
+
+def test_redis_limiter_carries_custom_window_and_rolls_over() -> None:
+    client = FakeRedis()
+    now = {"seconds": 1000.0}
+    limiter = RedisRateLimiter(client, 2, window_seconds=10, clock=lambda: now["seconds"])
+    assert limiter.window_seconds == 10
+    assert limiter.allow("ip")
+    assert limiter.allow("ip")
+    assert not limiter.allow("ip")
+    now["seconds"] += 10
+    assert limiter.allow("ip")
+
+
+def test_redis_failure_fallback_uses_the_configured_window() -> None:
+    client = FakeRedis()
+    client.failing = True
+    now = {"seconds": 0.0}
+    limiter = RedisRateLimiter(client, 1, window_seconds=10, clock=lambda: now["seconds"])
+    assert limiter.allow("ip")
+    assert not limiter.allow("ip")
+    now["seconds"] += 11
+    assert limiter.allow("ip")
+
+
+def test_app_retry_after_mirrors_the_limiter_window() -> None:
+    client = TestClient(
+        create_app(
+            settings=Settings(webhook_secret="test"),
+            auth_verifier=FakeBearerVerifier({}),
+            rate_limiter=InMemoryRateLimiter(1, window_seconds=30),
+        )
+    )
+    assert client.get("/health").status_code == 200
+    denied = client.get("/health")
+    assert denied.status_code == 429
+    assert denied.headers["retry-after"] == "30"
+
+
+def test_settings_carry_the_rate_limit_knobs() -> None:
+    settings = Settings(
+        webhook_secret="test",
+        rate_limit_window_seconds=30,
+        rate_limit_max_tracked_keys=500,
+    )
+    assert settings.rate_limit_window_seconds == 30
+    assert settings.rate_limit_max_tracked_keys == 500

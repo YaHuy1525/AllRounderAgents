@@ -136,13 +136,14 @@ def _normalize(payload: dict[str, object]) -> MastraOutcome:
     status = payload.get("status")
     effects = _effects_of(payload)
     if status in ("suspended", "waiting"):
-        step_id, artifact, target = _suspend_details(payload.get("suspendPayload"))
+        suspend_payload = payload.get("suspendPayload")
+        step_id, artifact, target = _suspend_details(suspend_payload)
         return MastraOutcome(
             status="suspended",
             step_id=step_id,
             artifact=artifact,
             target=target,
-            effects=effects,
+            effects={**effects, **_suspend_effects(suspend_payload)},
         )
     if status in ("success", "completed"):
         result = payload.get("result")
@@ -176,6 +177,25 @@ def _suspend_details(
         artifact if isinstance(artifact, dict) else None,
         str(target) if target is not None else None,
     )
+
+
+def _suspend_effects(suspend_payload: object) -> dict[str, dict[str, object]]:
+    """Effects recorded mid-flow, re-emitted on the suspended step's payload.
+
+    MSP-style flows can execute a side effect before the first human
+    checkpoint (the client ticket exists while the run parks on intake), so
+    the flow repeats the accumulated effects inside its suspend payload. The
+    payload's copy wins a key clash against a top-level ``effects`` key.
+    """
+    if not isinstance(suspend_payload, dict) or not suspend_payload:
+        return {}
+    _, raw = next(iter(suspend_payload.items()))
+    if not isinstance(raw, dict):
+        return {}
+    effects = raw.get("effects")
+    if not isinstance(effects, dict):
+        return {}
+    return {str(key): value for key, value in effects.items() if isinstance(value, dict)}
 
 
 def _effects_of(payload: dict[str, object]) -> dict[str, dict[str, object]]:

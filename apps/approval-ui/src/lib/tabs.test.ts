@@ -6,8 +6,11 @@ import {
   ensureDashboard,
   loadTabState,
   openNewTab,
+  openRunTab,
   openSingletonTab,
   openTicketTab,
+  openWorkflowTab,
+  openWorkflowsTab,
   saveTabState,
   shortSummary,
   ticketTabTitle,
@@ -100,6 +103,55 @@ describe("console tabs", () => {
     expect(secondNew.tabs).toHaveLength(first.tabs.length + 2);
   });
 
+  it("opens runs and observability as singletons", () => {
+    const runs = openSingletonTab([DASHBOARD_TAB], "runs");
+    expect(runs.activeId).toBe("runs");
+    expect(runs.tabs).toHaveLength(2);
+    const runsAgain = openSingletonTab(runs.tabs, "runs");
+    expect(runsAgain.tabs).toHaveLength(2);
+    const observability = openSingletonTab(runsAgain.tabs, "observability");
+    expect(observability.activeId).toBe("observability");
+    expect(observability.tabs.at(-1)!.title).toBe("Observability");
+  });
+
+  it("opens the workflow catalog once and per-workflow tabs by id", () => {
+    const catalog = openWorkflowsTab([DASHBOARD_TAB]);
+    expect(catalog.activeId).toBe("workflows");
+    const catalogAgain = openWorkflowsTab(catalog.tabs);
+    expect(catalogAgain.tabs).toHaveLength(2);
+    const detail = openWorkflowTab(catalog.tabs, { id: "review", title: "Code review" });
+    expect(detail.activeId).toBe("workflow:review");
+    expect(detail.tabs.at(-1)!.workflowId).toBe("review");
+    const detailAgain = openWorkflowTab(detail.tabs, { id: "review", title: "Code review v2" });
+    expect(detailAgain.tabs).toHaveLength(3);
+    expect(detailAgain.tabs.at(-1)!.title).toBe("Code review v2");
+  });
+
+  it("opens run tabs keyed by run id and keeps the ticket context", () => {
+    const first = openRunTab([DASHBOARD_TAB], {
+      id: "r-1",
+      title: "review · ENG-1",
+      ticketKey: "ENG-1",
+    });
+    expect(first.activeId).toBe("run:r-1");
+    const tab = first.tabs.at(-1)!;
+    expect(tab.kind).toBe("run");
+    expect(tab.runId).toBe("r-1");
+    expect(tab.ticketKey).toBe("ENG-1");
+    const again = openRunTab(first.tabs, { id: "r-1", title: "review · ENG-1" });
+    expect(again.tabs).toHaveLength(2);
+    expect(again.tabs.at(-1)!.ticketKey).toBe("ENG-1");
+  });
+
+  it("preselects a workflow on new tabs opened from a start-run CTA", () => {
+    const plain = openNewTab([DASHBOARD_TAB]);
+    expect(plain.tabs.at(-1)!.workflowId).toBeUndefined();
+    const preselected = openNewTab(plain.tabs, { workflowId: "review" });
+    const tab = preselected.tabs.at(-1)!;
+    expect(tab.kind).toBe("new");
+    expect(tab.workflowId).toBe("review");
+  });
+
   it("collapses whitespace and truncates long summaries", () => {
     expect(shortSummary("a\n b   c")).toBe("a b c");
     expect(shortSummary("x".repeat(200))).toHaveLength(42);
@@ -165,5 +217,20 @@ describe("open tab persistence", () => {
     });
     storage.setItem("allrounder.tabs.v1", "{not json");
     expect(loadTabState(storage)).toBeNull();
+  });
+
+  it("round-trips workflow and run tabs with their reference ids", () => {
+    const storage = new MemoryStorage();
+    const state = {
+      tabs: [
+        DASHBOARD_TAB,
+        { id: "workflows", kind: "workflow" as const, title: "Workflows" },
+        { id: "workflow:review", kind: "workflow" as const, title: "Code review", workflowId: "review" },
+        { id: "run:r-1", kind: "run" as const, title: "review · ENG-1", runId: "r-1", ticketKey: "ENG-1" },
+      ],
+      activeTabId: "run:r-1",
+    };
+    saveTabState(storage, state);
+    expect(loadTabState(storage)).toEqual(state);
   });
 });

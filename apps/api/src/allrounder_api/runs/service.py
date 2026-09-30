@@ -35,6 +35,7 @@ from ..approvals import ApprovalReceiptSigner, ReceiptError
 from ..auth import Principal
 from ..logging import get_logger
 from ..repositories import ApprovalRecord, ApprovalRepository, CaseRepository
+from .archive import NullRunArchive, RunArchive
 from .ceilings import RUN_SLOT, ConcurrencyCeiling
 from .definitions import side_effect_scope
 from .events import RunEventBus
@@ -46,6 +47,8 @@ from .models import (
     RunStep,
     WorkflowDefinition,
     WorkflowRun,
+    run_snapshot,
+    run_summary,
 )
 from .receipts import RunReceiptStore
 from .registry import RunRegistry
@@ -60,6 +63,12 @@ class RunConflictError(Exception):
 SECURITY_CLASSIFICATIONS = frozenset({"tp", "fp", "benign", "unknown"})
 SECURITY_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 SECURITY_CONTAINMENT_OUTCOMES = frozenset({"contained", "closed", "escalated", "recommended"})
+
+# Event types whose payload embeds a full ``run`` snapshot (additive key) so
+# live viewers can apply a transition without refetching GET /runs/{run_id}.
+SNAPSHOT_EVENT_TYPES = frozenset(
+    {"run.suspended", "run.status", "run.decision", "run.locked", "run.unlocked"}
+)
 
 
 class UnknownWorkflowError(ValueError):
@@ -115,6 +124,7 @@ class RunService:
         signer: ApprovalReceiptSigner,
         approvals: ApprovalRepository,
         cases: CaseRepository | None = None,
+        archive: RunArchive | None = None,
         config: RunServiceConfig | None = None,
         clock: Callable[[], datetime] | None = None,
         metrics: RunMetrics | None = None,
@@ -129,11 +139,22 @@ class RunService:
         self._signer = signer
         self._approvals = approvals
         self._cases = cases
+        self._archive: RunArchive = archive or NullRunArchive()
         self._config = config or RunServiceConfig()
         self._clock = clock or (lambda: datetime.now(UTC))
         self._metrics = metrics
         self._logger = get_logger()
         self._run_locks: dict[str, asyncio.Lock] = {}
+
+    @property
+    def archive(self) -> RunArchive:
+        """Read-only seam for derived views (the audit pack reads the archive)."""
+        return self._archive
+
+    @property
+    def registry(self) -> RunRegistry:
+        """Read-only seam for derived views that union live and archived runs."""
+        return self._registry
 
     # ---------------------------------------------------------------- start
 
@@ -283,7 +304,7 @@ class RunService:
         principal: Principal,
         comment: str | None,
     ) -> tuple[str, bool]:
-        artifact_hash = _content_hash(step.artifact or {})
+        artifact_hash = content_hash(step.artifact or {})
         action_dict = self._action_dict(run, step, action, edits)
         digest = action_hash(action_dict)
         replay = await self._receipts.replay(run.run_id, step.step_id, digest)
@@ -397,6 +418,7 @@ class RunService:
             )
             await self._case_event(run, "run_cancelled", {"reason": reason})
             self._record_terminal(run)
+            await self._archive_terminal(run)
         await self._release_resources(run)
         return await self._reload(run_id)
 
@@ -417,10 +439,10 @@ class RunService:
             "runId": run.run_id,
             "stepId": step.step_id,
             "action": action,
-            "artifactHash": _content_hash(step.artifact or {}),
+            "artifactHash": content_hash(step.artifact or {}),
         }
         if edits is not None:
-            action_dict["editsHash"] = _content_hash(edits)
+            action_dict["editsHash"] = content_hash(edits)
         return action_dict
 
     def _receipt_scope(self, run: WorkflowRun, step_id: str) -> str:
@@ -611,6 +633,7 @@ class RunService:
             await self._publish(run, {"type": "run.status", "status": "completed"})
             await self._case_event(run, "run_completed", {})
             self._record_terminal(run)
+            await self._archive_terminal(run)
             await self._release_resources(run)
             return
         await self._fail_run(run, outcome.error or "Workflow failed")
@@ -630,6 +653,7 @@ class RunService:
         await self._case_event(run, "run_failed", {"error": error})
         if not already_terminal:
             self._record_terminal(run)
+        await self._archive_terminal(run)
         await self._release_resources(run)
 
     async def _acquire_target(self, run: WorkflowRun, target: str | None) -> bool:
@@ -758,6 +782,46 @@ class RunService:
         active = await self._registry.list_active()
         return [run for run in active if run.tenant_id == tenant_id]
 
+    async def list_history(
+        self,
+        tenant_id: str,
+        *,
+        workflow: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, object]], str | None]:
+        """History = archive ∪ Redis, newest first, keyset-paginated.
+
+        ``cursor`` is the ``startedAt`` of the previous page's last row: only
+        rows strictly older are returned. Both sources are queried with the
+        same filters and duplicates (a run still inside the Redis TTL)
+        collapse onto one row. The archive is best-effort, so a
+        Postgres-less deployment still pages through whatever Redis recalls.
+        """
+        window = max(1, limit)
+        archived = await self._archive.list_recent(
+            tenant_id, limit=window + 1, workflow=workflow, status=status, before=cursor
+        )
+        merged = list(archived)
+        seen = {str(row.get("runId", "")) for row in merged}
+        for run in await self._registry.list_recent(tenant_id, limit=window + 1):
+            if run.run_id in seen:
+                continue
+            row = run_summary(run)
+            if workflow is not None and run.workflow != workflow:
+                continue
+            if status is not None and run.status != status:
+                continue
+            started_at = str(row["startedAt"])
+            if cursor is not None and started_at >= cursor:
+                continue
+            merged.append(row)
+        merged.sort(key=lambda row: str(row["startedAt"]), reverse=True)
+        page = merged[:window]
+        next_cursor = str(page[-1]["startedAt"]) if len(merged) > window else None
+        return page, next_cursor
+
     def subscribe(self, run_id: str) -> AsyncIterator[dict[str, object]]:
         return self._events.subscribe(run_id)
 
@@ -777,6 +841,13 @@ class RunService:
     def _record_terminal(self, run: WorkflowRun) -> None:
         if self._metrics is not None:
             self._metrics.record_run(workflow=run.workflow, status=run.status)
+
+    async def _archive_terminal(self, run: WorkflowRun) -> None:
+        """Best-effort durable mirror on terminal transitions; never raises."""
+        try:
+            await self._archive.record(run)
+        except Exception:  # pragma: no cover - defensive: archives swallow too
+            self._logger.warning("run_archive_failed", run_id=run.run_id)
 
     def _record_security_triage(self, artifact: dict[str, object]) -> None:
         if self._metrics is None:
@@ -825,7 +896,10 @@ class RunService:
         await self._registry.save(run)
 
     async def _publish(self, run: WorkflowRun, event: dict[str, object]) -> None:
-        await self._events.publish(run.run_id, {**event, "runId": run.run_id})
+        payload: dict[str, object] = {**event, "runId": run.run_id}
+        if event.get("type") in SNAPSHOT_EVENT_TYPES:
+            payload["run"] = run_snapshot(run)
+        await self._events.publish(run.run_id, payload)
 
     async def _case_event(
         self, run: WorkflowRun, kind: str, payload: dict[str, object]
@@ -848,7 +922,12 @@ class RunService:
             self._logger.warning("run_case_event_rejected", run_id=run.run_id, kind=kind)
 
 
-def _content_hash(value: dict[str, object]) -> str:
+def content_hash(value: dict[str, object]) -> str:
+    """Canonical content hash for artifacts, edits and receipt bindings.
+
+    Public because the audit pack re-derives the same action dicts the
+    approval receipts were hash-bound to; both sides must stay byte-identical.
+    """
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -873,4 +952,5 @@ __all__ = [
     "RunService",
     "RunServiceConfig",
     "UnknownWorkflowError",
+    "content_hash",
 ]

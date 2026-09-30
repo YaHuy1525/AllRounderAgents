@@ -10,6 +10,7 @@ from redis.asyncio import Redis as AsyncRedis
 
 from ..approvals import ApprovalReceiptSigner
 from ..repositories import ApprovalRepository, CaseRepository
+from .archive import RunArchive
 from .ceilings import (
     APPLY_SLOT,
     RUN_SLOT,
@@ -31,6 +32,7 @@ def build_memory_run_service(
     signer: ApprovalReceiptSigner,
     approvals: ApprovalRepository,
     cases: CaseRepository | None = None,
+    archive: RunArchive | None = None,
     workflows: dict[str, WorkflowDefinition] | None = None,
     mastra: MastraRunClient | None = None,
     mastra_base_url: str = "http://localhost:4111",
@@ -56,6 +58,7 @@ def build_memory_run_service(
         signer=signer,
         approvals=approvals,
         cases=cases,
+        archive=archive,
         config=config,
         clock=clock,
         metrics=metrics,
@@ -69,6 +72,7 @@ def build_redis_run_service(
     signer: ApprovalReceiptSigner,
     approvals: ApprovalRepository,
     cases: CaseRepository | None = None,
+    archive: RunArchive | None = None,
     workflows: dict[str, WorkflowDefinition] | None = None,
     mastra: MastraRunClient | None = None,
     mastra_base_url: str = "http://localhost:4111",
@@ -102,6 +106,7 @@ def build_redis_run_service(
         signer=signer,
         approvals=approvals,
         cases=cases,
+        archive=archive,
         config=config,
         clock=clock,
         metrics=metrics,

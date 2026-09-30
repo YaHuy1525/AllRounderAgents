@@ -37,6 +37,44 @@ tools:
     idempotent: true
     idempotency_key: correlationId
 
+  # The desk seam (src/mastra/desks/types.ts): the provider-neutral ticket
+  # surface the MSP flow calls. Method names mirror the adapter interface 1:1
+  # (createTicket, addComment, setStatus, attachEvidence, readTicket). Writes
+  # carry the flow's stable tokens so a replay lands on the recorded receipt
+  # instead of a second ticket, comment or transition.
+  - name: desk.create-ticket
+    description: Create the client ticket behind the desk seam.
+    scope: desk-tickets
+    class: auto
+    idempotent: true
+    idempotency_key: correlationId
+
+  - name: desk.comment
+    description: Post the reply receipt comment on the desk ticket.
+    scope: desk-tickets
+    class: auto
+    idempotent: true
+    idempotency_key: receiptRef
+
+  - name: desk.transition
+    description: Move the desk ticket through its workflow.
+    scope: desk-tickets
+    class: auto
+    idempotent: true
+    idempotency_key: eventId
+
+  - name: desk.attach
+    description: Attach audit evidence to the desk ticket.
+    scope: desk-tickets
+    class: auto
+    idempotent: true
+    idempotency_key: evidenceRef
+
+  - name: desk.read
+    description: Read desk tickets, comments and status.
+    scope: desk-tickets
+    class: read-only
+
   - name: support.send
     description: Send an approved support reply.
     scope: support:send
@@ -51,6 +89,23 @@ tools:
     idempotent: true
     idempotency_key: ledgerKey
 
+  # The bills lane's ledger seam (src/mastra/agents/bills/tools): reading a
+  # bill back is read-only, and posting is approval-only behind the signed
+  # receipt for `bills:post`. The ledger refuses an empty receipt, and Xero
+  # receives ACCPAY bills in DRAFT status only, so the blast radius of any
+  # single approval stays one deletable draft.
+  - name: xero.read
+    description: Read a bill's current state from the Xero ledger.
+    scope: xero-ledger
+    class: read-only
+
+  - name: xero.post
+    description: Post the approved vendor bill to Xero as a draft ACCPAY bill.
+    scope: xero:post
+    class: approval
+    idempotent: true
+    idempotency_key: ledgerKey
+
   - name: run.side-effect
     description: >-
       Any workflow side effect (template scope `{workflow}:{step}`, e.g.
@@ -59,6 +114,17 @@ tools:
     class: approval
     idempotent: true
     idempotency_key: actionHash
+
+  # MSP audit pack (M2): a derived view over the immutable trail only (archive
+  # union registry, case ledger, receipts), never live workflow state. The
+  # packKey is `{tenant}:{clientRef}:{month}`, so re-exporting a month is a
+  # no-op for the same trail.
+  - name: auditpack.export
+    description: Export one client's monthly audit pack, JSON or PDF, from the trail.
+    scope: audit-packs
+    class: auto
+    idempotent: true
+    idempotency_key: packKey
 
   # Read-only defaults: none of these can mutate Jira, GitHub or the knowledge
   # store — they are the only tools research steps hold.

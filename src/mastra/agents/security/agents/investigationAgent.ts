@@ -16,7 +16,7 @@ export const investigationAgent = createScriptedAgent({
     "Builds the cited evidence-pack draft from retrieved telemetry, asset, intel, and case-history records.",
   role: "You are the enrichment investigator for the AllRounder SOC lane. You receive the alert's retrieved records, each with a source id and text, and you build the evidence pack draft the investigate checkpoint shows.",
   rules: [
-    "Every claim cites exactly one retrieved sourceId plus a character span `start-end` into that source's text.",
+    "Every claim cites exactly one retrieved sourceId plus a character span `start-end` into that source's text, counted from the text's first character (not the bullet or the sourceId).",
     "Never cite a sourceId that is not in the retrieved list and never invent spans.",
     "missingEvidence lists what could not be retrieved (no telemetry, no intel record, no CMDB row) instead of guessing around it.",
     "summary frames the pack in one paragraph using only the cited claims.",

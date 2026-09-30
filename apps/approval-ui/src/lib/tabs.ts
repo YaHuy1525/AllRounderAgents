@@ -5,6 +5,10 @@ export type TabKind =
   | "docs"
   | "settings"
   | "account"
+  | "runs"
+  | "workflow"
+  | "run"
+  | "observability"
   | "new";
 
 const TAB_KINDS: readonly string[] = [
@@ -14,6 +18,10 @@ const TAB_KINDS: readonly string[] = [
   "docs",
   "settings",
   "account",
+  "runs",
+  "workflow",
+  "run",
+  "observability",
   "new",
 ];
 
@@ -23,6 +31,11 @@ export type Tab = {
   title: string;
   ticketKey?: string;
   ticketSummary?: string;
+  /** Set on `workflow` detail tabs (single-workflow view) and on `new` tabs
+   *  opened from a "Start run" CTA, where it preselects the workflow. */
+  workflowId?: string;
+  /** Set on `run` tabs opened as a standalone run inspector. */
+  runId?: string;
 };
 
 export type TicketRef = { key: string; summary: string };
@@ -71,26 +84,93 @@ export function openTicketTab(tabs: Tab[], ticket: TicketRef): { tabs: Tab[]; ac
   };
 }
 
-const SINGLETON_TITLES: Record<"approvals" | "docs" | "settings" | "account", string> = {
+export type SingletonKind =
+  | "approvals"
+  | "docs"
+  | "settings"
+  | "account"
+  | "runs"
+  | "observability";
+
+const SINGLETON_TITLES: Record<SingletonKind, string> = {
   approvals: "Approvals",
   docs: "Docs & help",
   settings: "Settings",
   account: "Account",
+  runs: "Runs",
+  observability: "Observability",
 };
 
 export function openSingletonTab(
   tabs: Tab[],
-  kind: "approvals" | "docs" | "settings" | "account",
+  kind: SingletonKind,
 ): { tabs: Tab[]; activeId: string } {
   if (tabs.some((tab) => tab.kind === kind)) return { tabs, activeId: kind };
   return { tabs: [...tabs, { id: kind, kind, title: SINGLETON_TITLES[kind] }], activeId: kind };
 }
 
-export function openNewTab(tabs: Tab[]): { tabs: Tab[]; activeId: string } {
+/**
+ * The workflow catalog is a singleton `workflow` tab with no `workflowId`;
+ * per-workflow detail tabs share the same kind but key on `workflow:<id>`,
+ * so lookups for the catalog must match by id instead of by kind.
+ */
+export function openWorkflowsTab(tabs: Tab[]): { tabs: Tab[]; activeId: string } {
+  const id = "workflows";
+  if (tabs.some((tab) => tab.id === id)) return { tabs, activeId: id };
+  return { tabs: [...tabs, { id, kind: "workflow", title: "Workflows" }], activeId: id };
+}
+
+export function openWorkflowTab(
+  tabs: Tab[],
+  workflow: { id: string; title: string },
+): { tabs: Tab[]; activeId: string } {
+  const id = `workflow:${workflow.id}`;
+  const existing = tabs.find((tab) => tab.id === id);
+  if (existing) {
+    return {
+      tabs: tabs.map((tab) => (tab.id === id ? { ...tab, title: workflow.title } : tab)),
+      activeId: id,
+    };
+  }
+  return {
+    tabs: [...tabs, { id, kind: "workflow", title: workflow.title, workflowId: workflow.id }],
+    activeId: id,
+  };
+}
+
+export function openRunTab(
+  tabs: Tab[],
+  run: { id: string; title: string; ticketKey?: string },
+): { tabs: Tab[]; activeId: string } {
+  const id = `run:${run.id}`;
+  const existing = tabs.find((tab) => tab.id === id);
+  if (existing) {
+    return {
+      tabs: tabs.map((tab) =>
+        tab.id === id
+          ? { ...tab, title: run.title, ticketKey: run.ticketKey ?? tab.ticketKey }
+          : tab,
+      ),
+      activeId: id,
+    };
+  }
+  const tab: Tab = { id, kind: "run", title: run.title, runId: run.id };
+  if (run.ticketKey) tab.ticketKey = run.ticketKey;
+  return { tabs: [...tabs, tab], activeId: id };
+}
+
+export function openNewTab(
+  tabs: Tab[],
+  options: { workflowId?: string } = {},
+): { tabs: Tab[]; activeId: string } {
   let index = 1;
   while (tabs.some((tab) => tab.id === `new-${index}`)) index += 1;
   const id = `new-${index}`;
-  return { tabs: [...tabs, { id, kind: "new", title: "New tab" }], activeId: id };
+  const tab: Tab = { id, kind: "new", title: "New tab" };
+  if (options.workflowId !== undefined && options.workflowId !== "") {
+    tab.workflowId = options.workflowId;
+  }
+  return { tabs: [...tabs, tab], activeId: id };
 }
 
 export function closeTab(
@@ -132,6 +212,12 @@ function sanitizeTab(value: unknown): Tab | null {
   }
   if (typeof record.ticketSummary === "string" && record.ticketSummary !== "") {
     tab.ticketSummary = record.ticketSummary;
+  }
+  if (typeof record.workflowId === "string" && record.workflowId !== "") {
+    tab.workflowId = record.workflowId;
+  }
+  if (typeof record.runId === "string" && record.runId !== "") {
+    tab.runId = record.runId;
   }
   return tab;
 }

@@ -78,15 +78,18 @@ export type UiPrefs = {
   badge: boolean;
   confirmReject: boolean;
   recentTickets: RecentTicket[];
+  /** True when the labeled sidebar is folded back to the 56px icon rail. */
+  sidebarCollapsed: boolean;
 };
 
 export function emptyUiPrefs(): UiPrefs {
   return {
-    theme: "light",
+    theme: "dark",
     autoRefreshSec: 0,
     badge: true,
     confirmReject: true,
     recentTickets: [],
+    sidebarCollapsed: false,
   };
 }
 
@@ -125,11 +128,12 @@ export function loadUiPrefs(storage: Pick<Storage, "getItem">): UiPrefs {
     const parsed = asRecord(JSON.parse(raw));
     if (!parsed) return emptyUiPrefs();
     return {
-      theme: parsed.theme === "dark" ? "dark" : "light",
+      theme: parsed.theme === "light" ? "light" : "dark",
       autoRefreshSec: sanitizeRefresh(parsed.autoRefreshSec),
       badge: parsed.badge !== false,
       confirmReject: parsed.confirmReject !== false,
       recentTickets: sanitizeRecent(parsed.recentTickets),
+      sidebarCollapsed: parsed.sidebarCollapsed === true,
     };
   } catch {
     return emptyUiPrefs();
@@ -138,11 +142,12 @@ export function loadUiPrefs(storage: Pick<Storage, "getItem">): UiPrefs {
 
 export function saveUiPrefs(storage: Pick<Storage, "setItem">, prefs: UiPrefs): UiPrefs {
   const next: UiPrefs = {
-    theme: prefs.theme === "dark" ? "dark" : "light",
+    theme: prefs.theme === "light" ? "light" : "dark",
     autoRefreshSec: sanitizeRefresh(prefs.autoRefreshSec),
     badge: prefs.badge !== false,
     confirmReject: prefs.confirmReject !== false,
     recentTickets: sanitizeRecent(prefs.recentTickets),
+    sidebarCollapsed: prefs.sidebarCollapsed === true,
   };
   storage.setItem(UI_STORAGE_KEY, JSON.stringify(next));
   return next;

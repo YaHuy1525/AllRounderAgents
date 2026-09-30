@@ -99,6 +99,7 @@ describe("local UI preferences", () => {
         autoRefreshSec: 9999,
         badge: "yes",
         confirmReject: false,
+        sidebarCollapsed: "sometimes",
         recentTickets: [
           { key: "eng-1", summary: "A" },
           { key: "bad key", summary: "B" },
@@ -107,11 +108,12 @@ describe("local UI preferences", () => {
       }),
     );
     expect(loadUiPrefs(storage)).toEqual({
-      theme: "light",
+      theme: "dark",
       autoRefreshSec: 0,
       badge: true,
       confirmReject: false,
       recentTickets: [{ key: "ENG-1", summary: "A" }],
+      sidebarCollapsed: false,
     });
   });
 
@@ -123,6 +125,7 @@ describe("local UI preferences", () => {
       badge: false,
       confirmReject: true,
       recentTickets: [],
+      sidebarCollapsed: true,
     });
     expect(loadUiPrefs(storage)).toEqual({
       theme: "dark",
@@ -130,6 +133,7 @@ describe("local UI preferences", () => {
       badge: false,
       confirmReject: true,
       recentTickets: [],
+      sidebarCollapsed: true,
     });
   });
 

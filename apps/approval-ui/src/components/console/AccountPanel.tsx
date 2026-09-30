@@ -1,9 +1,18 @@
 import type { SessionInfo } from "@/lib/models";
 
+import { IconStop } from "./icons";
+
 function formatExpiry(value: string | null): string {
   if (!value) return "Unknown";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+/** Initials for the avatar tile — derived from the signed-in email. */
+function initials(value: string): string {
+  const [first = "", second = ""] = value.split(/[.\s_-]+/);
+  const pair = `${first.charAt(0)}${second.charAt(0)}`.toUpperCase();
+  return pair === "" ? "?" : pair;
 }
 
 /**
@@ -22,10 +31,15 @@ export function AccountPanel({
 }) {
   return (
     <section id="account-view" className="panel-view">
-      <div className="panel-heading">
-        <p className="eyebrow">Account</p>
-        <h2>{session.email}</h2>
-        <p className="panel-note">Signed in through the Supabase magic-link session.</p>
+      <div className="panel-heading account-heading">
+        <span className="account-avatar" aria-hidden="true">
+          {initials(session.email)}
+        </span>
+        <div>
+          <p className="eyebrow">Account</p>
+          <h2>{session.email}</h2>
+          <p className="panel-note">Signed in through the Supabase magic-link session.</p>
+        </div>
       </div>
 
       <dl className="account-facts">
@@ -54,8 +68,15 @@ export function AccountPanel({
       </p>
 
       <div className="settings-actions">
-        <button id="account-signout" type="button" disabled={signOutBusy} onClick={onSignOut}>
-          Sign out
+        <button
+          id="account-signout"
+          className="signout-button"
+          type="button"
+          disabled={signOutBusy}
+          onClick={onSignOut}
+        >
+          {signOutBusy ? <span className="spinner" aria-hidden="true" /> : <IconStop />}
+          <span>Sign out</span>
         </button>
       </div>
     </section>

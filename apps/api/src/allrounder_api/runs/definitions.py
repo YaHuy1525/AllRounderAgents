@@ -4,6 +4,11 @@ Each entry names its Mastra counterpart (``mastra_workflow``) and the exact,
 ordered step ids the flow must emit — the run service snapshots this list
 when a run starts, so the stepper, decisions, and receipts all line up.
 Later PRs append their workflows here.
+
+Step ``integrations`` are display-only provider ids (github, okta, slack,
+...): the flow graph renders them as satellites next to each step and they
+never influence permissions — ``side_effect_scope`` remains the single
+governance source for what a side-effecting step may act on.
 """
 
 from __future__ import annotations
@@ -18,7 +23,9 @@ REVIEW_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="select-pr", title="Select PR"),
         StepDefinition(id="review-options", title="Review Options"),
         StepDefinition(id="ai-review", title="AI Review"),
-        StepDefinition(id="complete", title="Complete", side_effecting=True),
+        StepDefinition(
+            id="complete", title="Complete", side_effecting=True, integrations=("github",)
+        ),
     ),
 )
 
@@ -30,7 +37,9 @@ ISSUES_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="issue-selection", title="Issue Selection"),
         StepDefinition(id="analysis", title="Analysis"),
         StepDefinition(id="implementation", title="Implementation"),
-        StepDefinition(id="complete", title="Complete", side_effecting=True),
+        StepDefinition(
+            id="complete", title="Complete", side_effecting=True, integrations=("github",)
+        ),
     ),
 )
 
@@ -42,7 +51,9 @@ FEATURES_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="feature-selection", title="Feature Selection"),
         StepDefinition(id="scope-design", title="Scope & Design"),
         StepDefinition(id="implementation", title="Implementation"),
-        StepDefinition(id="complete", title="Complete", side_effecting=True),
+        StepDefinition(
+            id="complete", title="Complete", side_effecting=True, integrations=("github",)
+        ),
     ),
 )
 
@@ -55,7 +66,7 @@ DEPENDENCIES_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="group", title="Group"),
         StepDefinition(id="apply", title="Apply"),
         StepDefinition(id="validate", title="Validate"),
-        StepDefinition(id="merge", title="Merge", side_effecting=True),
+        StepDefinition(id="merge", title="Merge", side_effecting=True, integrations=("github",)),
     ),
 )
 
@@ -68,7 +79,12 @@ ACCESSIBILITY_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="violations", title="Violations"),
         StepDefinition(id="fix", title="Fix"),
         # Opening the fix PR is the side effect once the re-scan gate passes.
-        StepDefinition(id="re-scan", title="Re-scan", side_effecting=True),
+        StepDefinition(
+            id="re-scan",
+            title="Re-scan",
+            side_effecting=True,
+            integrations=("github",),
+        ),
     ),
 )
 
@@ -78,12 +94,12 @@ VENDORS_WORKFLOW = WorkflowDefinition(
     title="Vendor Onboarding",
     steps=(
         StepDefinition(id="collect", title="Collect"),
-        StepDefinition(id="verify", title="Verify"),
+        StepDefinition(id="verify", title="Verify", integrations=("web",)),
         StepDefinition(id="risk-score", title="Risk Score"),
         StepDefinition(id="approve", title="Approve"),
         # Creating the vendor master record is the side effect (idempotent by
         # tax-ID key).
-        StepDefinition(id="create", title="Create", side_effecting=True),
+        StepDefinition(id="create", title="Create", side_effecting=True, integrations=("erp",)),
     ),
 )
 
@@ -96,7 +112,7 @@ LEAVE_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="policy-check", title="Policy Check"),
         StepDefinition(id="approve", title="Approve"),
         # Booking the leave entry is the side effect (idempotent by request id).
-        StepDefinition(id="apply", title="Apply", side_effecting=True),
+        StepDefinition(id="apply", title="Apply", side_effecting=True, integrations=("workday",)),
     ),
 )
 
@@ -111,7 +127,12 @@ ONBOARDING_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="approve", title="Approve"),
         # Provisioning accounts, the equipment ticket and payroll enrollment is
         # the side effect (idempotent by employee id).
-        StepDefinition(id="provision", title="Provision", side_effecting=True),
+        StepDefinition(
+            id="provision",
+            title="Provision",
+            side_effecting=True,
+            integrations=("okta", "github", "aws", "jira", "slack", "workday"),
+        ),
     ),
 )
 
@@ -125,7 +146,12 @@ OFFBOARDING_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="approve", title="Approve"),
         # Revoking per-system access is the first side effect (idempotent by
         # employee + system).
-        StepDefinition(id="revoke", title="Revoke", side_effecting=True),
+        StepDefinition(
+            id="revoke",
+            title="Revoke",
+            side_effecting=True,
+            integrations=("okta", "slack", "banking", "erp", "payroll"),
+        ),
         # Closing the case with the final-pay attestation is the second side
         # effect (idempotent by employee id).
         StepDefinition(id="attest", title="Attest", side_effecting=True),
@@ -142,7 +168,9 @@ SCREENING_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="shortlist", title="Shortlist"),
         # Scheduling the interview invites is the side effect (idempotent by
         # candidate + requisition).
-        StepDefinition(id="schedule", title="Schedule", side_effecting=True),
+        StepDefinition(
+            id="schedule", title="Schedule", side_effecting=True, integrations=("email",)
+        ),
     ),
 )
 
@@ -152,11 +180,11 @@ HR_HELP_WORKFLOW = WorkflowDefinition(
     title="HR Help",
     steps=(
         StepDefinition(id="intake", title="Intake"),
-        StepDefinition(id="retrieve", title="Retrieve"),
+        StepDefinition(id="retrieve", title="Retrieve", integrations=("kb",)),
         StepDefinition(id="draft", title="Draft"),
         StepDefinition(id="approve", title="Approve"),
         # Recording the answer is the side effect (idempotent by case + ticket).
-        StepDefinition(id="send", title="Send", side_effecting=True),
+        StepDefinition(id="send", title="Send", side_effecting=True, integrations=("email",)),
     ),
 )
 
@@ -172,7 +200,54 @@ SECURITY_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="approve", title="Approve"),
         # Executing the approved disposition (containment or close) is the
         # side effect (idempotent by alert + host).
-        StepDefinition(id="contain", title="Contain", side_effecting=True),
+        StepDefinition(id="contain", title="Contain", side_effecting=True, integrations=("aws",)),
+    ),
+)
+
+MSP_WORKFLOW = WorkflowDefinition(
+    id="msp",
+    mastra_workflow="mspFlow",
+    title="MSP Client Reply",
+    steps=(
+        StepDefinition(id="intake", title="Intake", integrations=("email",)),
+        # Creating the client ticket on the desk is the first side effect; the
+        # flow fixes its identity by correlation id because a desk without
+        # native dedupe would otherwise mint a second ticket on a re-derive.
+        StepDefinition(
+            id="ticket",
+            title="Ticket",
+            side_effecting=True,
+            integrations=("jira",),
+        ),
+        StepDefinition(id="draft", title="Draft", integrations=("kb",)),
+        StepDefinition(id="approve", title="Approve"),
+        # Sending the reply and recording it on the desk ticket is the second
+        # side effect (idempotent by case + ticket through the mail key).
+        StepDefinition(
+            id="send",
+            title="Send",
+            side_effecting=True,
+            integrations=("email", "jira"),
+        ),
+    ),
+)
+
+BILLS_WORKFLOW = WorkflowDefinition(
+    id="bills",
+    mastra_workflow="billsFlow",
+    title="Vendor Bill Posting",
+    steps=(
+        StepDefinition(id="intake", title="Intake", integrations=("email",)),
+        StepDefinition(id="extract", title="Extract"),
+        StepDefinition(id="approve", title="Approve"),
+        # Posting the draft bill to the ledger is the side effect (idempotent
+        # by the flow's ledger key; Xero receives ACCPAY bills in DRAFT only).
+        StepDefinition(
+            id="post",
+            title="Post",
+            side_effecting=True,
+            integrations=("xero",),
+        ),
     ),
 )
 
@@ -203,17 +278,21 @@ WORKFLOW_DEFINITIONS: dict[str, WorkflowDefinition] = {
         SCREENING_WORKFLOW,
         HR_HELP_WORKFLOW,
         SECURITY_WORKFLOW,
+        MSP_WORKFLOW,
+        BILLS_WORKFLOW,
     )
 }
 
 
 __all__ = [
     "ACCESSIBILITY_WORKFLOW",
+    "BILLS_WORKFLOW",
     "DEPENDENCIES_WORKFLOW",
     "FEATURES_WORKFLOW",
     "HR_HELP_WORKFLOW",
     "ISSUES_WORKFLOW",
     "LEAVE_WORKFLOW",
+    "MSP_WORKFLOW",
     "OFFBOARDING_WORKFLOW",
     "ONBOARDING_WORKFLOW",
     "REVIEW_WORKFLOW",

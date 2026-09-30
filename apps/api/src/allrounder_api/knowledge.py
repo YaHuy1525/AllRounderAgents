@@ -4,10 +4,10 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 from psycopg import AsyncConnection
@@ -15,6 +15,9 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from .resilience import DEFAULT_ATTEMPTS, retry_async
+
+if TYPE_CHECKING:
+    from .settings import Settings
 
 
 class EmptyRetrievalError(LookupError):
@@ -67,6 +70,9 @@ class CitedPassage:
     stale: bool
     source_version: str
     rerank_score: float | None = None
+    # The document title travels with the passage so callers that surface it
+    # (the MSP draft prompt) can name the source instead of its slug.
+    title: str = ""
 
 
 @dataclass(frozen=True)
@@ -100,10 +106,40 @@ class _Candidate:
     citation: CitationSpan
     stale: bool
     source_version: str
+    title: str = ""
 
 
 RRF_K = 60
 RECALL_K = 30
+
+
+@dataclass(frozen=True)
+class RetrievalTuning:
+    """Effective retrieval knobs, resolved per tenant when overrides exist.
+
+    ``rrf_k`` smooths the reciprocal rank fusion and ``recall_k`` sets how
+    many candidates each arm contributes before reranking. Build it from
+    settings at wiring time and hand it to the stores.
+    """
+
+    rrf_k: int = RRF_K
+    recall_k: int = RECALL_K
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> RetrievalTuning:
+        return cls(rrf_k=settings.retrieval_rrf_k, recall_k=settings.retrieval_recall_k)
+
+    def for_tenant(
+        self,
+        tenant_id: str,
+        overrides: Mapping[str, Mapping[str, int]] | None = None,
+    ) -> RetrievalTuning:
+        tenant = overrides.get(tenant_id, {}) if overrides else {}
+        return replace(
+            self,
+            rrf_k=tenant.get("rrf_k", self.rrf_k),
+            recall_k=tenant.get("recall_k", self.recall_k),
+        )
 
 
 def reciprocal_rank_fusion(
@@ -138,6 +174,7 @@ def _memory_candidate(chunk: _Chunk, at: datetime) -> _Candidate:
         citation=CitationSpan(chunk.document.source_id, chunk.start, chunk.end),
         stale=chunk.document.stale_after <= at,
         source_version=chunk.document.source_version,
+        title=chunk.document.title,
     )
 
 
@@ -150,6 +187,7 @@ def _candidate_from_row(row: dict[str, Any]) -> _Candidate:
         ),
         stale=bool(row["stale"]),
         source_version=str(row["source_version"]),
+        title=str(row["title"]),
     )
 
 
@@ -434,11 +472,13 @@ class InMemoryKnowledgeStore:
         embeddings: EmbeddingProvider,
         *,
         reranker: Reranker | None = None,
-        recall_k: int = RECALL_K,
+        tuning: RetrievalTuning | None = None,
+        tenant_overrides: Mapping[str, Mapping[str, int]] | None = None,
     ) -> None:
         self._embeddings = embeddings
         self._reranker = reranker
-        self._recall_k = recall_k
+        self._tuning = tuning or RetrievalTuning()
+        self._tenant_overrides: Mapping[str, Mapping[str, int]] = tenant_overrides or {}
         self._chunks: list[_Chunk] = []
 
     async def ingest(
@@ -475,6 +515,7 @@ class InMemoryKnowledgeStore:
     ) -> RetrievalResult:
         if k < 1:
             raise ValueError("k must be positive")
+        tuning = self._tuning.for_tenant(tenant_id, self._tenant_overrides)
         scoped = [
             chunk
             for chunk in self._chunks
@@ -487,7 +528,7 @@ class InMemoryKnowledgeStore:
         ]
         if not scoped:
             raise EmptyRetrievalError("No scoped knowledge was found; escalate")
-        limit = max(self._recall_k, k)
+        limit = max(tuning.recall_k, k)
         query_vector = (await self._embeddings.embed([query]))[0]
         dense = sorted(
             scoped,
@@ -507,7 +548,8 @@ class InMemoryKnowledgeStore:
             [
                 [_memory_candidate(chunk, at) for chunk in dense],
                 [_memory_candidate(chunk, at) for chunk in lexical],
-            ]
+            ],
+            k=tuning.rrf_k,
         )
         passages = [
             CitedPassage(
@@ -516,6 +558,7 @@ class InMemoryKnowledgeStore:
                 score=score,
                 stale=candidate.stale,
                 source_version=candidate.source_version,
+                title=candidate.title,
             )
             for score, candidate in fused
         ]
@@ -543,13 +586,15 @@ class PostgresKnowledgeStore:
         embeddings: EmbeddingProvider,
         *,
         reranker: Reranker | None = None,
-        recall_k: int = RECALL_K,
+        tuning: RetrievalTuning | None = None,
+        tenant_overrides: Mapping[str, Mapping[str, int]] | None = None,
     ) -> None:
         if not database_url:
             raise ValueError("DATABASE_URL is required")
         self._embeddings = embeddings
         self._reranker = reranker
-        self._recall_k = recall_k
+        self._tuning = tuning or RetrievalTuning()
+        self._tenant_overrides: Mapping[str, Mapping[str, int]] = tenant_overrides or {}
         self._pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] = AsyncConnectionPool(
             conninfo=database_url, min_size=0, max_size=10, open=False,
             kwargs={"row_factory": dict_row},
@@ -572,7 +617,7 @@ class PostgresKnowledgeStore:
                 insert into public.kb_documents
                   (tenant_id, source_id, domain, source_uri, source_version, title,
                    content_sha256, stale_after, metadata)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 on conflict (tenant_id, source_id, source_version) do update
                 set title = excluded.title, content_sha256 = excluded.content_sha256,
                     stale_after = excluded.stale_after, metadata = excluded.metadata
@@ -583,7 +628,7 @@ class PostgresKnowledgeStore:
                     document.metadata.get("source_uri", f"kb://{document.source_id}"),
                     document.source_version, document.title,
                     hashlib.sha256(document.content.encode()).hexdigest(),
-                    document.stale_after, document.metadata,
+                    document.stale_after, _dumps(document.metadata),
                 ),
             )
             row = await cursor.fetchone()
@@ -603,12 +648,12 @@ class PostgresKnowledgeStore:
                     insert into public.kb_chunks
                       (document_id, ordinal, content, source_span, span_start, span_end,
                        embedding_model, embedding_dimensions, embedding, metadata)
-                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector, %s)
+                    values (%s, %s, %s, %s, %s, %s, %s, %s, %s::extensions.vector, %s::jsonb)
                     """,
                     (
                         document_id, ordinal, content, f"{start}-{end}", start, end,
                         self._embeddings.model, self._embeddings.dimensions, vector,
-                        document.metadata,
+                        _dumps(document.metadata),
                     ),
                 )
         return len(spans)
@@ -619,15 +664,16 @@ class PostgresKnowledgeStore:
     ) -> RetrievalResult:
         if k < 1:
             raise ValueError("k must be positive")
+        tuning = self._tuning.for_tenant(tenant_id, self._tenant_overrides)
         vector = (await self._embeddings.embed([query]))[0]
         encoded = _encode_vector(vector, self._embeddings.dimensions)
         at = now or datetime.now(UTC)
-        limit = max(self._recall_k, k)
+        limit = max(tuning.recall_k, k)
         async with self._pool.connection() as connection:
             dense_cursor = await connection.execute(
                 """
                 select c.id::text as chunk_id, c.content, d.source_id,
-                       c.span_start, c.span_end, d.source_version,
+                       d.title, c.span_start, c.span_end, d.source_version,
                        d.stale_after <= %s as stale
                 from public.kb_chunks c
                 join public.kb_documents d on d.id = c.document_id
@@ -645,7 +691,7 @@ class PostgresKnowledgeStore:
             lexical_cursor = await connection.execute(
                 """
                 select c.id::text as chunk_id, c.content, d.source_id,
-                       c.span_start, c.span_end, d.source_version,
+                       d.title, c.span_start, c.span_end, d.source_version,
                        d.stale_after <= %s as stale,
                        ts_rank_cd(c.content_tsv, websearch_to_tsquery('simple', %s)) as rank
                 from public.kb_chunks c
@@ -666,7 +712,8 @@ class PostgresKnowledgeStore:
             [
                 [_candidate_from_row(row) for row in dense_rows],
                 [_candidate_from_row(row) for row in lexical_rows],
-            ]
+            ],
+            k=tuning.rrf_k,
         )
         if not fused:
             raise EmptyRetrievalError("No scoped knowledge was found; escalate")
@@ -677,6 +724,7 @@ class PostgresKnowledgeStore:
                 score=score,
                 stale=candidate.stale,
                 source_version=candidate.source_version,
+                title=candidate.title,
             )
             for score, candidate in fused
         ]
@@ -695,3 +743,8 @@ def _encode_vector(vector: list[float], dimensions: int) -> str:
     if len(vector) != dimensions or not all(math.isfinite(value) for value in vector):
         raise ValueError("Embedding provider returned an invalid vector")
     return "[" + ",".join(str(value) for value in vector) + "]"
+
+
+def _dumps(value: object) -> str:
+    """JSON string for a jsonb parameter (psycopg cannot adapt a raw dict)."""
+    return json.dumps(value, default=str)

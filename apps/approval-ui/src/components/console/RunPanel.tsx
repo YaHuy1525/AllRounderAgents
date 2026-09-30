@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 
 import { ApiError } from "@/lib/api";
 import type { JiraIssue } from "@/lib/board";
+import { START_RUN_HINT } from "@/lib/roles";
 import {
   RUNNABLE_WORKFLOWS,
   applyRunEvent,
@@ -164,7 +165,18 @@ import {
   type OnboardingVerifyDraft,
   type ScreeningShortlistDraft,
 } from "./RunSurfaceHr";
-import { IconClock, IconCode } from "./icons";
+import {
+  IconAlert,
+  IconCheck,
+  IconCheckCircle,
+  IconClock,
+  IconCode,
+  IconLock,
+  IconPlay,
+  IconShield,
+  IconStop,
+  IconXCircle,
+} from "./icons";
 
 const STATUS_COPY: Record<string, string> = {
   queued: "Queued",
@@ -183,6 +195,65 @@ const RUN_STEP_COPY: Record<RunVisualState, string> = {
   blocked: "Blocked",
   future: "Not started",
 };
+
+/** One rail row: the step key, its visible title and the derived visual state. */
+export type RailStepItem = { id: string; title: string; state: RunVisualState };
+
+/**
+ * Vertical step rail shared by the run panel and the ticket fallback view:
+ * a state node per step (check / pulsing dot / shield / alarm / number),
+ * title + state sub-label, and a connector line that fills as steps complete.
+ */
+export function StepRail({
+  steps,
+  activeId,
+  onSelect,
+  label,
+}: {
+  steps: RailStepItem[];
+  activeId: string | null;
+  onSelect: (id: string) => void;
+  label: string;
+}) {
+  return (
+    <ol className="run-rail" aria-label={label}>
+      {steps.map((step, index) => {
+        const active = step.id === activeId;
+        return (
+          <li
+            key={step.id}
+            className={`run-rail-item rail-${step.state}${active ? " active" : ""}`}
+          >
+            <button
+              type="button"
+              className="run-rail-button"
+              aria-current={active ? "step" : undefined}
+              onClick={() => onSelect(step.id)}
+            >
+              <span className="run-rail-node" aria-hidden="true">
+                {step.state === "done" ? (
+                  <IconCheck />
+                ) : step.state === "awaiting" ? (
+                  <IconShield />
+                ) : step.state === "blocked" ? (
+                  <IconAlert />
+                ) : step.state === "current" ? (
+                  <span className="run-rail-pulse" />
+                ) : (
+                  <span className="run-rail-number">{index + 1}</span>
+                )}
+              </span>
+              <span className="run-rail-text">
+                <span className="run-rail-title">{step.title}</span>
+                <span className="run-rail-state">{RUN_STEP_COPY[step.state]}</span>
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
 const PROCEED_LABELS: Record<string, string> = {
   "review-options": "Start review",
@@ -2518,6 +2589,7 @@ export function RunPanel({
       <div className="run-panel-toolbar">
         <div className="run-panel-status">
           <span className={`run-status status-${detail.status}`}>
+            <span className="run-status-dot" aria-hidden="true" />
             {STATUS_COPY[detail.status] ?? detail.status}
           </span>
           <span className="run-panel-meta">
@@ -2571,22 +2643,54 @@ export function RunPanel({
         </div>
       </div>
 
+      <div
+        className={`run-progress${detail.status === "running" ? " is-running" : ""}`}
+        role="progressbar"
+        aria-label="Run progress"
+        aria-valuemin={0}
+        aria-valuemax={Math.max(detail.stepCount, 1)}
+        aria-valuenow={Math.min(detail.stepsDone, detail.stepCount)}
+      >
+        <span
+          className="run-progress-fill"
+          style={{
+            width: `${
+              detail.stepCount > 0 ? Math.round((detail.stepsDone / detail.stepCount) * 100) : 0
+            }%`,
+          }}
+        />
+      </div>
+
       {detail.status === "queued" && (
-        <p className="run-banner queued" role="status">
-          {detail.queuePosition !== null
-            ? `Queued at position #${detail.queuePosition}.`
-            : "Queued — waiting for a free slot."}
-          {" "}It starts automatically when a slot frees up; other runs are not blocked by it.
-        </p>
+        <div className="run-banner queued" role="status">
+          <span className="run-banner-icon" aria-hidden="true">
+            <IconClock />
+          </span>
+          <div className="run-banner-body">
+            <strong>Queued</strong>
+            <p>
+              {detail.queuePosition !== null
+                ? `Position #${detail.queuePosition} in line.`
+                : "Waiting for a free slot."}{" "}
+              It starts automatically when a slot frees up; other runs are not blocked by it.
+            </p>
+          </div>
+        </div>
       )}
 
       {detail.status === "blocked" && (
         <div className="run-banner blocked" role="status">
-          <p>
-            {detail.lockedBy !== null
-              ? `Locked by run ${shortId(detail.lockedBy)} on ${detail.lockTarget ?? "the target"}. Retry when that run finishes, or abort this one.`
-              : `Blocked on the target lock for ${detail.lockTarget ?? "the target"}.`}
-          </p>
+          <span className="run-banner-icon" aria-hidden="true">
+            <IconLock />
+          </span>
+          <div className="run-banner-body">
+            <strong>Blocked on the target lock</strong>
+            <p>
+              {detail.lockedBy !== null
+                ? `Locked by run ${shortId(detail.lockedBy)} on ${detail.lockTarget ?? "the target"}. Retry when that run finishes, or abort this one.`
+                : `Held by another run on ${detail.lockTarget ?? "the target"}.`}
+            </p>
+          </div>
           <div className="run-banner-actions">
             <button type="button" disabled={busy} onClick={() => void submitDecision({ action: "retry_lock" })}>
               Retry lock
@@ -2599,19 +2703,37 @@ export function RunPanel({
       )}
 
       {detail.status === "completed" && (
-        <p className="run-banner completed" role="status">
-          Run completed — every checkpoint was approved and the side effect is recorded.
-        </p>
+        <div className="run-banner completed" role="status">
+          <span className="run-banner-icon" aria-hidden="true">
+            <IconCheckCircle />
+          </span>
+          <div className="run-banner-body">
+            <strong>Run completed</strong>
+            <p>Every checkpoint was approved and the side effect is recorded.</p>
+          </div>
+        </div>
       )}
       {detail.status === "failed" && (
-        <p className="run-banner failed" role="alert">
-          {`Run failed: ${detail.outcome ?? "unknown error"}.`}
-        </p>
+        <div className="run-banner failed" role="alert">
+          <span className="run-banner-icon" aria-hidden="true">
+            <IconXCircle />
+          </span>
+          <div className="run-banner-body">
+            <strong>Run failed</strong>
+            <p>{`${detail.outcome ?? "Unknown error"}.`}</p>
+          </div>
+        </div>
       )}
       {detail.status === "cancelled" && (
-        <p className="run-banner cancelled" role="status">
-          {`Run cancelled${detail.cancelReason !== null ? `: ${detail.cancelReason}` : "."}`}
-        </p>
+        <div className="run-banner cancelled" role="status">
+          <span className="run-banner-icon" aria-hidden="true">
+            <IconStop />
+          </span>
+          <div className="run-banner-body">
+            <strong>Run cancelled</strong>
+            {detail.cancelReason !== null && <p>{detail.cancelReason}</p>}
+          </div>
+        </div>
       )}
 
       {actionError !== null && (
@@ -2620,52 +2742,32 @@ export function RunPanel({
         </p>
       )}
 
-      <div className="stepper-row run-stepper-row">
-        <ol className="stepper" aria-label="Run steps">
-          {detail.steps.map((step, index) => {
-            const state = runVisualState(step);
-            return (
-              <li key={step.stepId} className={`step step-${state}`}>
-                <button
-                  type="button"
-                  className="step-button"
-                  aria-expanded={expandedStepId === step.stepId}
-                  onClick={() => selectStep(step.stepId)}
-                >
-                  <span className="step-dot" aria-hidden="true">
-                    {state === "done" ? "✓" : index + 1}
-                  </span>
-                  <span className="step-label">
-                    {step.title}
-                    <span className="sr-only">{` — ${RUN_STEP_COPY[state]}`}</span>
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
-
-      {focusedStep !== null && (
-        <div className="step-panels">
-          <section className="step-panel expanded">
-            <header>
-              <button
-                type="button"
-                className="step-panel-toggle"
-                aria-expanded
-                onClick={() => selectStep(focusedStep.stepId)}
-              >
-                <span className={`step-state state-${focusedState}`}>
-                  {RUN_STEP_COPY[focusedState]}
-                </span>
-                <h3>{focusedStep.title}</h3>
-              </button>
+      <div className="run-workbench">
+        <StepRail
+          label="Run steps"
+          steps={detail.steps.map((step) => ({
+            id: step.stepId,
+            title: step.title,
+            state: runVisualState(step),
+          }))}
+          activeId={focusedStep?.stepId ?? null}
+          onSelect={selectStep}
+        />
+        {focusedStep !== null && (
+          <section className="run-step-view anim-fade-up" key={focusedStep.stepId}>
+            <header className="run-step-head">
+              <span className={`step-state state-${focusedState}`}>
+                {RUN_STEP_COPY[focusedState]}
+              </span>
+              <h3>{focusedStep.title}</h3>
+              <span className="run-step-meta">
+                {`Step ${detail.steps.indexOf(focusedStep) + 1} of ${detail.steps.length}`}
+              </span>
             </header>
-            <div className="step-panel-body">{renderStepBody(focusedStep, focusedState)}</div>
+            <div className="run-step-body">{renderStepBody(focusedStep, focusedState)}</div>
           </section>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }
@@ -2683,12 +2785,15 @@ export function StartRunCard({
   onStarted,
   initialWorkflow,
   workflowOptions,
+  canStart = true,
 }: {
   issue: JiraIssue;
   caseId: string | null;
   onStarted: () => void;
   initialWorkflow?: string;
   workflowOptions?: ReadonlyArray<{ id: string; label: string }>;
+  /** False disables the launcher; the server stays source of truth. */
+  canStart?: boolean;
 }) {
   const options =
     workflowOptions !== undefined && workflowOptions.length > 0
@@ -2824,6 +2929,7 @@ export function StartRunCard({
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
+    if (!canStart) return;
     if (vendorsFlow) {
       const name = vendorName.trim();
       const taxId = vendorTaxId.trim();
@@ -3131,10 +3237,17 @@ export function StartRunCard({
 
   return (
     <form className="start-run-card" onSubmit={(event) => void submit(event)}>
-      <h3>Start a run</h3>
-      <p className="step-summary">
-        Runs pause at every checkpoint for your review — nothing is posted without a decision.
-      </p>
+      <header className="start-run-head">
+        <span className="start-run-icon" aria-hidden="true">
+          <IconPlay />
+        </span>
+        <div>
+          <h3>Start a run</h3>
+          <p className="step-summary">
+            Runs pause at every checkpoint for your review — nothing is posted without a decision.
+          </p>
+        </div>
+      </header>
       {caseId === null && (
         <p className="step-summary">
           Starting the run will open (or reuse) this ticket's case record automatically.
@@ -3669,9 +3782,30 @@ export function StartRunCard({
           {error}
         </p>
       )}
+      {!canStart && (
+        <p className="role-hint" role="note">
+          <IconLock />
+          {START_RUN_HINT}
+        </p>
+      )}
       <div className="run-actions">
-        <button type="submit" className="approve" disabled={busy}>
-          {busy ? "Starting…" : "Start run"}
+        <button
+          type="submit"
+          className="approve"
+          disabled={busy || !canStart}
+          title={canStart ? undefined : START_RUN_HINT}
+        >
+          {busy ? (
+            <>
+              <span className="spinner on-solid" aria-hidden="true" />
+              <span>Starting…</span>
+            </>
+          ) : (
+            <>
+              <IconPlay />
+              <span>Start run</span>
+            </>
+          )}
         </button>
       </div>
     </form>

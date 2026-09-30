@@ -18,6 +18,9 @@ import {
   type JiraPrefs,
   type UiPrefs,
 } from "@/lib/prefs";
+import { canDecide, canManageAccounts, canStartRun } from "@/lib/roles";
+import { workflowLabel } from "@/lib/runs";
+import { isTypingTarget, resolveShortcut, type ShortcutAction } from "@/lib/shortcuts";
 import { AUTH_STORAGE_KEY, getSupabaseClient } from "@/lib/supabase";
 import {
   closeTab,
@@ -25,8 +28,11 @@ import {
   ensureDashboard,
   loadTabState,
   openNewTab,
+  openRunTab,
   openSingletonTab,
   openTicketTab,
+  openWorkflowTab,
+  openWorkflowsTab,
   saveTabState,
   type Tab,
   type TicketRef,
@@ -39,21 +45,32 @@ import { BoardView } from "./BoardView";
 import { DocsPanel } from "./DocsPanel";
 import {
   IconAccount,
+  IconActivity,
   IconApprovals,
   IconBoard,
   IconChat,
+  IconChevronRight,
   IconClock,
   IconClose,
   IconDocs,
-  IconGrid,
+  IconFileText,
+  IconGauge,
+  IconInbox,
+  IconLock,
   IconPlus,
   IconSettings,
+  IconWorkflow,
 } from "./icons";
 import { NewTabView } from "./NewTabView";
+import { ObservabilityView } from "./ObservabilityView";
+import { RunInspector } from "./RunInspector";
+import { RunsView } from "./RunsView";
 import { SettingsView } from "./SettingsView";
 import { TicketTab } from "./TicketTab";
+import { WorkflowCatalogView } from "./WorkflowCatalogView";
+import { WorkflowDetailView } from "./WorkflowDetailView";
 
-type PanelKind = "approvals" | "docs" | "settings" | "account";
+type PanelKind = "approvals" | "docs" | "settings" | "account" | "runs" | "observability";
 
 type BoardResult = {
   project: string;
@@ -110,10 +127,10 @@ function fallbackIssue(tab: Tab): JiraIssue {
 }
 
 /**
- * Console shell: icon rail on the left, tab strip + history on top, the
- * active view in the middle, and the assistant rail on the right. Ticket
- * tabs are opened from the board (or the history menu) and render the
- * lane-correct run stepper for that ticket.
+ * Console shell: labeled sidebar on the left (collapsible back to the icon
+ * rail), tab strip + history on top, the active view in the middle, and the
+ * assistant rail on the right. Ticket tabs are opened from the board (or the
+ * history menu) and render the lane-correct run stepper for that ticket.
  */
 export function Console() {
   const [mounted, setMounted] = useState(false);
@@ -159,6 +176,10 @@ export function Console() {
   activeTabIdRef.current = activeTabId;
   const historyRef = useRef<HTMLDivElement>(null);
   const sessionRestoredRef = useRef(false);
+  // Global shortcut dispatch reads the newest handlers through a ref so the
+  // window listener subscribes once; pendingG tracks the `g` chord prefix.
+  const shortcutRef = useRef<(action: ShortcutAction) => void>(() => {});
+  const pendingGRef = useRef(false);
 
   const applyPrefs = useCallback((next: JiraPrefs): JiraPrefs => {
     const saved = savePrefs(window.localStorage, next);
@@ -392,6 +413,40 @@ export function Console() {
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [historyOpen]);
 
+  // Router for the global shortcut listener; rebound every render so the
+  // actions always see the freshest tab state through the refs above.
+  shortcutRef.current = (action) => {
+    if (action === "board") focusDashboard();
+    else if (action === "runs") openPanel("runs");
+    else if (action === "workflows") openWorkflows();
+    else if (action === "new-tab") addTab();
+  };
+
+  // Global shortcuts: `g` then b/r/w for navigation, `+` for a new tab.
+  // Typing targets and modified chords are ignored; j/k list movement lives
+  // inside the runs table itself.
+  useEffect(() => {
+    function handleShortcut(event: KeyboardEvent): void {
+      if (event.defaultPrevented) return;
+      if (isTypingTarget(event.target)) {
+        pendingGRef.current = false;
+        return;
+      }
+      const resolution = resolveShortcut(event.key, pendingGRef.current, {
+        modifier: event.metaKey || event.ctrlKey || event.altKey,
+      });
+      if (resolution.kind === "action") {
+        event.preventDefault();
+        pendingGRef.current = false;
+        shortcutRef.current(resolution.action);
+        return;
+      }
+      pendingGRef.current = resolution.kind === "pending";
+    }
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, []);
+
   function rememberTicket(ref: TicketRef): void {
     setUiPrefs((current) =>
       saveUiPrefs(window.localStorage, {
@@ -451,6 +506,55 @@ export function Console() {
         setSettingsStatus("Jira workspace could not be loaded.");
       });
     }
+  }
+
+  /**
+   * The Workflows nav item opens the catalog tab (id `workflows`);
+   * per-workflow detail tabs share the same kind but key on
+   * `workflow:<id>`, so this cannot ride the kind-based singleton lookup.
+   */
+  function openWorkflows(): void {
+    const next = openWorkflowsTab(tabsRef.current);
+    tabsRef.current = next.tabs;
+    setTabs(next.tabs);
+    activeTabIdRef.current = next.activeId;
+    setActiveTabId(next.activeId);
+  }
+
+  /** Catalog "View graph" → a per-workflow detail tab (graph + step list). */
+  function openWorkflow(workflow: { id: string; title: string }): void {
+    const next = openWorkflowTab(tabsRef.current, workflow);
+    tabsRef.current = next.tabs;
+    setTabs(next.tabs);
+    activeTabIdRef.current = next.activeId;
+    setActiveTabId(next.activeId);
+  }
+
+  /**
+   * "Start run" CTAs open a new tab with the workflow preselected; starting
+   * the run itself still takes an explicit ticket pick in that flow.
+   */
+  function startWorkflowRun(workflowId: string): void {
+    const next = openNewTab(tabsRef.current, { workflowId });
+    tabsRef.current = next.tabs;
+    setTabs(next.tabs);
+    activeTabIdRef.current = next.activeId;
+    setActiveTabId(next.activeId);
+  }
+
+  /** Platform chips and runs rows deep-link into a standalone run inspector. */
+  function openRun(run: { runId: string; workflow: string; ticketKey?: string }): void {
+    const label = run.workflow === "" ? "Run" : workflowLabel(run.workflow);
+    const ticketKey = run.ticketKey !== undefined && run.ticketKey !== "" ? run.ticketKey : null;
+    const next = openRunTab(tabsRef.current, {
+      id: run.runId,
+      title: ticketKey === null ? label : `${label} · ${ticketKey}`,
+      ...(ticketKey === null ? {} : { ticketKey }),
+    });
+    tabsRef.current = next.tabs;
+    setTabs(next.tabs);
+    activeTabIdRef.current = next.activeId;
+    setActiveTabId(next.activeId);
   }
 
   function focusChat(): void {
@@ -590,20 +694,41 @@ export function Console() {
     roles: [],
     expiresAt: null,
   };
+  // Advisory role gates: an unresolved (empty) role list stays permissive and
+  // the server re-checks every mutation, so the UI only spares known-403s.
+  const allowStart = canStartRun(accountInfo.roles);
+  const allowDecide = canDecide(accountInfo.roles);
+  const allowAccounts = canManageAccounts(accountInfo.roles);
 
   return (
     <>
       {shell === "loading" && (
         <section id="loading-screen" className="gate-screen" aria-live="polite">
-          <p className="eyebrow">AllRounderAgent</p>
-          <h1>Restoring session</h1>
-          <p>Checking the cached sign-in…</p>
+          <div className="gate-card">
+            <span className="gate-mark" aria-hidden="true">
+              <IconApprovals />
+            </span>
+            <p className="eyebrow">AllRounderAgent</p>
+            <h1>Restoring session</h1>
+            <p className="gate-loading-line">
+              <span className="spinner" aria-hidden="true" />
+              Checking the cached sign-in…
+            </p>
+            <div className="gate-skeleton" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
         </section>
       )}
 
       {shell === "auth" && (
         <section id="auth-screen" className="gate-screen">
           <div className="auth-card">
+            <span className="gate-mark" aria-hidden="true">
+              <IconLock />
+            </span>
             <p className="eyebrow">AllRounderAgent</p>
             <h1>Sign in to open the board</h1>
             <p>
@@ -655,7 +780,8 @@ export function Console() {
                 />
                 <span>Remember email on this device</span>
               </label>
-              <button type="submit" disabled={signInBusy}>
+              <button type="submit" className="signin-button" disabled={signInBusy}>
+                {signInBusy && <span className="spinner on-solid" aria-hidden="true" />}
                 Sign in
               </button>
             </form>
@@ -669,84 +795,144 @@ export function Console() {
       )}
 
       {shell === "app" && (
-        <div id="app-shell" className="app-shell">
+        <div
+          id="app-shell"
+          className={`app-shell${uiPrefs.sidebarCollapsed ? " rail-collapsed" : ""}`}
+        >
           <aside className="rail" aria-label="Primary navigation">
-            <button
-              type="button"
-              className={`rail-button${activeTab.kind === "dashboard" ? " active" : ""}`}
-              data-view="dashboard"
-              aria-label="Dashboard"
-              title="Dashboard"
-              onClick={focusDashboard}
-            >
-              <IconGrid />
-            </button>
-            <button
-              type="button"
-              className={`rail-button${activeTab.kind === "dashboard" ? " active" : ""}`}
-              data-view="board"
-              aria-label="Sprint board"
-              title="Sprint board"
-              onClick={focusDashboard}
-            >
-              <IconBoard />
-            </button>
-            <button
-              type="button"
-              className={`rail-button${activeTab.kind === "approvals" ? " active" : ""}`}
-              data-view="approvals"
-              aria-label="Approvals"
-              title="Approvals"
-              onClick={() => openPanel("approvals")}
-            >
-              <IconApprovals />
-              {uiPrefs.badge && pendingApprovals > 0 && (
-                <span className="rail-badge" id="approvals-badge">
-                  {pendingApprovals}
+            <div className="rail-head">
+              <span className="rail-brand">
+                <span className="rail-brand-mark" aria-hidden="true">
+                  <IconApprovals />
                 </span>
-              )}
-            </button>
-            <button
-              type="button"
-              className="rail-button"
-              data-view="chat"
-              aria-label="Chat and cases"
-              title="Chat"
-              onClick={focusChat}
-            >
-              <IconChat />
-            </button>
-            <button
-              type="button"
-              className={`rail-button${activeTab.kind === "docs" ? " active" : ""}`}
-              data-view="docs"
-              aria-label="Docs and help"
-              title="Docs & help"
-              onClick={() => openPanel("docs")}
-            >
-              <IconDocs />
-            </button>
+                <span className="rail-brand-copy">
+                  <strong>AllRounder</strong>
+                  <span>Agent console</span>
+                </span>
+              </span>
+              <button
+                type="button"
+                className="rail-collapse"
+                aria-label={uiPrefs.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                aria-expanded={!uiPrefs.sidebarCollapsed}
+                title={uiPrefs.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                onClick={() => applyUiPrefs({ sidebarCollapsed: !uiPrefs.sidebarCollapsed })}
+              >
+                <IconChevronRight />
+              </button>
+            </div>
+
+            <nav className="rail-nav" aria-label="Workspace">
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "dashboard" ? " active" : ""}`}
+                data-view="board"
+                aria-label="Board"
+                title="Board"
+                onClick={focusDashboard}
+              >
+                <IconBoard />
+                <span className="rail-label">Board</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "runs" ? " active" : ""}`}
+                data-view="runs"
+                aria-label="Runs"
+                title="Runs"
+                onClick={() => openPanel("runs")}
+              >
+                <IconActivity />
+                <span className="rail-label">Runs</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "workflow" ? " active" : ""}`}
+                data-view="workflows"
+                aria-label="Workflows"
+                title="Workflows"
+                onClick={openWorkflows}
+              >
+                <IconWorkflow />
+                <span className="rail-label">Workflows</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "approvals" ? " active" : ""}`}
+                data-view="approvals"
+                aria-label="Approvals"
+                title="Approvals"
+                onClick={() => openPanel("approvals")}
+              >
+                <IconApprovals />
+                <span className="rail-label">Approvals</span>
+                {uiPrefs.badge && pendingApprovals > 0 && (
+                  <span className="rail-badge" id="approvals-badge">
+                    {pendingApprovals}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className="rail-button"
+                data-view="chat"
+                aria-label="Assistant"
+                title="Assistant"
+                onClick={focusChat}
+              >
+                <IconChat />
+                <span className="rail-label">Assistant</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "observability" ? " active" : ""}`}
+                data-view="observability"
+                aria-label="Observability"
+                title="Observability"
+                onClick={() => openPanel("observability")}
+              >
+                <IconGauge />
+                <span className="rail-label">Observability</span>
+              </button>
+            </nav>
+
             <div className="rail-spacer" />
-            <button
-              type="button"
-              className={`rail-button${activeTab.kind === "settings" ? " active" : ""}`}
-              data-view="settings"
-              aria-label="Settings"
-              title="Settings"
-              onClick={() => openPanel("settings")}
-            >
-              <IconSettings />
-            </button>
-            <button
-              type="button"
-              className={`rail-button${activeTab.kind === "account" ? " active" : ""}`}
-              data-view="account"
-              aria-label="Account"
-              title="Account"
-              onClick={() => openPanel("account")}
-            >
-              <IconAccount />
-            </button>
+
+            <nav className="rail-nav" aria-label="Support">
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "docs" ? " active" : ""}`}
+                data-view="docs"
+                aria-label="Docs and help"
+                title="Docs & help"
+                onClick={() => openPanel("docs")}
+              >
+                <IconDocs />
+                <span className="rail-label">Docs & help</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "settings" ? " active" : ""}`}
+                data-view="settings"
+                aria-label="Settings"
+                title="Settings"
+                onClick={() => openPanel("settings")}
+              >
+                <IconSettings />
+                <span className="rail-label">Settings</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "account" ? " active" : ""}`}
+                data-view="account"
+                aria-label="Account"
+                title="Account"
+                onClick={() => openPanel("account")}
+              >
+                <IconAccount />
+                <span className="rail-label">Account</span>
+              </button>
+            </nav>
           </aside>
 
           <main className="workspace">
@@ -803,7 +989,10 @@ export function Console() {
                 {historyOpen && (
                   <div className="history-menu" role="menu" aria-label="Recently viewed tickets">
                     {uiPrefs.recentTickets.length === 0 ? (
-                      <p className="history-empty">No tickets viewed yet.</p>
+                      <p className="history-empty">
+                        <IconInbox />
+                        No tickets viewed yet.
+                      </p>
                     ) : (
                       uiPrefs.recentTickets.map((item) => (
                         <button
@@ -816,8 +1005,14 @@ export function Console() {
                             focusTicket({ key: item.key, summary: item.summary });
                           }}
                         >
-                          <strong>{item.key}</strong>
-                          <span>{item.summary}</span>
+                          <span className="history-item-icon" aria-hidden="true">
+                            <IconFileText />
+                          </span>
+                          <span className="history-item-copy">
+                            <strong>{item.key}</strong>
+                            <span>{item.summary}</span>
+                          </span>
+                          <IconChevronRight className="history-item-arrow" />
                         </button>
                       ))
                     )}
@@ -840,6 +1035,7 @@ export function Console() {
                   onSearchChange={setSearch}
                   onRefresh={() => void loadBoard()}
                   onOpenDetails={openTicket}
+                  onOpenRun={openRun}
                 />
               )}
 
@@ -849,6 +1045,8 @@ export function Console() {
                   issue={activeIssue}
                   approvals={approvals}
                   onDecide={decideSafely}
+                  canDecide={allowDecide}
+                  canStart={allowStart}
                 />
               )}
 
@@ -857,6 +1055,8 @@ export function Console() {
                   approvals={approvals}
                   failed={approvalsFailed}
                   onDecide={(id, decision) => void decideSafely(id, decision)}
+                  onOpenRun={openRun}
+                  canDecide={allowDecide}
                 />
               )}
 
@@ -873,6 +1073,7 @@ export function Console() {
                   onProjectChange={changeSettingsProject}
                   onBoardChange={changeSettingsBoard}
                   onUiChange={applyUiPrefs}
+                  canManage={allowAccounts}
                 />
               )}
 
@@ -885,8 +1086,35 @@ export function Console() {
               )}
 
               {activeTab.kind === "new" && (
-                <NewTabView issues={issues} status={status} onOpenTicket={openTicket} />
+                <NewTabView
+                  issues={issues}
+                  status={status}
+                  onOpenTicket={openTicket}
+                  initialWorkflowId={activeTab.workflowId}
+                  canStart={allowStart}
+                />
               )}
+
+              {activeTab.kind === "runs" && <RunsView onOpenRun={openRun} />}
+
+              {activeTab.kind === "workflow" &&
+                (activeTab.workflowId ? (
+                  <WorkflowDetailView
+                    workflowId={activeTab.workflowId}
+                    onStartRun={startWorkflowRun}
+                    canStart={allowStart}
+                  />
+                ) : (
+                  <WorkflowCatalogView
+                    onOpenWorkflow={openWorkflow}
+                    onStartRun={startWorkflowRun}
+                    canStart={allowStart}
+                  />
+                ))}
+
+              {activeTab.kind === "run" && <RunInspector runId={activeTab.runId} />}
+
+              {activeTab.kind === "observability" && <ObservabilityView />}
             </div>
           </main>
 

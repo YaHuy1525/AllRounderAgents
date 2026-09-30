@@ -42,6 +42,10 @@ class StepDefinition:
     id: str
     title: str
     side_effecting: bool = False
+    # Display-only provider ids (github, okta, slack, ...) the step touches.
+    # The flow graph renders them as satellites; they never influence
+    # permissions — ``side_effect_scope`` stays the governance source.
+    integrations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -222,6 +226,56 @@ class WorkflowRun:
             heartbeat_at=_parse_datetime(raw.get("heartbeatAt")),
             finished_at=_parse_datetime(finished) if finished else None,
         )
+
+
+def run_snapshot(run: WorkflowRun) -> dict[str, object]:
+    """Shared detail snapshot for the REST surface and enriched SSE events.
+
+    Same key set the ``GET /runs/{run_id}`` payload exposes; publishers embed
+    it under ``run`` so live viewers can apply a transition without a refetch.
+    """
+
+    current = run.current_step()
+    return {
+        "runId": run.run_id,
+        "workflow": run.workflow,
+        "ticketKey": run.ticket_key,
+        "status": run.status,
+        "queuePosition": run.queue_position,
+        "currentStepId": current.step_id if current is not None else None,
+        "stepCount": len(run.steps),
+        "stepsDone": sum(1 for step in run.steps if step.state == "done"),
+        "startedAt": run.started_at.isoformat(),
+        "finishedAt": run.finished_at.isoformat() if run.finished_at else None,
+        "caseId": run.case_id,
+        "attempt": run.attempt,
+        "heartbeatAt": run.heartbeat_at.isoformat(),
+        "lockTarget": run.lock_target,
+        "lockedBy": run.lock_owner,
+        "outcome": run.outcome,
+        "cancelReason": run.cancel_reason,
+        "sideEffects": run.side_effects,
+        "steps": [step.to_dict() for step in run.steps],
+    }
+
+
+def run_summary(run: WorkflowRun) -> dict[str, object]:
+    """One run as a list row — the shared shape every list surface serves
+    (live active lists, ticket history, and the archive ∪ Redis merge)."""
+
+    current = run.current_step()
+    return {
+        "runId": run.run_id,
+        "workflow": run.workflow,
+        "ticketKey": run.ticket_key,
+        "status": run.status,
+        "queuePosition": run.queue_position,
+        "currentStepId": current.step_id if current is not None else None,
+        "stepCount": len(run.steps),
+        "stepsDone": sum(1 for step in run.steps if step.state == "done"),
+        "startedAt": run.started_at.isoformat(),
+        "finishedAt": run.finished_at.isoformat() if run.finished_at else None,
+    }
 
 
 @dataclass(frozen=True)

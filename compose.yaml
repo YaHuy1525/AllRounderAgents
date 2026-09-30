@@ -13,6 +13,36 @@ services:
       timeout: 3s
       retries: 5
 
+  mastra:
+    image: allrounder-mastra:local
+    build:
+      context: .
+      dockerfile: Dockerfile.mastra
+    env_file:
+      - .env
+    environment:
+      # Belt and braces, mirroring deploy/k8s/base/mastra.yaml: bind explicitly
+      # even if .env carries a conflicting PORT or MASTRA_HOST value.
+      PORT: "4111"
+      MASTRA_HOST: "0.0.0.0"
+      # Compose-network address of the bundled API: the MSP draft step grounds
+      # through POST /knowledge/search and the bills lane checks senders via
+      # POST /msp/vendors/lookup, both authenticated by KNOWLEDGE_SERVICE_TOKEN
+      # from .env. Without the pair, drafts carry no retrieval and every bill
+      # escalates as vendor_unverified.
+      KNOWLEDGE_API_URL: "http://api:8000"
+    ports:
+      - "4111:4111"
+    healthcheck:
+      # TCP probe (same shape as the k8s manifest): the bundle exposes no
+      # dedicated health route, and the port opens only once routes load.
+      test: ["CMD", "node", "-e", "const net=require('net');net.connect(4111,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+    restart: unless-stopped
+
   api:
     image: allrounder-api:local
     build:
@@ -22,11 +52,16 @@ services:
       - .env
     environment:
       REDIS_URL: redis://redis:6379/0
+      # Compose-network address of the bundled Mastra host; overrides the
+      # host-bridge value in .env so no host process is required.
+      MASTRA_BASE_URL: "http://mastra:4111"
       CORS_ALLOW_ORIGINS: '${DOCKER_CORS_ALLOW_ORIGINS:-["http://localhost:3000"]}'
     ports:
       - "8000:8000"
     depends_on:
       redis:
+        condition: service_healthy
+      mastra:
         condition: service_healthy
     restart: unless-stopped
 

@@ -445,6 +445,7 @@ export function createReviewFlow(deps: ReviewFlowDeps) {
           verdict: artifact.verdict,
           body: reviewBody(artifact),
           comments: artifact.comments,
+          author: artifact.pullRequest.author,
         });
         const receipt = ReviewReceiptSchema.parse({
           reviewId: posted.reviewId,

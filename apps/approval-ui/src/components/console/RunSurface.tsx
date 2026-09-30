@@ -1043,9 +1043,21 @@ export function IssueValidationReport({ validation }: { validation: IssueValidat
 }
 
 function diffLineClass(line: string): string {
+  if (line.startsWith("@@")) return "diff-hunk";
   if (line.startsWith("+")) return "diff-add";
   if (line.startsWith("-")) return "diff-del";
   return "diff-context";
+}
+
+/** Severity tint for one validation-log line; text itself is never altered. */
+function logLineClass(line: string): string {
+  const lower = line.toLowerCase();
+  if (/\b(error|fail|failed|failure|invalid|exception|cannot|unable|denied)\b/.test(lower)) {
+    return "log-error";
+  }
+  if (/\b(warn|warning|deprecated|skip|skipped)\b/.test(lower)) return "log-warn";
+  if (/\b(ok|pass|passed|green|success|done|installed)\b/.test(lower)) return "log-ok";
+  return "log-info";
 }
 
 /** One collapsible line diff; rendered as text spans only. */
@@ -3586,7 +3598,15 @@ export function DependencyValidateSurface({
             </button>
             {open && (
               <pre className="validation-log">
-                {group.log === "" ? "(no log recorded)" : group.log}
+                {group.log === "" ? (
+                  <span className="log-line log-info">{`(no log recorded)`}</span>
+                ) : (
+                  group.log.split("\n").map((line, index) => (
+                    <span key={index} className={`log-line ${logLineClass(line)}`}>
+                      {`${line}\n`}
+                    </span>
+                  ))
+                )}
               </pre>
             )}
           </article>

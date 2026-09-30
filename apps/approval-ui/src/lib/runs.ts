@@ -231,6 +231,11 @@ export function workflowsForTicket(ticket: {
   return supported.length > 0 ? supported : RUNNABLE_WORKFLOWS.map((item) => item.id);
 }
 
+/** Console label for a workflow id (falls back to the raw id). */
+export function workflowLabel(id: string): string {
+  return RUNNABLE_WORKFLOWS.find((item) => item.id === id)?.label ?? id;
+}
+
 const REPOSITORY_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 
 export function isValidRepository(value: string): boolean {
@@ -271,6 +276,31 @@ export function latestRunId(runs: RunSummary[]): string | null {
   return sorted[0]?.runId ?? null;
 }
 
+/**
+ * Whole seconds between start and finish (or `now` while the run is open);
+ * null when either timestamp is missing or malformed.
+ */
+export function runDurationSeconds(
+  run: Pick<RunSummary, "startedAt" | "finishedAt">,
+  now: number = Date.now(),
+): number | null {
+  const start = Date.parse(run.startedAt);
+  if (Number.isNaN(start)) return null;
+  const end = run.finishedAt === null ? now : Date.parse(run.finishedAt);
+  if (Number.isNaN(end)) return null;
+  return Math.max(0, Math.round((end - start) / 1000));
+}
+
+/** Compact duration copy for list rows: 42s, 3m 05s, 2h 07m. */
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
 export function stepArtifact(run: RunDetail, stepId: string): Record<string, unknown> | null {
   const step = run.steps.find((item) => item.stepId === stepId);
   return step?.artifact ?? null;
@@ -303,11 +333,151 @@ function withStep(run: RunDetail, stepId: string, update: (step: RunStep) => Run
   return run.steps.map((step) => (step.stepId === stepId ? update(step) : step));
 }
 
+/** Transition events whose payloads embed a full run snapshot (``event.run``). */
+const SNAPSHOT_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "run.suspended",
+  "run.status",
+  "run.decision",
+  "run.locked",
+  "run.unlocked",
+]);
+
+const RUN_STEP_STATES: readonly RunStepState[] = [
+  "pending",
+  "running",
+  "awaiting_human",
+  "blocked",
+  "done",
+  "failed",
+];
+
+function isRunStepState(value: unknown): value is RunStepState {
+  return typeof value === "string" && (RUN_STEP_STATES as readonly string[]).includes(value);
+}
+
+function asEffectMap(value: unknown): Record<string, Record<string, unknown>> {
+  const record = asRecord(value);
+  if (record === null) return {};
+  const effects: Record<string, Record<string, unknown>> = {};
+  for (const [key, item] of Object.entries(record)) {
+    const effect = asRecord(item);
+    if (effect !== null) effects[key] = effect;
+  }
+  return effects;
+}
+
+function parseRunStep(value: unknown): RunStep | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const stepId = asString(record.stepId);
+  const title = asString(record.title);
+  const index = asNumber(record.index);
+  if (stepId === null || title === null || index === null || !isRunStepState(record.state)) {
+    return null;
+  }
+  return {
+    stepId,
+    index,
+    title,
+    state: record.state,
+    artifact: asRecord(record.artifact),
+    decision: asRecord(record.decision),
+    receipt: asString(record.receipt),
+    actionHash: asString(record.actionHash),
+    regenerations: asNumber(record.regenerations) ?? 0,
+    updatedAt: asString(record.updatedAt) ?? "",
+  };
+}
+
+/**
+ * Validate one embedded run snapshot — the API enriches transition events
+ * with the same shape ``GET /runs/{runId}`` returns. Anything malformed
+ * returns null so the caller falls back to the incremental patch.
+ */
+export function parseRunSnapshot(value: unknown): RunDetail | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const runId = asString(record.runId);
+  const workflow = asString(record.workflow);
+  const ticketKey = asString(record.ticketKey);
+  const caseId = asString(record.caseId);
+  const startedAt = asString(record.startedAt);
+  const heartbeatAt = asString(record.heartbeatAt);
+  const stepCount = asNumber(record.stepCount);
+  const stepsDone = asNumber(record.stepsDone);
+  const attempt = asNumber(record.attempt);
+  if (
+    runId === null ||
+    workflow === null ||
+    ticketKey === null ||
+    caseId === null ||
+    startedAt === null ||
+    heartbeatAt === null ||
+    stepCount === null ||
+    stepsDone === null ||
+    attempt === null ||
+    !isRunStatus(record.status) ||
+    !Array.isArray(record.steps)
+  ) {
+    return null;
+  }
+  const steps: RunStep[] = [];
+  for (const item of record.steps) {
+    const step = parseRunStep(item);
+    if (step === null) return null;
+    steps.push(step);
+  }
+  return {
+    runId,
+    workflow,
+    ticketKey,
+    status: record.status,
+    queuePosition: asNumber(record.queuePosition),
+    currentStepId: asString(record.currentStepId),
+    stepCount,
+    stepsDone,
+    startedAt,
+    finishedAt: asString(record.finishedAt),
+    caseId,
+    attempt,
+    heartbeatAt,
+    lockTarget: asString(record.lockTarget),
+    lockedBy: asString(record.lockedBy),
+    outcome: asString(record.outcome),
+    cancelReason: asString(record.cancelReason),
+    sideEffects: asEffectMap(record.sideEffects),
+    steps,
+  };
+}
+
+/**
+ * Merge one replayed or live event into the ordered history: entries dedupe
+ * by sequence and stay sorted, so a re-subscribed stream can replay from
+ * zero without duplicating the tail it already showed.
+ */
+export function mergeRunEvents(events: readonly RunEvent[], event: RunEvent): RunEvent[] {
+  const sequence = asNumber(event.sequence);
+  if (sequence === null) return [...events, event];
+  const merged = events.filter((item) => item.sequence !== sequence);
+  merged.push(event);
+  return merged.sort(
+    (left, right) =>
+      (asNumber(left.sequence) ?? Number.MAX_SAFE_INTEGER) -
+      (asNumber(right.sequence) ?? Number.MAX_SAFE_INTEGER),
+  );
+}
+
 /**
  * Apply one per-run SSE event onto the last known detail. Pure (new objects
  * only) so the panel can render instantly while a full refresh reconciles.
+ * Transition events prefer their embedded snapshot; the incremental patch
+ * stays as the fallback when the snapshot is absent or malformed.
  */
 export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
+  if (SNAPSHOT_EVENT_TYPES.has(event.type)) {
+    const snapshot = parseRunSnapshot(event.run);
+    if (snapshot !== null && snapshot.runId === run.runId) return snapshot;
+  }
   const next: RunDetail = { ...run };
   switch (event.type) {
     case "run.created": {
@@ -541,6 +711,107 @@ export async function setDefaultGithubAccount(accountId: string): Promise<Github
   );
 }
 
+/** The workspace's MSP connection; null until the desk is wired in Settings. */
+export type MspConnection = {
+  inboundDomain: string;
+  displayName: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** One mailbox client ref registered for the MSP lane. */
+export type MspClient = {
+  clientRef: string;
+  displayName: string;
+  contactEmail: string;
+  deskProject: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MspConnections = {
+  connection: MspConnection | null;
+  clients: MspClient[];
+};
+
+/** Connection plus clients, as the Settings island reads them. */
+export async function getMspConnections(): Promise<MspConnections> {
+  return api<MspConnections>("/msp/connections");
+}
+
+export async function saveMspConnection(input: {
+  inboundDomain: string;
+  displayName?: string;
+}): Promise<MspConnection> {
+  return api<MspConnection>("/msp/connections", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function upsertMspClient(input: {
+  clientRef: string;
+  displayName?: string;
+  contactEmail?: string;
+  deskProject?: string;
+}): Promise<MspClient> {
+  return api<MspClient>("/msp/clients", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteMspClient(clientRef: string): Promise<void> {
+  await apiVoid(`/msp/clients/${encodeURIComponent(clientRef)}`, { method: "DELETE" });
+}
+
+/** Client refs are mailbox slugs; the server check allows dots and dashes. */
+const MSP_CLIENT_REF = /^[a-z0-9][a-z0-9.-]{0,63}$/;
+
+export function normalizeClientRef(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/** Returns a caller-safe reason when the ref would fail the server check. */
+export function clientRefProblem(value: string): string | null {
+  const ref = normalizeClientRef(value);
+  if (ref.length === 0) return "Enter the mailbox local part, for example acme.";
+  if (!MSP_CLIENT_REF.test(ref)) {
+    return "Use lowercase letters, digits, dots and dashes only (max 64 characters).";
+  }
+  return null;
+}
+
+/** The YYYY-MM pack month for a clock; the console defaults to the current one. */
+export function packMonth(now: Date): string {
+  return now.toISOString().slice(0, 7);
+}
+
+export function auditPackFilename(clientRef: string, month: string): string {
+  return `audit-pack-${clientRef}-${month}.pdf`;
+}
+
+/**
+ * Downloads the monthly audit pack as a PDF. Binary responses cannot ride
+ * through the JSON helper, so the body becomes a blob and the browser saves it
+ * under the server's filename.
+ */
+export async function downloadAuditPack(clientRef: string, month: string): Promise<void> {
+  if (!apiUrl) throw new Error("NEXT_PUBLIC_API_URL is not configured");
+  const auth = await sessionHeaders();
+  const query = new URLSearchParams({ clientRef, month, format: "pdf" });
+  const response = await fetch(`${apiUrl}/msp/audit-pack?${query.toString()}`, {
+    headers: auth,
+  });
+  if (!response.ok) throw new ApiError(response.status);
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = auditPackFilename(clientRef, month);
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function listPullRequests(
   repository: string,
   accountId?: string,
@@ -556,11 +827,53 @@ export async function listPullRequests(
   return payload.pullRequests;
 }
 
-export async function listRuns(ticketKey: string): Promise<RunSummary[]> {
-  const payload = await api<{ runs: RunSummary[] }>(
-    `/runs?ticket=${encodeURIComponent(ticketKey)}`,
+export type RunListScope = "active" | "history";
+
+/** Filters for the runs explorer (`GET /runs`); absent fields are omitted. */
+export type RunListFilters = {
+  ticket?: string;
+  scope?: RunListScope;
+  workflow?: string;
+  status?: RunStatus;
+  limit?: number;
+  cursor?: string;
+};
+
+/**
+ * Deterministic query string for `GET /runs` (fixed param order so cursors and
+ * tests stay predictable). The default scope (`active`) is omitted — the empty
+ * filter set serializes to "".
+ */
+export function runListQuery(filters: RunListFilters = {}): string {
+  const params = new URLSearchParams();
+  if (filters.ticket !== undefined && filters.ticket !== "") params.set("ticket", filters.ticket);
+  if (filters.scope !== undefined && filters.scope !== "active") params.set("scope", filters.scope);
+  if (filters.workflow !== undefined && filters.workflow !== "") {
+    params.set("workflow", filters.workflow);
+  }
+  if (filters.status !== undefined) params.set("status", filters.status);
+  if (filters.limit !== undefined) params.set("limit", String(filters.limit));
+  if (filters.cursor !== undefined && filters.cursor !== "") params.set("cursor", filters.cursor);
+  const query = params.toString();
+  return query === "" ? "" : `?${query}`;
+}
+
+export type RunListPage = {
+  runs: RunSummary[];
+  nextCursor: string | null;
+};
+
+/** One page of runs; `scope: "history"` merges the durable archive with Redis. */
+export async function listRunsPage(filters: RunListFilters = {}): Promise<RunListPage> {
+  const payload = await api<{ runs: RunSummary[]; nextCursor?: string | null }>(
+    `/runs${runListQuery(filters)}`,
   );
-  return payload.runs;
+  return { runs: payload.runs, nextCursor: payload.nextCursor ?? null };
+}
+
+export async function listRuns(ticketKey: string): Promise<RunSummary[]> {
+  const page = await listRunsPage({ ticket: ticketKey });
+  return page.runs;
 }
 
 export async function getRun(runId: string): Promise<RunDetail> {

@@ -24,6 +24,8 @@ MAX_TRACKED_KEYS = 10_000
 
 
 class RateLimiter(Protocol):
+    window_seconds: int
+
     def allow(self, key: str) -> bool: ...
 
 
@@ -34,15 +36,23 @@ class InMemoryRateLimiter:
         self,
         limit_per_minute: int,
         *,
+        window_seconds: int = WINDOW_SECONDS,
+        max_tracked_keys: int = MAX_TRACKED_KEYS,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._limit = limit_per_minute
+        self.window_seconds = window_seconds
+        self._max_tracked_keys = max_tracked_keys
         self._clock = clock or time.monotonic
         self._windows: OrderedDict[str, list[float]] = OrderedDict()
 
     def allow(self, key: str) -> bool:
         now = self._clock()
-        bucket = [seen for seen in self._windows.get(key, []) if now - seen < WINDOW_SECONDS]
+        bucket = [
+            seen
+            for seen in self._windows.get(key, [])
+            if now - seen < self.window_seconds
+        ]
         if key in self._windows:
             self._windows.move_to_end(key)
         if len(bucket) >= self._limit:
@@ -50,7 +60,7 @@ class InMemoryRateLimiter:
             return False
         bucket.append(now)
         self._windows[key] = bucket
-        while len(self._windows) > MAX_TRACKED_KEYS:
+        while len(self._windows) > self._max_tracked_keys:
             self._windows.popitem(last=False)
         return True
 
@@ -63,22 +73,30 @@ class RedisRateLimiter:
         client: Redis,
         limit_per_minute: int,
         *,
+        window_seconds: int = WINDOW_SECONDS,
+        max_tracked_keys: int = MAX_TRACKED_KEYS,
         fallback: RateLimiter | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._client = client
         self._limit = limit_per_minute
-        self._fallback = fallback or InMemoryRateLimiter(limit_per_minute)
+        self.window_seconds = window_seconds
+        self._fallback = fallback or InMemoryRateLimiter(
+            limit_per_minute,
+            window_seconds=window_seconds,
+            max_tracked_keys=max_tracked_keys,
+            clock=clock,
+        )
         self._clock = clock or time.time
         self._logged_degradation = False
 
     def allow(self, key: str) -> bool:
-        window = int(self._clock()) // WINDOW_SECONDS
+        window = int(self._clock()) // self.window_seconds
         window_key = f"allrounder:rate:{key}:{window}"
         try:
             with self._client.pipeline() as pipe:
                 pipe.incr(window_key)
-                pipe.expire(window_key, WINDOW_SECONDS + 1)
+                pipe.expire(window_key, self.window_seconds + 1)
                 count, _ = pipe.execute()
             return int(count) <= self._limit
         except RedisError as error:

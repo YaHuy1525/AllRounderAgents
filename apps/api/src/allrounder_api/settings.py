@@ -34,12 +34,25 @@ class Settings(BaseSettings):
     cors_allow_origins: list[str] = []
     trusted_proxy_ips: list[str] = []
     rate_limit_per_minute: int = Field(default=120, ge=1, le=10_000)
+    rate_limit_window_seconds: int = Field(default=60, ge=1, le=3_600)
+    rate_limit_max_tracked_keys: int = Field(default=10_000, ge=100)
     model_base_url: str = "https://api.openai.com/v1"
     model_api_key: SecretStr = SecretStr("")
     model_name: str = ""
     embedding_model: str = ""
     # The current pgvector column is vector(1536). Changing this requires a migration.
     embedding_dimensions: int = Field(default=1536, ge=1536, le=1536)
+    # Knowledge retrieval tuning: RRF smoothing (rrf_k), recall breadth per arm
+    # before reranking (recall_k), the optional Cohere reranker model, and
+    # optional per tenant overrides, e.g. {"tenant-a": {"recall_k": 50}}.
+    retrieval_rrf_k: int = Field(default=60, ge=1, le=1_000)
+    retrieval_recall_k: int = Field(default=30, ge=1, le=400)
+    retrieval_rerank_model: str = "rerank-v3.5"
+    retrieval_tenant_overrides: dict[str, dict[str, int]] = Field(default_factory=dict)
+    # Service-to-service knowledge search (`POST /knowledge/search`) for the
+    # Mastra host: one shared bearer token. Empty keeps the route unmounted
+    # and MSP reply drafts escalate (empty retrieval) instead of grounding.
+    knowledge_service_token: SecretStr = SecretStr("")
     github_repository_allowlist: list[str] = []
     github_base_branch: str = "main"
     github_path_allowlist: list[str] = ["src/**", "tests/**", "config/**", "docs/**"]
@@ -69,4 +82,15 @@ class Settings(BaseSettings):
     # tools.yaml). Empty means the loader walks up from the package, which
     # finds the repo-root `policy/` in dev and `/app/policy` in the container.
     policy_dir: str = ""
+    # Judge-based eval harness (scripts/judge-eval.py). Eval-only credentials:
+    # the judge never powers product lanes. Jev (System One typed decisions)
+    # is the judge of record; the chat judge is the fallback implementation
+    # and the failure explainer. Empty keys disable the relevant judge.
+    judge_provider: Literal["jev", "chat"] = "jev"
+    judge_model: str = "jev-latest"
+    jev_api_key: SecretStr = SecretStr("")
+    judge_chat_base_url: str = "https://openrouter.ai/api/v1"
+    judge_chat_model: str = ""
+    judge_chat_api_key: SecretStr = SecretStr("")
+    judge_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
 
