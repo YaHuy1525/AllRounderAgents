@@ -6,18 +6,21 @@ kind: Kustomization
 namespace: allrounder
 
 resources:
-  - ../../base
+- ../../base
 
 patches:
-  - target:
-      kind: Ingress
-      name: allrounder
-    path: ingress-patch.yaml
+- path: ingress-patch.yaml
+  target:
+    kind: Ingress
+    name: allrounder
 
 images:
-  - name: ghcr.io/yahuy1525/allrounderagent-api
-    newTag: sha-placeholder
-  - name: ghcr.io/yahuy1525/allrounderagent-mastra
-    newTag: sha-placeholder
-  - name: ghcr.io/yahuy1525/allrounderagent-ui
-    newTag: sha-placeholder
+- name: ghcr.io/yahuy1525/allrounderagent-api
+  newName: ghcr.io/yahuy1525/allrounderagent-api
+  newTag: sha-b6f4bc7
+- name: ghcr.io/yahuy1525/allrounderagent-mastra
+  newName: ghcr.io/yahuy1525/allrounderagent-mastra
+  newTag: sha-b6f4bc7
+- name: ghcr.io/yahuy1525/allrounderagent-ui
+  newName: ghcr.io/yahuy1525/allrounderagent-ui
+  newTag: sha-b6f4bc7
