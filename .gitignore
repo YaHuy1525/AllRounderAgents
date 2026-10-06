@@ -55,3 +55,4 @@ supabase/.temp/
 # candidates and baselines are committed.
 evals/judge/.cache/
 evals/judge/reports/
+system_design

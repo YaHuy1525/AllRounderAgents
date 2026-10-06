@@ -444,32 +444,35 @@ describe("workflowsForTicket", () => {
     ).toEqual(["issues", "review"]);
   });
 
-  it("maps other code-ish tickets to feature work plus review", () => {
+  it("maps other keyword-free code-ish tickets to feature work plus review", () => {
     expect(
       workflowsForTicket({ issueType: "Story", summary: "Add CSV export", labels: [] }),
     ).toEqual(["features", "review"]);
+    expect(
+      workflowsForTicket({ issueType: "Task", summary: "Refactor billing module", labels: [] }),
+    ).toEqual(["features", "review"]);
   });
 
-  it("puts keyword matches first, then the type rules", () => {
+  it("keeps keyword-matched tickets on their lanes, skipping the type rules", () => {
     expect(
       workflowsForTicket({ issueType: "Task", summary: "Onboard vendor Acme", labels: [] }),
-    ).toEqual(["vendors", "features", "review"]);
+    ).toEqual(["vendors"]);
     expect(
       workflowsForTicket({
         issueType: "Bug",
         summary: "Contrast fails",
         labels: ["accessibility"],
       }),
-    ).toEqual(["accessibility", "issues", "review"]);
+    ).toEqual(["accessibility"]);
     expect(
       workflowsForTicket({ issueType: "Story", summary: "Bump lodash", labels: [] }),
-    ).toEqual(["dependencies", "features", "review"]);
+    ).toEqual(["dependencies"]);
   });
 
   it("pulls the leave workflow in from time-off keywords", () => {
     expect(
       workflowsForTicket({ issueType: "Task", summary: "Book annual leave for E-1001", labels: [] }),
-    ).toEqual(["leave", "features", "review"]);
+    ).toEqual(["leave"]);
     expect(
       workflowsForTicket({ issueType: "Support", summary: "PTO question", labels: [] }),
     ).toEqual(["leave"]);
@@ -482,7 +485,7 @@ describe("workflowsForTicket", () => {
         summary: "Onboarding new hire starting 2026-10-05",
         labels: [],
       }),
-    ).toEqual(["onboarding", "vendors", "features", "review"]);
+    ).toEqual(["onboarding", "vendors"]);
     expect(
       workflowsForTicket({
         issueType: "Support",
@@ -499,7 +502,7 @@ describe("workflowsForTicket", () => {
         summary: "Offboarding Marco Silveira on 2026-10-30",
         labels: [],
       }),
-    ).toEqual(["offboarding", "features", "review"]);
+    ).toEqual(["offboarding"]);
     expect(
       workflowsForTicket({
         issueType: "Support",
@@ -516,7 +519,7 @@ describe("workflowsForTicket", () => {
         summary: "Screen candidates for the Senior Frontend Engineer role",
         labels: [],
       }),
-    ).toEqual(["screening", "features", "review"]);
+    ).toEqual(["screening"]);
     expect(
       workflowsForTicket({
         issueType: "Support",
@@ -533,7 +536,7 @@ describe("workflowsForTicket", () => {
         summary: "HR help: is the home-office stipend still current?",
         labels: [],
       }),
-    ).toEqual(["hr-help", "features", "review"]);
+    ).toEqual(["hr-help"]);
     expect(
       workflowsForTicket({
         issueType: "Support",
@@ -550,7 +553,7 @@ describe("workflowsForTicket", () => {
         summary: "Investigate EDR alert on fin-db-01",
         labels: ["security"],
       }),
-    ).toEqual(["security", "features", "review"]);
+    ).toEqual(["security"]);
     expect(
       workflowsForTicket({
         issueType: "Support",

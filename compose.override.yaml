@@ -1,0 +1,9 @@
+# Local-only additions for docker compose (auto-loaded, keep out of git).
+# Makes the MSP sandbox mailbox visible on the host: mspFlow stages one
+# approved .eml per reply into tmp/outbox.
+services:
+  mastra:
+    environment:
+      MAIL_OUTBOX_DIR: /outbox
+    volumes:
+      - ./tmp/outbox:/outbox

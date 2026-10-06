@@ -5,7 +5,9 @@
  * offboarding, screening and hr-help lanes following the same layout.
  */
 
-import { useState } from "react";
+import { useId, useState } from "react";
+
+import { Markdown } from "./Markdown";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -3583,12 +3585,29 @@ function hrHelpFlagClass(kind: string): string {
   return kind === "pii-leakage" ? "fail" : "flag";
 }
 
-/** Step 3 — the cited answer plus the guardrail verdict. */
-export function HrHelpDraftSurface({ artifact }: { artifact: Record<string, unknown> }) {
+export type HrHelpDraftState = {
+  answer: string;
+};
+
+/** Step 3 — the cited answer plus the guardrail verdict; the answer edits as markdown. */
+export function HrHelpDraftSurface({
+  artifact,
+  editing = false,
+  draft = null,
+  onChange,
+}: {
+  artifact: Record<string, unknown>;
+  editing?: boolean;
+  draft?: HrHelpDraftState | null;
+  onChange?: (draft: HrHelpDraftState) => void;
+}) {
+  const answerId = useId();
+  const [tab, setTab] = useState<"write" | "preview">("write");
   const view = parseHrHelpDraft(artifact);
   if (view === null) {
     return <p className="step-empty">The drafted answer is not readable yet.</p>;
   }
+  const value = draft ?? { answer: view.answer };
   return (
     <div className="vendors-verify-surface">
       <div className="impl-head">
@@ -3609,8 +3628,54 @@ export function HrHelpDraftSurface({ artifact }: { artifact: Record<string, unkn
       </div>
       <p className="step-summary">{view.guardrail.summary}</p>
       <section className="vendors-manual-review">
-        <h4 className="a11y-section-head">Answer</h4>
-        <p className="change-description">{view.answer}</p>
+        {editing ? (
+          <div className="md-editor">
+            <div className="md-editor-head">
+              <h4 className="a11y-section-head">Answer</h4>
+              <div className="md-editor-tabs" role="tablist" aria-label="Answer editor mode">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === "write"}
+                  onClick={() => setTab("write")}
+                >
+                  Write
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === "preview"}
+                  onClick={() => setTab("preview")}
+                >
+                  Preview
+                </button>
+              </div>
+            </div>
+            {tab === "write" ? (
+              <label className="md-editor-field" htmlFor={answerId}>
+                <textarea
+                  id={answerId}
+                  className="md-editor-input"
+                  rows={9}
+                  maxLength={4000}
+                  value={value.answer}
+                  placeholder="Write the answer in markdown — headings, lists and links render in the preview."
+                  onChange={(event) => onChange?.({ answer: event.target.value })}
+                />
+                <span className="md-editor-count">{`${value.answer.length}/4000`}</span>
+              </label>
+            ) : value.answer.trim() === "" ? (
+              <p className="step-empty">Nothing to preview yet — write the answer first.</p>
+            ) : (
+              <Markdown text={value.answer} className="md-editor-preview" />
+            )}
+          </div>
+        ) : (
+          <>
+            <h4 className="a11y-section-head">Answer</h4>
+            <Markdown text={view.answer} className="change-description" />
+          </>
+        )}
       </section>
       <h4 className="a11y-section-head">{`Citations · ${view.citations.length}`}</h4>
       <ul className="completion-files">

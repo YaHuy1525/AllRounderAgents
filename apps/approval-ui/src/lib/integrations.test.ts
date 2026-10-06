@@ -27,6 +27,7 @@ const PROVIDER_VOCAB = [
   "banking",
   "payroll",
   "xero",
+  "halopsa",
 ];
 
 describe("integration registry", () => {

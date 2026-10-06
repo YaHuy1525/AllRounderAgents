@@ -36,6 +36,7 @@ import {
 import { McpGitHubBackend } from "./agents/programming/tools/mcp.js";
 import type { ReviewFlowDeps } from "./agents/review/flow.js";
 import { GitHubReviewTools } from "./agents/review/tools/github-review.js";
+import { HaloDeskAdapter } from "./desks/halo.js";
 import { JiraDeskAdapter } from "./desks/jira.js";
 import { MemoryDeskAdapter } from "./desks/memory.js";
 import { MemoryMailSender } from "./mail/memory.js";
@@ -56,10 +57,12 @@ import { OutboxMailSender } from "./mail/outbox.js";
  * to the allowlist. Each flow registers only when its prerequisites are
  * configured (see the GITHUB_* block in .env.example). The MSP lane always
  * registers: it talks to the Jira Cloud desk when JIRA_BASE_URL, JIRA_EMAIL,
- * JIRA_API_TOKEN and JIRA_PROJECT_KEY are set, writes replies to the outbox
- * at MAIL_OUTBOX_DIR (MAIL_FROM names the sending mailbox) and otherwise
- * keeps the in-memory desk and mailbox defaults. The bills lane always
- * registers too: it posts draft bills to Xero when the XERO_* variables are
+ * JIRA_API_TOKEN and JIRA_PROJECT_KEY are set, or to the HaloPSA desk when
+ * HALO_BASE_URL, HALO_CLIENT_ID and HALO_CLIENT_SECRET are set instead
+ * (Jira wins when both are configured; see buildMspDeps), writes replies to
+ * the outbox at MAIL_OUTBOX_DIR (MAIL_FROM names the sending mailbox) and
+ * otherwise keeps the in-memory desk and mailbox defaults. The bills lane
+ * always registers too: it posts draft bills to Xero when the XERO_* variables are
  * set, keeps the in-memory ledger otherwise, and reads the vendor registry
  * over the platform service bridge. Without the GitHub block the instance
  * still boots with the finance and vendors flows, matching the documented
@@ -83,6 +86,37 @@ function readStringArrayEnv(name: string): string[] | undefined {
 function readPositiveNumberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readOptionalIntegerEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (raw === undefined || raw === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value)) {
+    throw new Error(`${name} must be an integer`);
+  }
+  return value;
+}
+
+function readClientIdsEnv(name: string): Record<string, number> | undefined {
+  const raw = process.env[name]?.trim();
+  if (raw === undefined || raw === "") return undefined;
+  const example =
+    `${name} must be a JSON object of client refs to Halo company ids, e.g. {"acme":42}`;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(example);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(example);
+  }
+  const entries = Object.entries(parsed);
+  if (entries.some(([, value]) => typeof value !== "number" || !Number.isInteger(value))) {
+    throw new Error(example);
+  }
+  return parsed as Record<string, number>;
 }
 
 const GITHUB_API_BASE = "https://api.github.com";
@@ -366,12 +400,16 @@ if (accessibility === undefined) {
 
 /**
  * MSP lane wiring: the Jira Cloud adapter replaces the in-memory desk only
- * when all four JIRA_* values are present (a half-configured block warns
- * instead of silently demoting), and replies land as .eml files in
- * MAIL_OUTBOX_DIR when that is set. With KNOWLEDGE_API_URL and
- * KNOWLEDGE_SERVICE_TOKEN set, drafts ground on the platform knowledge API;
- * otherwise the lane drafts from nothing and each draft escalates for a
- * human edit. The memory defaults are the M1 sandbox.
+ * when all four JIRA_* values are present; otherwise the HaloPSA adapter
+ * takes the desk when HALO_BASE_URL, HALO_CLIENT_ID and HALO_CLIENT_SECRET
+ * are set, with HALO_TENANT, HALO_SCOPE, HALO_TICKET_TYPE_ID,
+ * HALO_DEFAULT_CLIENT_ID and HALO_CLIENT_IDS as optional refinements. Jira
+ * wins when both desks are configured; a half-configured block warns instead
+ * of silently demoting. Replies land as .eml files in MAIL_OUTBOX_DIR when
+ * that is set. With KNOWLEDGE_API_URL and KNOWLEDGE_SERVICE_TOKEN set,
+ * drafts ground on the platform knowledge API; otherwise the lane drafts
+ * from nothing and each draft escalates for a human edit. The memory
+ * defaults are the M1 sandbox.
  */
 function buildMspDeps(): MspFlowDeps {
   const baseUrl = process.env.JIRA_BASE_URL?.trim();
@@ -393,7 +431,43 @@ function buildMspDeps(): MspFlowDeps {
   } else if (present > 0) {
     console.warn(
       "[mastra] JIRA_BASE_URL, JIRA_EMAIL, JIRA_API_TOKEN and JIRA_PROJECT_KEY must all"
-      + " be set together; mspFlow keeps the in-memory desk.",
+      + " be set together; mspFlow ignores the partial Jira block.",
+    );
+  }
+  const haloBaseUrl = process.env.HALO_BASE_URL?.trim();
+  const haloClientId = process.env.HALO_CLIENT_ID?.trim();
+  const haloClientSecret = process.env.HALO_CLIENT_SECRET?.trim();
+  const haloPresent = [haloBaseUrl, haloClientId, haloClientSecret].filter(
+    (value) => value !== undefined && value !== "",
+  ).length;
+  if (haloPresent === 3) {
+    if (desk.provider === "jira") {
+      console.warn(
+        "[mastra] both the JIRA_* and HALO_* desks are configured; mspFlow keeps the"
+        + " Jira Cloud desk.",
+      );
+    } else {
+      const haloTenant = process.env.HALO_TENANT?.trim();
+      const haloScope = process.env.HALO_SCOPE?.trim();
+      const haloTicketTypeId = readOptionalIntegerEnv("HALO_TICKET_TYPE_ID");
+      const haloDefaultClientId = readOptionalIntegerEnv("HALO_DEFAULT_CLIENT_ID");
+      const haloClientIds = readClientIdsEnv("HALO_CLIENT_IDS");
+      desk = new HaloDeskAdapter({
+        baseUrl: haloBaseUrl as string,
+        clientId: haloClientId as string,
+        clientSecret: haloClientSecret as string,
+        ...(haloTenant === undefined || haloTenant === "" ? {} : { tenant: haloTenant }),
+        ...(haloScope === undefined || haloScope === "" ? {} : { scope: haloScope }),
+        ...(haloTicketTypeId === undefined ? {} : { ticketTypeId: haloTicketTypeId }),
+        ...(haloDefaultClientId === undefined ? {} : { defaultClientId: haloDefaultClientId }),
+        ...(haloClientIds === undefined ? {} : { clientIds: haloClientIds }),
+      });
+      console.info(`[mastra] mspFlow uses the HaloPSA desk (${haloBaseUrl as string}).`);
+    }
+  } else if (haloPresent > 0) {
+    console.warn(
+      "[mastra] HALO_BASE_URL, HALO_CLIENT_ID and HALO_CLIENT_SECRET must all be set"
+      + " together; mspFlow ignores the partial HaloPSA block.",
     );
   }
   const outboxDir = process.env.MAIL_OUTBOX_DIR?.trim();

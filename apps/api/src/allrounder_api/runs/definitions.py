@@ -213,11 +213,12 @@ MSP_WORKFLOW = WorkflowDefinition(
         # Creating the client ticket on the desk is the first side effect; the
         # flow fixes its identity by correlation id because a desk without
         # native dedupe would otherwise mint a second ticket on a re-derive.
+        # The desk is Jira Cloud or HaloPSA depending on the tenant wiring.
         StepDefinition(
             id="ticket",
             title="Ticket",
             side_effecting=True,
-            integrations=("jira",),
+            integrations=("jira", "halopsa"),
         ),
         StepDefinition(id="draft", title="Draft", integrations=("kb",)),
         StepDefinition(id="approve", title="Approve"),
@@ -227,7 +228,7 @@ MSP_WORKFLOW = WorkflowDefinition(
             id="send",
             title="Send",
             side_effecting=True,
-            integrations=("email", "jira"),
+            integrations=("email", "jira", "halopsa"),
         ),
     ),
 )

@@ -142,6 +142,7 @@ import {
   OnboardingRiskSurface,
   OnboardingVerifySurface,
   onboardingDocumentTotals,
+  parseHrHelpDraft,
   parseHrHelpReceipt,
   parseLeaveReceipt,
   parseOffboardingApprove,
@@ -158,6 +159,7 @@ import {
   ScreeningScheduleSurface,
   ScreeningScreenSurface,
   ScreeningShortlistSurface,
+  type HrHelpDraftState,
   type OffboardingApproveDraft,
   type OffboardingAttestDraft,
   type OnboardingApproveDraft,
@@ -757,6 +759,7 @@ export function RunPanel({
   );
   const [securityReturnNote, setSecurityReturnNote] = useState<string | null>(null);
   const [securityReplayedStepId, setSecurityReplayedStepId] = useState<string | null>(null);
+  const [hrHelpDraft, setHrHelpDraft] = useState<HrHelpDraftState | null>(null);
   const [followUpBusy, setFollowUpBusy] = useState(false);
 
   const onRunsChangedRef = useRef(onRunsChanged);
@@ -881,6 +884,7 @@ export function RunPanel({
     setScreeningShortlistDraft(null);
     setSecurityApproveDraft(null);
     setSecurityReplayedStepId(null);
+    setHrHelpDraft(null);
   }, [focusKey]);
 
   // Auto-focus the step that is awaiting the user (or the last step when done).
@@ -1412,6 +1416,14 @@ export function RunPanel({
     if (editActive && reviewDraft !== null) {
       return { action: "edit", edits: buildReviewEdits(reviewDraft) };
     }
+    if (activeStep.stepId === "draft" && detail?.workflow === "hr-help") {
+      const drafted = parseHrHelpDraft(artifact);
+      if (drafted === null || hrHelpDraft === null) return { action: "proceed" };
+      if (hrHelpDraft.answer === drafted.answer || hrHelpDraft.answer.trim() === "") {
+        return { action: "proceed" };
+      }
+      return { action: "edit", edits: { answer: hrHelpDraft.answer.slice(0, 4_000) } };
+    }
     return { action: "proceed" };
   }
 
@@ -1941,14 +1953,22 @@ export function RunPanel({
             {interactive && actionBar(step, false)}
           </>
         );
-      case "draft":
+      case "draft": {
+        const hrHelp = detail?.workflow === "hr-help";
         return (
           <>
-            <HrHelpDraftSurface artifact={artifact} />
+            <HrHelpDraftSurface
+              artifact={artifact}
+              editing={hrHelp && interactive && editActive}
+              draft={hrHelp ? hrHelpDraft : null}
+              onChange={hrHelp ? setHrHelpDraft : undefined}
+            />
             {decisionLine(step)}
-            {interactive && actionBar(step, false)}
+            {interactive &&
+              actionBar(step, hrHelpDraft !== null && hrHelpDraft.answer.trim() === "")}
           </>
         );
+      }
       case "access-audit":
         return (
           <>

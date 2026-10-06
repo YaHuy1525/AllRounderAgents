@@ -204,10 +204,12 @@ const KEYWORD_WORKFLOW_RULES: ReadonlyArray<{ id: string; tokens: readonly strin
 const CODE_TICKET_TYPES = new Set(["bug", "story", "task", "epic", "feature", "improvement", "chore"]);
 
 /**
- * Workflows supported for a ticket, most relevant first: keyword-matched
- * workflows lead, the Jira type adds its primary workflow (bugs resolve,
- * stories and tasks implement, every code-ish type can be reviewed), and
- * unknown tickets fall back to the full catalog.
+ * Workflows supported for a ticket, most relevant first. An explicit keyword
+ * match wins outright: an HR question filed as a Task must not inherit the
+ * code lanes, so keyword-matched tickets get exactly their matched workflows.
+ * Only keyword-free tickets fall through to the Jira type rules (bugs
+ * resolve, stories and tasks implement, every code-ish type can be reviewed),
+ * and unknown tickets fall back to the full catalog.
  */
 export function workflowsForTicket(ticket: {
   issueType: string;
@@ -224,9 +226,11 @@ export function workflowsForTicket(ticket: {
   for (const rule of KEYWORD_WORKFLOW_RULES) {
     if (rule.tokens.some((token) => text.includes(token))) add(rule.id);
   }
-  if (type === "bug") add("issues");
-  if (CODE_TICKET_TYPES.has(type) && type !== "bug") add("features");
-  if (CODE_TICKET_TYPES.has(type)) add("review");
+  if (supported.length === 0) {
+    if (type === "bug") add("issues");
+    if (CODE_TICKET_TYPES.has(type) && type !== "bug") add("features");
+    if (CODE_TICKET_TYPES.has(type)) add("review");
+  }
 
   return supported.length > 0 ? supported : RUNNABLE_WORKFLOWS.map((item) => item.id);
 }

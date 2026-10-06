@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     embedding_model: str = ""
     # The current pgvector column is vector(1536). Changing this requires a migration.
     embedding_dimensions: int = Field(default=1536, ge=1536, le=1536)
+    # Optional separate embeddings provider (OpenAI-compatible /embeddings),
+    # e.g. the Cohere compatibility endpoint. Unset, the MODEL_* block above
+    # serves embeddings too.
+    embedding_base_url: str = ""
+    embedding_api_key: SecretStr = SecretStr("")
     # Knowledge retrieval tuning: RRF smoothing (rrf_k), recall breadth per arm
     # before reranking (recall_k), the optional Cohere reranker model, and
     # optional per tenant overrides, e.g. {"tenant-a": {"recall_k": 50}}.

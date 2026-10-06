@@ -98,15 +98,28 @@ def create_production_app() -> FastAPI:
             dimensions=settings.embedding_dimensions,
             chat_model=settings.model_name,
         )
+    # Embeddings may live on their own provider (chat stays on the MODEL_*
+    # block); unset, the chat adapter embeds too. The knowledge store closes
+    # neither adapter, so both get a shutdown handler below.
+    knowledge_embeddings = chat_completer
+    embedding_key = settings.embedding_api_key.get_secret_value()
+    if settings.embedding_base_url and embedding_key:
+        knowledge_embeddings = OpenAICompatibleAdapter(
+            base_url=settings.embedding_base_url,
+            api_key=embedding_key,
+            embedding_model=settings.embedding_model or settings.model_name,
+            dimensions=settings.embedding_dimensions,
+            chat_model=settings.model_name,
+        )
     knowledge_token = settings.knowledge_service_token.get_secret_value()
     knowledge_store: PostgresKnowledgeStore | None = None
-    if knowledge_token and chat_completer is not None:
+    if knowledge_token and knowledge_embeddings is not None:
         # The MSP draft step grounds through POST /knowledge/search. Both the
         # token and an embedding provider are required: with either missing the
         # route stays unmounted and live drafts escalate instead of failing.
         knowledge_store = PostgresKnowledgeStore(
             database_url,
-            chat_completer,
+            knowledge_embeddings,
             tuning=RetrievalTuning.from_settings(settings),
             tenant_overrides=settings.retrieval_tenant_overrides,
         )
@@ -178,4 +191,6 @@ def create_production_app() -> FastAPI:
     app.router.add_event_handler("shutdown", redis_async_client.aclose)
     if chat_completer is not None:
         app.router.add_event_handler("shutdown", chat_completer.close)
+    if knowledge_embeddings is not None and knowledge_embeddings is not chat_completer:
+        app.router.add_event_handler("shutdown", knowledge_embeddings.close)
     return app

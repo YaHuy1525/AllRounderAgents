@@ -480,6 +480,13 @@ function providerPaths(provider: string) {
           <path d="M9.2 9.2l5.6 5.6M14.8 9.2l-5.6 5.6" />
         </>
       );
+    case "halopsa":
+      return (
+        <>
+          <rect x="4.2" y="4.2" width="15.6" height="15.6" rx="4" />
+          <path d="M9 8.4v7.2M15 8.4v7.2M9 12h6" />
+        </>
+      );
     default:
       return (
         <>

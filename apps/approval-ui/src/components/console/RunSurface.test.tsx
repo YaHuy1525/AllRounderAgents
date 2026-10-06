@@ -4124,6 +4124,39 @@ describe("hr help draft surface", () => {
     expect(html).toContain("Source: answer @ 142-190");
   });
 
+  it("renders the answer as formatted markdown", () => {
+    const html = renderToString(
+      <HrHelpDraftSurface
+        artifact={hrHelpDraftArtifact({ answer: "**Primary caregivers** may take 20 weeks." })}
+      />,
+    );
+    expect(html).toContain("<strong>Primary caregivers</strong>");
+  });
+
+  it("opens the markdown editor with Write and Preview tabs while editing", () => {
+    const html = renderToString(
+      <HrHelpDraftSurface artifact={hrHelpDraftArtifact()} editing onChange={() => {}} />,
+    );
+    expect(html).toContain('role="tablist"');
+    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain(">Write</button>");
+    expect(html).toContain(">Preview</button>");
+    expect(html).toContain("<textarea");
+    expect(html).toContain("/4000");
+  });
+
+  it("shows the pending edits in the editor", () => {
+    const html = renderToString(
+      <HrHelpDraftSurface
+        artifact={hrHelpDraftArtifact()}
+        editing
+        draft={{ answer: "Edited markdown answer." }}
+        onChange={() => {}}
+      />,
+    );
+    expect(html).toContain("Edited markdown answer.");
+  });
+
   it("shows the clear pill when the guardrail allows the draft", () => {
     const html = renderToString(
       <HrHelpDraftSurface

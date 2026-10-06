@@ -101,7 +101,7 @@ gate → close with evidence — and differs only in agents, tools, and gate cal
 | Screening | `hrGuardrailAgent` | Requisition rubric (weighted criteria, must-haves) → per-candidate verdicts with citations → guardrail review for protected-attribute and non-rubric language → shortlist → idempotent interview invites. | Shipped — `screeningFlow` always registered |
 | HR Help | `hrHelpDrafterAgent`, `hrHelpGuardrailAgent` | Question intake → fixture policy retrieval with citations (sourceId + span, stale flag, score) → cited answer draft → people-partner approval → idempotent send with receipt. | Shipped — `hrHelpFlow` always registered |
 | Security (SOC) | `alertTriageAgent`, `investigationAgent`, `containmentAdvisorAgent`, `reportingAgent` | SOC alert pipeline: ingest with dedupe + provenance → deterministic triage (weighted signal rules, ATT&CK mapping, prompt-injection flags) → investigation with cited claims and resolved indicators → risk-scored disposition (`requiresHuman` on refuses) → signer-matrix approval → idempotent containment receipt (stable `SEC-…` id; replay returns the original). | Shipped — `securityFlow` always registered (fixture seams; case history upgrades to Mastra Memory with `DATABASE_URL`) |
-| MSP (client email ops) | `mspDrafterAgent` (the draft step is the lane's only model call) | Client email in (`POST /intake/email`) → desk ticket → cited draft reply from the client's knowledge partition, with the escalation ladder (empty retrieval, stale evidence, unsupported claims) → console approval with a signed receipt → reply from the MSP mailbox, idempotent per action hash → per-client per-month audit pack (JSON + PDF). | Shipped — `mspFlow` always registered; the desk, mailbox and knowledge seams degrade to in-memory sandboxes when unconfigured |
+| MSP (client email ops) | `mspDrafterAgent` (the draft step is the lane's only model call) | Client email in (`POST /intake/email`) → desk ticket → cited draft reply from the client's knowledge partition, with the escalation ladder (empty retrieval, stale evidence, unsupported claims) → console approval with a signed receipt → reply from the MSP mailbox, idempotent per action hash → per-client per-month audit pack (JSON + PDF). | Shipped — `mspFlow` always registered; the desk (Jira Cloud or HaloPSA), mailbox and knowledge seams degrade to in-memory sandboxes when unconfigured |
 | Bills (vendor invoice ops) | `billExtractorAgent` (the extract step is the lane's only model call) | Vendor invoice email in (`POST /intake/vendor-email`) → cited extraction with the escalation ladder (empty extraction, missing fields, unverified vendor, changed bank details) → vendor registry lookup with bank-detail comparison → bookkeeper approval with a signed receipt → Xero `ACCPAY` bill created as `DRAFT` only, idempotent per `ledgerKey`, posting receipt with the Xero bill id. | Shipped. `billsFlow` always registered. The Xero ledger and vendor registry degrade to in-memory sandboxes when unconfigured |
 
 The Mastra dev host (`src/mastra/instance.ts`) always registers `financeFlow`, `vendorsFlow`,
@@ -310,7 +310,8 @@ Supabase Postgres connection string), `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY
 `TRUSTED_PROXY_IPS`, `RATE_LIMIT_PER_MINUTE` plus `RATE_LIMIT_WINDOW_SECONDS` /
 `RATE_LIMIT_MAX_TRACKED_KEYS`, `POLICY_DIR` (optional policy override;
 empty resolves the repo-root `policy/`), the `JIRA_*` / `ATLASSIAN_MCP_URL` /
-`JIRA_CLOUD_ID` block, `MODEL_*`, `OPENROUTER_API_KEY`, `EMBEDDING_MODEL`,
+`JIRA_CLOUD_ID` block and the `HALO_*` desk alternative (Jira wins when both
+desk blocks are complete), `MODEL_*`, `OPENROUTER_API_KEY`, `EMBEDDING_MODEL`,
 `EMBEDDING_DIMENSIONS=1536`, the `RETRIEVAL_*` tuning block (`RETRIEVAL_RRF_K`,
 `RETRIEVAL_RECALL_K`, `RETRIEVAL_RERANK_MODEL`, `RETRIEVAL_TENANT_OVERRIDES` as
 JSON), the `MAIL_FROM` / `MAIL_OUTBOX_DIR` mailbox seam, the
@@ -384,12 +385,21 @@ server resolves it. Set `JIRA_PROJECT_KEY` (it must appear in
 Seed the workflow test tickets (idempotent — existing summaries are detected and
 skipped via JQL): the finance-lane demo plus two test cases per console workflow
 (PR Review, Issue Resolution, Feature Implementation, Dependency Update,
-Accessibility Audit, Vendor Onboarding).
+Accessibility Audit, Vendor Onboarding, Leave Request, New-Hire Onboarding,
+Employee Offboarding, Candidate Screening, HR Help). Each HR test case names the
+employee id, requisition id, or question to use, so the ticket body doubles as
+the run script.
 
 ```powershell
 $env:PYTHONPATH = "apps/api/src"
 python -m allrounder_api.jira_seed
 ```
+
+The two security-lane alerts target the `SEC` project so `PROJECT_DOMAINS` scores
+them into the security domain. On a site without that project the seeder reports
+`create_failed project=SEC` for just those two, seeds everything else, and exits
+non-zero; add `SEC` to `JIRA_TENANT_PROJECT_ALLOWLIST` as well or the board
+query will not show the alerts.
 
 The seed honors `JIRA_TRANSPORT`; the MCP path additionally requires the write scope above
 (`createJiraIssue`).
@@ -633,7 +643,9 @@ correlation-id idempotent and `test_governance.py` pins the whole matrix.
 ### MSP client email and bills pilot path
 
 The M1 to M4 walk, from a fresh tenant to the weekly written report and a receipted
-Xero draft bill. Full detail lives in the [pilot playbook](docs/AllRounderAgent_MSP_Pilot_Playbook_20261001.md),
+Xero draft bill. The desk is Jira Cloud or HaloPSA per deployment, picked by the
+`JIRA_*` and `HALO_*` env blocks, and the walk below is desk-agnostic. Full detail
+lives in the [pilot playbook](docs/AllRounderAgent_MSP_Pilot_Playbook_20261001.md),
 the [tenant runbook](docs/AllRounderAgent_MSP_Tenant_Runbook_20260930.md) and the
 [bills lane guide](docs/AllRounderAgent_MSP_Bills_Lane_Guide_20261001.md):
 
@@ -801,5 +813,14 @@ YARA text, IOC lists — must pass untouched). All three replay through
   behind a signed receipt, idempotent per `ledgerKey`. `xero.read` and `xero.post`
   are declared and pinned by `test_governance.py`. Unconfigured, the ledger degrades
   to an in-memory sandbox and nothing reaches Xero.
+- The MSP HaloPSA desk (M5 of the same plan) is shipped: `HaloDeskAdapter`
+  (`src/mastra/desks/halo.ts`) implements the same desk seam behind the recorded
+  conformance suite Jira passes, with OAuth2 client-credentials auth (cached
+  token, one refresh retry on 401), array-wrapped ticket and action writes,
+  runtime status resolution, base64 attachment evidence and the same `DeskError`
+  mapping. The lane picks the desk per deployment: Jira when its four keys are
+  set, HaloPSA when its three are, and Jira wins when both are complete. Live use
+  needs a HaloPSA instance and the `HALO_*` block; unconfigured, the in-memory
+  desk stands in. The milestone stays open until one HaloPSA MSP is live.
 - Board listing always uses read-only REST (Rovo MCP exposes no agile-board tools);
   legacy `JIRA_TRANSPORT=http` and `GITHUB_ACCESS=rest` fallbacks remain tested options.

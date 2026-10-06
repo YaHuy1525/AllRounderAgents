@@ -3587,6 +3587,45 @@ button[type="submit"]:hover:not(:disabled) { background: var(--primary); filter:
 .md-body.change-description { font-size: 12px; line-height: 1.5; }
 .md-body.step-summary { font-size: 12px; }
 
+/* ---- markdown answer editor (hr-help draft): Write/Preview tabs over the raw text ---- */
+.md-editor { display: grid; gap: 10px; }
+.md-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.md-editor-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--lift);
+}
+.md-editor-tabs button {
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  padding: 4px 12px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+}
+.md-editor-tabs button:hover { color: var(--fg); background: transparent; }
+.md-editor-tabs button[aria-selected="true"],
+.md-editor-tabs button[aria-selected="true"]:hover { color: var(--primary); background: var(--primary-soft); }
+.md-editor-field { display: grid; gap: 6px; }
+.md-editor-input {
+  min-height: 156px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.md-editor-count { justify-self: end; color: var(--muted); font-size: 11.5px; }
+.md-editor-preview {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--lift);
+}
+
 /* ---- motion primitives ---- */
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(6px); }

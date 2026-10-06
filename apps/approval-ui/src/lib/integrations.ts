@@ -29,6 +29,7 @@ export const INTEGRATION_PROVIDERS: readonly IntegrationProvider[] = [
   { id: "banking", label: "Banking", accent: "#7fce8f" },
   { id: "payroll", label: "Payroll", accent: "#e2a0e8" },
   { id: "xero", label: "Xero", accent: "#4ec3e0" },
+  { id: "halopsa", label: "HaloPSA", accent: "#4c6ef5" },
 ];
 
 const PROVIDER_BY_ID = new Map(INTEGRATION_PROVIDERS.map((item) => [item.id, item]));

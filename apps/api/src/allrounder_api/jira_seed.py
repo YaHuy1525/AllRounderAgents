@@ -3,8 +3,11 @@
 Idempotent: every ticket is deduped with an exact JQL summary search, so
 re-runs skip what already exists. The set covers the finance-lane demo and
 two test cases per console workflow (PR Review, Issue Resolution, Feature
-Implementation, Dependency Update, Accessibility Audit, Vendor Onboarding),
-plus the two security-lane alerts in the ``SEC`` project.
+Implementation, Dependency Update, Accessibility Audit, Vendor Onboarding,
+Leave Request, New-Hire Onboarding, Employee Offboarding, Candidate
+Screening, HR Help), plus the two security-lane alerts in the ``SEC``
+project. The MSP and Bills lanes start from email intake instead of Jira
+tickets, so the demo scripts seed those two, not this one.
 """
 
 from __future__ import annotations
@@ -208,6 +211,158 @@ TICKETS: tuple[TicketSpec, ...] = (
             "create gate before the master record is written."
         ),
     },
+    # -- Leave Request ------------------------------------------------------
+    {
+        "summary": "Leave request: annual leave for Iris Lindqvist (October week)",
+        "labels": ["leave", "workflow-test"],
+        "description": (
+            "Workflow test case for Leave Request. Iris Lindqvist (E-2016, Site "
+            "Reliability Engineer) requests five working days of annual leave "
+            "from 2026-10-19 to 2026-10-23. The policy checks should all pass: "
+            "balance (20 days on file), no overlapping bookings, no blackout "
+            "window inside the range, and notice well past the three-day "
+            "target.\n\n"
+            "Approve the request and confirm the booking is idempotent on a "
+            "retry. Start the run with employee E-2016, leave type annual, "
+            "start 2026-10-19, end 2026-10-23."
+        ),
+    },
+    {
+        "summary": "Leave request: year-end leave that crosses the close blackout",
+        "labels": ["leave", "workflow-test"],
+        "description": (
+            "Workflow test case for Leave Request. Leo Bianchi (E-2044, Backend "
+            "Engineer) requests annual leave from 2026-12-21 to 2026-12-30. The "
+            "range sits inside the Year-end close blackout (2026-12-21 to "
+            "2026-12-31), so the policy check returns exception_required and "
+            "the approve gate carries the exception sign-off. The Christmas "
+            "holidays inside the range are not deducted from the balance.\n\n"
+            "This exercises the flagged path, not the happy path. Start the run "
+            "with employee E-2044, leave type annual, start 2026-12-21, end "
+            "2026-12-30."
+        ),
+    },
+    # -- New-Hire Onboarding ------------------------------------------------
+    {
+        "summary": "New hire onboarding: backend engineer starting 2026-10-19",
+        "labels": ["onboarding", "workflow-test"],
+        "description": (
+            "Workflow test case for New-Hire Onboarding. Sofia Lindgren joins "
+            "as Backend Engineer in Engineering, working from Berlin, starting "
+            "2026-10-19, reporting to manager E-2003, with a medium access "
+            "tier (signers: People Partner and Department Head).\n\n"
+            "Collect the paperwork, verify the checks, score the access risk, "
+            "and reach the signer gate before provisioning; provisioning is "
+            "idempotent by employee ID. Start the run with full name Sofia "
+            "Lindgren, role Backend Engineer, department Engineering, location "
+            "Berlin, start date 2026-10-19, manager E-2003, access tier medium."
+        ),
+    },
+    {
+        "summary": "New hire onboarding: finance director hire with high access",
+        "labels": ["onboarding", "workflow-test"],
+        "description": (
+            "Workflow test case for New-Hire Onboarding. Amelia Ortiz joins as "
+            "Director of Finance Operations in Finance, based in Lisbon, "
+            "starting 2026-11-02, reporting to manager E-2094 (VP of Finance), "
+            "with a high access tier. High tier raises the risk score and "
+            "requires three signers: People Partner, Department Head, and "
+            "People Ops Director.\n\n"
+            "This exercises the elevated risk path and the full signer chain. "
+            "Start the run with full name Amelia Ortiz, role Director of "
+            "Finance Operations, department Finance, location Lisbon, start "
+            "date 2026-11-02, manager E-2094, access tier high."
+        ),
+    },
+    # -- Employee Offboarding -----------------------------------------------
+    {
+        "summary": (
+            "Offboarding: Mona Marchetti, site reliability engineer, last day "
+            "2026-10-31"
+        ),
+        "labels": ["offboarding", "workflow-test"],
+        "description": (
+            "Workflow test case for Employee Offboarding. Mona Marchetti "
+            "(E-2053, Site Reliability Engineer, Engineering, high access "
+            "tier) departs on 2026-10-31. Her eleven systems include aws, "
+            "github and okta, so the blast-radius audit is expected to surface "
+            "several high-blast revocations that need explicit per-item "
+            "approval, and irreversible actions need an export first.\n\n"
+            "Revocations are idempotent per employee and system; the case "
+            "close is attested at the end. Start the run with employee E-2053, "
+            "last day 2026-10-31, reason resignation accepted."
+        ),
+    },
+    {
+        "summary": "Offboarding: Felix Eriksen, sales engineer, last day 2026-11-13",
+        "labels": ["offboarding", "workflow-test"],
+        "description": (
+            "Workflow test case for Employee Offboarding. Felix Eriksen "
+            "(E-2093, Sales Engineer, Sales, low access tier) departs on "
+            "2026-11-13. His nine systems are mostly sales tooling (gong, "
+            "zendesk, workday) with aws, github and okta in the mix, a lighter "
+            "contrast to the high-access offboarding case.\n\n"
+            "Start the run with employee E-2093, last day 2026-11-13, reason "
+            "voluntary departure."
+        ),
+    },
+    # -- Candidate Screening ------------------------------------------------
+    {
+        "summary": "Candidate screening: senior backend engineer pipeline (REQ-5001)",
+        "labels": ["screening", "recruiting", "workflow-test"],
+        "description": (
+            "Workflow test case for Candidate Screening. Screen the five "
+            "REQ-5001 candidates against the weighted rubric from the "
+            "requisition: API design and TypeScript are the must-haves, with "
+            "distributed systems, testing and mentoring behind them. "
+            "Interviewers are E-2002 and E-2003.\n\n"
+            "Review the shortlist with citations and guardrail flags, then "
+            "schedule the interviews. Start the run with requisition REQ-5001."
+        ),
+    },
+    {
+        "summary": "Candidate screening: growth marketer pipeline (REQ-5006)",
+        "labels": ["screening", "recruiting", "workflow-test"],
+        "description": (
+            "Workflow test case for Candidate Screening. Screen the five "
+            "REQ-5006 candidates against the requisition rubric: "
+            "experimentation is the must-have, with analytics, SEO, "
+            "copywriting and lifecycle as the weighted criteria. Interviewers "
+            "are E-2160 and E-2161.\n\n"
+            "Review the shortlist with citations and guardrail flags, then "
+            "schedule the interviews. Start the run with requisition REQ-5006."
+        ),
+    },
+    # -- HR Help ------------------------------------------------------------
+    {
+        "summary": (
+            "HR help: what is the home office stipend and is the legacy figure "
+            "still valid"
+        ),
+        "labels": ["hr-help", "handbook", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. Question: \"What is the monthly "
+            "home office stipend for remote employees, and is the 500 EUR "
+            "legacy figure still in force?\"\n\n"
+            "The policy corpus holds a superseded legacy document, so the "
+            "cited answer must quote the current Remote Work policy (300 EUR "
+            "per month) and note that the legacy document is audit history "
+            "only. Start the run with that question verbatim."
+        ),
+    },
+    {
+        "summary": "HR help: annual leave carry-over and sick leave interaction",
+        "labels": ["hr-help", "handbook", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. Question: \"How many unused "
+            "annual leave days can I carry into next year, by when must they "
+            "be used, and does sick leave reduce my annual balance?\"\n\n"
+            "The cited answer should quote the Leave and Time Off policy: up "
+            "to five days carried, used before March 31, and sick leave does "
+            "not reduce the annual balance. Start the run with that question "
+            "verbatim."
+        ),
+    },
     # -- Security lane (SEC project) ----------------------------------------
     {
         "summary": "Security alert: credential phishing email reported by finance",
@@ -302,6 +457,7 @@ def _seed_via_mcp(
 def _seed_via_rest(base_url: str, email: str, token: str, project: str) -> int:
     """Legacy REST path: seed tickets over the Jira REST API (ADF bodies)."""
     created: list[str] = []
+    failed: list[str] = []
     with httpx.Client(
         base_url=base_url,
         auth=(email, token),
@@ -343,16 +499,25 @@ def _seed_via_rest(base_url: str, email: str, token: str, project: str) -> int:
                 },
             )
             if response.status_code >= 400:
-                print(f"create_failed status={response.status_code}", file=sys.stderr)
+                failed.append(str(ticket["summary"]))
+                print(
+                    f"create_failed project={ticket_project} "
+                    f"status={response.status_code}",
+                    file=sys.stderr,
+                )
                 print(response.text, file=sys.stderr)
-                return 1
+                continue
             key = str(response.json().get("key", ""))
             if not key:
+                failed.append(str(ticket["summary"]))
                 print("create_failed missing_key", file=sys.stderr)
-                return 1
+                continue
             created.append(key)
             print(key)
     print("created=" + ",".join(created))
+    if failed:
+        print("failed=" + "|".join(failed), file=sys.stderr)
+        return 1
     return 0
 
 

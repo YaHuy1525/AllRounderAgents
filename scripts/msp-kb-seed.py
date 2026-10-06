@@ -216,15 +216,16 @@ def main() -> int:
         )
     else:
         model_key = settings.model_api_key.get_secret_value()
-        if settings.model_name == "" or model_key == "":
+        embedding_key = settings.embedding_api_key.get_secret_value() or model_key
+        if settings.model_name == "" or embedding_key == "":
             print(
                 "MODEL_NAME and MODEL_API_KEY are required for the openai provider",
                 file=sys.stderr,
             )
             return 1
         provider = OpenAICompatibleAdapter(
-            base_url=settings.model_base_url,
-            api_key=model_key,
+            base_url=settings.embedding_base_url or settings.model_base_url,
+            api_key=embedding_key,
             embedding_model=settings.embedding_model or settings.model_name,
             dimensions=settings.embedding_dimensions,
             chat_model=settings.model_name,
