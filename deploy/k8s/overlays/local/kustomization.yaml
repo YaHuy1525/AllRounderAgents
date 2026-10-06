@@ -17,10 +17,10 @@ patches:
 images:
 - name: ghcr.io/yahuy1525/allrounderagent-api
   newName: ghcr.io/yahuy1525/allrounderagent-api
-  newTag: sha-dd81ebb
+  newTag: sha-9fa0504
 - name: ghcr.io/yahuy1525/allrounderagent-mastra
   newName: ghcr.io/yahuy1525/allrounderagent-mastra
-  newTag: sha-dd81ebb
+  newTag: sha-9fa0504
 - name: ghcr.io/yahuy1525/allrounderagent-ui
   newName: ghcr.io/yahuy1525/allrounderagent-ui
-  newTag: sha-dd81ebb
+  newTag: sha-9fa0504
