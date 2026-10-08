@@ -278,6 +278,80 @@ def run_summary(run: WorkflowRun) -> dict[str, object]:
     }
 
 
+def run_topology(
+    run: WorkflowRun,
+    definition: WorkflowDefinition | None,
+) -> dict[str, object]:
+    """Read-only topology for one run: steps + satellites + receipts + lock.
+
+    One payload feeds the console's five lenses (forms, graph, data, timeline,
+    logs): live step rows carry state, the static workflow definition adds the
+    display-only ``sideEffecting`` / ``integrations`` fields the flow graph
+    renders as satellites, and the lock/receipt summaries close the loop.
+    The definition is passed in by the caller because ``definitions.py``
+    already imports this module — importing it back would be a cycle.
+    Unknown workflows (``definition`` is None) degrade to the run's own rows
+    with empty satellites instead of failing.
+    """
+
+    current = run.current_step()
+    steps: list[dict[str, object]] = []
+    receipt_items: list[dict[str, object]] = []
+    for step in run.steps:
+        static: StepDefinition | None = None
+        if definition is not None:
+            try:
+                static = definition.step(step.step_id)
+            except KeyError:
+                static = None
+        has_effect = step.step_id in run.side_effects
+        if step.receipt is not None or step.action_hash is not None or has_effect:
+            receipt_items.append(
+                {
+                    "stepId": step.step_id,
+                    "receipt": step.receipt,
+                    "actionHash": step.action_hash,
+                    "effectRecorded": has_effect,
+                }
+            )
+        steps.append(
+            {
+                "stepId": step.step_id,
+                "index": step.index,
+                "title": step.title,
+                "state": step.state,
+                "sideEffecting": static.side_effecting if static is not None else False,
+                "integrations": list(static.integrations) if static is not None else [],
+                "receipt": step.receipt,
+                "actionHash": step.action_hash,
+                "hasArtifact": step.artifact is not None,
+                "hasDecision": step.decision is not None,
+                "regenerations": step.regenerations,
+                "updatedAt": step.updated_at.isoformat(),
+            }
+        )
+    lock: dict[str, object] | None = None
+    if run.lock_target is not None or run.lock_owner is not None:
+        lock = {"target": run.lock_target, "lockedBy": run.lock_owner}
+    return {
+        "runId": run.run_id,
+        "workflow": run.workflow,
+        "status": run.status,
+        "attempt": run.attempt,
+        "currentStepId": current.step_id if current is not None else None,
+        "stepCount": len(run.steps),
+        "stepsDone": sum(1 for step in run.steps if step.state == "done"),
+        "startedAt": run.started_at.isoformat(),
+        "finishedAt": run.finished_at.isoformat() if run.finished_at else None,
+        "lock": lock,
+        "receipts": {
+            "signed": sum(1 for step in run.steps if step.receipt is not None),
+            "items": receipt_items,
+        },
+        "steps": steps,
+    }
+
+
 @dataclass(frozen=True)
 class MastraOutcome:
     """Normalized result of one Mastra workflow pass (start or resume)."""

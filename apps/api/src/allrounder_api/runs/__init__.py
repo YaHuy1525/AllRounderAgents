@@ -50,6 +50,7 @@ from .models import (
     StepDefinition,
     WorkflowDefinition,
     WorkflowRun,
+    run_topology,
 )
 from .receipts import MemoryRunReceiptStore, RedisRunReceiptStore, RunReceiptStore
 from .registry import InMemoryRunRegistry, RedisRunRegistry, RunRegistry
@@ -122,4 +123,5 @@ __all__ = [
     "build_redis_run_service",
     "build_runs_router",
     "content_hash",
+    "run_topology",
 ]

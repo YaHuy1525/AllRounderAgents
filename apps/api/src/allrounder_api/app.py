@@ -143,6 +143,7 @@ def create_app(
     from .phase1_api import build_phase1_router
     from .phase2_api import build_phase2_router
     from .phase3_api import build_phase3_router
+    from .search_api import build_search_router
 
     verifier = auth_verifier or FakeBearerVerifier({})
     approvals = approval_repository or InMemoryApprovalRepository()
@@ -230,6 +231,17 @@ def create_app(
         workflows=WORKFLOW_DEFINITIONS,
     )
     app.include_router(build_runs_router(verifier=verifier, service=run_service))
+    # Command-bar search (U1): read-only over the same registries the runs
+    # router serves, plus approval gates and the optional knowledge store.
+    app.include_router(
+        build_search_router(
+            verifier=verifier,
+            service=run_service,
+            approvals=approvals,
+            cases=cases,
+            knowledge=knowledge_retriever,
+        )
+    )
     app.include_router(
         build_intake_router(
             verifier=verifier,

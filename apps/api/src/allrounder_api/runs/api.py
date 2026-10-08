@@ -14,7 +14,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..auth import AuthenticationError, BearerVerifier, Principal
 from ..jira import JIRA_TICKET_KEY_PATTERN
-from .models import TERMINAL_RUN_STATUSES, WorkflowRun, run_snapshot, run_summary
+from .definitions import WORKFLOW_DEFINITIONS
+from .models import (
+    TERMINAL_RUN_STATUSES,
+    WorkflowRun,
+    run_snapshot,
+    run_summary,
+    run_topology,
+)
 from .service import RunConflictError, RunService, UnknownWorkflowError
 
 _SSE_HEADERS = {"X-Accel-Buffering": "no", "Cache-Control": "no-store"}
@@ -137,6 +144,20 @@ def build_runs_router(
         except KeyError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Resource not found") from None
         return _run_detail(run)
+
+    @router.get("/{run_id}/topology")
+    async def get_run_topology(
+        run_id: str,
+        identity: Principal = Depends(principal),
+    ) -> dict[str, object]:
+        # Derived read model for the console's view switcher: live step state
+        # plus the static satellites/receipt/lock summaries from one payload.
+        require_role(identity, "viewer", "approver", "agent", "admin")
+        try:
+            run = await service.get(run_id, identity.tenant_id)
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Resource not found") from None
+        return run_topology(run, WORKFLOW_DEFINITIONS.get(run.workflow))
 
     @router.get("/{run_id}/events")
     async def run_events(

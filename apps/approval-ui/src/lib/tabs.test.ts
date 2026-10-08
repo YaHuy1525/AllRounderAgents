@@ -143,6 +143,48 @@ describe("console tabs", () => {
     expect(again.tabs.at(-1)!.ticketKey).toBe("ENG-1");
   });
 
+  it("carries command-bar step focus on ticket and run tabs with a fresh nonce", () => {
+    const opened = openTicketTab(
+      [DASHBOARD_TAB],
+      { key: "ENG-7", summary: "One" },
+      { focusStepId: "select-pr" },
+    );
+    const first = opened.tabs.at(-1)!;
+    expect(first.focusStepId).toBe("select-pr");
+    expect(first.focusNonce).toBe(1);
+    const refocused = openTicketTab(
+      opened.tabs,
+      { key: "ENG-7", summary: "One" },
+      { focusStepId: "select-pr" },
+    );
+    const second = refocused.tabs.at(-1)!;
+    expect(refocused.tabs).toHaveLength(2);
+    expect(second.focusStepId).toBe("select-pr");
+    expect(second.focusNonce).toBe(2);
+
+    const runTab = openRunTab([DASHBOARD_TAB], {
+      id: "r-1",
+      title: "review · ENG-1",
+      ticketKey: "ENG-1",
+      focusStepId: "approve",
+    });
+    expect(runTab.tabs.at(-1)!.focusStepId).toBe("approve");
+    expect(runTab.tabs.at(-1)!.focusNonce).toBe(1);
+  });
+
+  it("leaves focus fields untouched on a plain open", () => {
+    const opened = openTicketTab(
+      [DASHBOARD_TAB],
+      { key: "ENG-7", summary: "One" },
+      { focusStepId: "select-pr" },
+    );
+    const plain = openTicketTab(opened.tabs, { key: "ENG-7", summary: "One updated" });
+    const tab = plain.tabs.at(-1)!;
+    expect(tab.focusStepId).toBe("select-pr");
+    expect(tab.focusNonce).toBe(1);
+    expect(tab.ticketSummary).toBe("One updated");
+  });
+
   it("preselects a workflow on new tabs opened from a start-run CTA", () => {
     const plain = openNewTab([DASHBOARD_TAB]);
     expect(plain.tabs.at(-1)!.workflowId).toBeUndefined();
@@ -232,5 +274,17 @@ describe("open tab persistence", () => {
     };
     saveTabState(storage, state);
     expect(loadTabState(storage)).toEqual(state);
+  });
+
+  it("never persists the ephemeral command focus fields", () => {
+    const storage = new MemoryStorage();
+    saveTabState(storage, {
+      tabs: [{ ...TICKET_TAB, focusStepId: "select-pr", focusNonce: 3 }],
+      activeTabId: TICKET_TAB.id,
+    });
+    expect(loadTabState(storage)).toEqual({
+      tabs: [DASHBOARD_TAB, TICKET_TAB],
+      activeTabId: TICKET_TAB.id,
+    });
   });
 });

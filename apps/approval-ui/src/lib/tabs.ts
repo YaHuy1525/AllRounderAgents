@@ -36,6 +36,12 @@ export type Tab = {
   workflowId?: string;
   /** Set on `run` tabs opened as a standalone run inspector. */
   runId?: string;
+  /** Command-bar deep link: the step to focus once the tab renders. Ephemeral —
+   *  `sanitizeTab` never persists it across reloads. */
+  focusStepId?: string;
+  /** Bumped on every deep link so re-navigating to the same run:step still
+   *  re-focuses instead of being swallowed as a no-op. */
+  focusNonce?: number;
 };
 
 export type TicketRef = { key: string; summary: string };
@@ -56,14 +62,36 @@ export function ticketTabTitle(ticket: TicketRef): string {
   return `${ticket.key} - ${shortSummary(ticket.summary)}`;
 }
 
-export function openTicketTab(tabs: Tab[], ticket: TicketRef): { tabs: Tab[]; activeId: string } {
+/**
+ * Ephemeral deep-link patch: set when the command bar targets a step, an
+ * empty object otherwise (a plain open never clears an earlier link). The
+ * nonce increments per link so focusing the same step twice still fires.
+ */
+function focusPatch(
+  tab: Tab | null,
+  focusStepId: string | null | undefined,
+): Pick<Tab, "focusStepId" | "focusNonce"> | Record<string, never> {
+  if (focusStepId === undefined || focusStepId === null || focusStepId === "") return {};
+  return { focusStepId, focusNonce: (tab?.focusNonce ?? 0) + 1 };
+}
+
+export function openTicketTab(
+  tabs: Tab[],
+  ticket: TicketRef,
+  options: { focusStepId?: string | null } = {},
+): { tabs: Tab[]; activeId: string } {
   const id = `ticket:${ticket.key}`;
   const existing = tabs.find((tab) => tab.id === id);
   if (existing) {
     return {
       tabs: tabs.map((tab) =>
         tab.id === id
-          ? { ...tab, title: ticketTabTitle(ticket), ticketSummary: ticket.summary }
+          ? {
+              ...tab,
+              title: ticketTabTitle(ticket),
+              ticketSummary: ticket.summary,
+              ...focusPatch(tab, options.focusStepId),
+            }
           : tab,
       ),
       activeId: id,
@@ -78,6 +106,7 @@ export function openTicketTab(tabs: Tab[], ticket: TicketRef): { tabs: Tab[]; ac
         title: ticketTabTitle(ticket),
         ticketKey: ticket.key,
         ticketSummary: ticket.summary,
+        ...focusPatch(null, options.focusStepId),
       },
     ],
     activeId: id,
@@ -140,7 +169,7 @@ export function openWorkflowTab(
 
 export function openRunTab(
   tabs: Tab[],
-  run: { id: string; title: string; ticketKey?: string },
+  run: { id: string; title: string; ticketKey?: string; focusStepId?: string },
 ): { tabs: Tab[]; activeId: string } {
   const id = `run:${run.id}`;
   const existing = tabs.find((tab) => tab.id === id);
@@ -148,13 +177,24 @@ export function openRunTab(
     return {
       tabs: tabs.map((tab) =>
         tab.id === id
-          ? { ...tab, title: run.title, ticketKey: run.ticketKey ?? tab.ticketKey }
+          ? {
+              ...tab,
+              title: run.title,
+              ticketKey: run.ticketKey ?? tab.ticketKey,
+              ...focusPatch(tab, run.focusStepId),
+            }
           : tab,
       ),
       activeId: id,
     };
   }
-  const tab: Tab = { id, kind: "run", title: run.title, runId: run.id };
+  const tab: Tab = {
+    id,
+    kind: "run",
+    title: run.title,
+    runId: run.id,
+    ...focusPatch(null, run.focusStepId),
+  };
   if (run.ticketKey) tab.ticketKey = run.ticketKey;
   return { tabs: [...tabs, tab], activeId: id };
 }

@@ -15,6 +15,7 @@ import {
   normalizeClientRef,
   packMonth,
   parseRunSnapshot,
+  parseRunTopology,
   parseSseChunk,
   runDurationSeconds,
   runListQuery,
@@ -27,6 +28,8 @@ import {
   type RunStep,
   type RunStepState,
   type RunSummary,
+  type RunTopology,
+  type RunTopologyStep,
 } from "./runs.js";
 
 const STEP_IDS = ["select-pr", "review-options", "ai-review", "complete"];
@@ -74,6 +77,47 @@ function makeRun(overrides: Partial<RunDetail> = {}): RunDetail {
 
 function makeEvent(overrides: Partial<RunEvent> & { type: string }): RunEvent {
   return { runId: "run-1", sequence: 1, ...overrides };
+}
+
+function makeTopologyStep(
+  stepId: string,
+  overrides: Partial<RunTopologyStep> = {},
+): RunTopologyStep {
+  return {
+    stepId,
+    index: STEP_IDS.indexOf(stepId),
+    title: stepId,
+    state: "pending",
+    sideEffecting: stepId === "complete",
+    integrations: stepId === "complete" ? ["github"] : [],
+    receipt: null,
+    actionHash: null,
+    hasArtifact: false,
+    hasDecision: false,
+    regenerations: 0,
+    updatedAt: "2026-09-12T10:00:00Z",
+    ...overrides,
+  };
+}
+
+function makeTopology(overrides: Partial<RunTopology> = {}): RunTopology {
+  return {
+    runId: "run-1",
+    workflow: "review",
+    status: "awaiting_human",
+    attempt: 0,
+    currentStepId: "select-pr",
+    stepCount: 4,
+    stepsDone: 0,
+    startedAt: "2026-09-12T10:00:00Z",
+    finishedAt: null,
+    lock: null,
+    receipts: { signed: 0, items: [] },
+    steps: STEP_IDS.map((id) =>
+      makeTopologyStep(id, id === "select-pr" ? { state: "awaiting_human" } : {}),
+    ),
+    ...overrides,
+  };
 }
 
 function makeSummary(runId: string, startedAt: string): RunSummary {
@@ -248,6 +292,31 @@ describe("applyRunEvent", () => {
     expect(regenerated.steps[2]?.state).toBe("pending");
     expect(regenerated.steps[2]?.regenerations).toBe(1);
   });
+
+  it("carries the signed receipt from the decision event onto the step", () => {
+    const signed = applyRunEvent(
+      makeRun(),
+      makeEvent({
+        type: "run.decision",
+        stepId: "select-pr",
+        action: "proceed",
+        receipt: "rcpt-9",
+      }),
+    );
+    expect(signed.steps[0]).toMatchObject({ state: "done", receipt: "rcpt-9" });
+
+    // An event without a receipt keeps whatever the step already carried.
+    const carried = makeRun({
+      steps: STEP_IDS.map((id) =>
+        makeStep(id, id === "select-pr" ? { receipt: "rcpt-old" } : {}),
+      ),
+    });
+    const unsigned = applyRunEvent(
+      carried,
+      makeEvent({ type: "run.decision", stepId: "select-pr", action: "proceed" }),
+    );
+    expect(unsigned.steps[0]?.receipt).toBe("rcpt-old");
+  });
 });
 
 describe("run snapshots embedded on transition events", () => {
@@ -321,6 +390,89 @@ describe("run snapshots embedded on transition events", () => {
     expect(parseRunSnapshot({ ...base, status: "paused" })).toBeNull();
     expect(parseRunSnapshot({ ...base, steps: "nope" })).toBeNull();
     expect(parseRunSnapshot({ ...base, steps: [{ stepId: "x" }] })).toBeNull();
+  });
+});
+
+describe("run topology payload", () => {
+  it("parses the N1 payload with satellites, lock, and receipts", () => {
+    const topology = makeTopology({
+      status: "blocked",
+      currentStepId: "ai-review",
+      lock: { target: "acme/app#12", lockedBy: "agent-1" },
+      receipts: {
+        signed: 1,
+        items: [
+          {
+            stepId: "select-pr",
+            receipt: "rcpt-1",
+            actionHash: "hash-1",
+            effectRecorded: false,
+          },
+        ],
+      },
+      steps: STEP_IDS.map((id, index) => ({
+        stepId: id,
+        index,
+        title: id,
+        state: index < 2 ? "done" : index === 2 ? "blocked" : "pending",
+        sideEffecting: id === "complete",
+        integrations: id === "complete" ? ["github"] : [],
+        receipt: index === 0 ? "rcpt-1" : null,
+        actionHash: index === 0 ? "hash-1" : null,
+        hasArtifact: index < 2,
+        hasDecision: index === 0,
+        regenerations: index === 1 ? 2 : 0,
+        updatedAt: "2026-09-12T10:05:00Z",
+      })),
+    });
+    const parsed = parseRunTopology(topology);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.runId).toBe("run-1");
+    expect(parsed?.status).toBe("blocked");
+    expect(parsed?.currentStepId).toBe("ai-review");
+    expect(parsed?.lock).toEqual({ target: "acme/app#12", lockedBy: "agent-1" });
+    expect(parsed?.receipts.signed).toBe(1);
+    expect(parsed?.receipts.items[0]).toEqual({
+      stepId: "select-pr",
+      receipt: "rcpt-1",
+      actionHash: "hash-1",
+      effectRecorded: false,
+    });
+    expect(parsed?.steps[0]).toMatchObject({
+      state: "done",
+      hasArtifact: true,
+      hasDecision: true,
+      updatedAt: "2026-09-12T10:05:00Z",
+    });
+    expect(parsed?.steps[1]?.regenerations).toBe(2);
+    expect(parsed?.steps[3]).toMatchObject({
+      sideEffecting: true,
+      integrations: ["github"],
+    });
+  });
+
+  it("drops non-string integrations instead of failing the step", () => {
+    const topology = makeTopology();
+    const parsed = parseRunTopology({
+      ...topology,
+      steps: [{ ...topology.steps[0], integrations: ["github", 7, null, "jira"] }],
+    });
+    expect(parsed?.steps[0]?.integrations).toEqual(["github", "jira"]);
+  });
+
+  it("returns null for malformed payloads and never half-parses", () => {
+    const base = makeTopology();
+    expect(parseRunTopology(null)).toBeNull();
+    expect(parseRunTopology("nope")).toBeNull();
+    expect(parseRunTopology({})).toBeNull();
+    expect(parseRunTopology({ ...base, status: "paused" })).toBeNull();
+    expect(parseRunTopology({ ...base, steps: "nope" })).toBeNull();
+    expect(parseRunTopology({ ...base, steps: [{ stepId: "x" }] })).toBeNull();
+    expect(parseRunTopology({ ...base, receipts: null })).toBeNull();
+    expect(parseRunTopology({ ...base, receipts: { signed: 1, items: "nope" } })).toBeNull();
+    expect(parseRunTopology({ ...base, receipts: { signed: 1, items: [{}] } })).toBeNull();
+    // An unlocked run reports a null lock rather than a half-filled object.
+    expect(parseRunTopology({ ...base, lock: null })?.lock).toBeNull();
   });
 });
 

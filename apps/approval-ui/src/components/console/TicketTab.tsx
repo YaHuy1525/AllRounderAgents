@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "@/lib/api";
 import { safeBrowseUrl, ticketFacts, type JiraIssue } from "@/lib/board";
 import {
+  caseHeaderModel,
   collectHttpsLinks,
   eventsForStep,
   formatCost,
@@ -28,8 +29,10 @@ import {
   IconClose,
   IconExternalLink,
   IconLock,
+  IconSearch,
   IconXCircle,
 } from "./icons";
+import { CaseHeader } from "./CaseHeader";
 import { JsonView } from "./JsonView";
 import { PayloadView } from "./PayloadView";
 import { RunInspector } from "./RunInspector";
@@ -87,12 +90,21 @@ export function TicketTab({
   issue,
   approvals,
   onDecide,
+  onOpenSearch,
+  focusStepId,
+  focusNonce,
   canDecide = true,
   canStart = true,
 }: {
   issue: JiraIssue;
   approvals: Approval[];
   onDecide: (id: string, decision: "approved" | "rejected") => Promise<void>;
+  /** Opens the command bar; the bar itself stays read-only. */
+  onOpenSearch?: () => void;
+  /** Command-bar deep link: expand this lane step when the tab renders. */
+  focusStepId?: string;
+  /** Bumped per deep link so linking the same step twice still refocuses. */
+  focusNonce?: number;
   /** False disables the gate buttons; the server stays source of truth. */
   canDecide?: boolean;
   /** False disables the run launcher; the server stays source of truth. */
@@ -106,6 +118,8 @@ export function TicketTab({
   const [debugOpen, setDebugOpen] = useState(false);
   const [decidingId, setDecidingId] = useState<string | null>(null);
   const panelRefs = useRef(new Map<string, HTMLElement>());
+  const focusSeq = useRef(0);
+  const [focusEvent, setFocusEvent] = useState<{ stepId: string; nonce: number } | null>(null);
 
   useEffect(() => {
     setExpandedStep(null);
@@ -180,6 +194,30 @@ export function TicketTab({
     panelRefs.current.get(expandedStep)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [expandedStep]);
 
+  // Deep links share one focus event: the command bar hands one down as
+  // props, the Case-360 header raises one on risk/next clicks. The lane
+  // stepper expands a matching lane step; run steps (ids like `select-pr`)
+  // travel to RunInspector, which opens the graph drawer. The sequence keeps
+  // a repeat link refocusing.
+  useEffect(() => {
+    if (focusStepId === undefined || focusStepId === "") return;
+    focusSeq.current += 1;
+    setFocusEvent({ stepId: focusStepId, nonce: focusSeq.current });
+  }, [focusStepId, focusNonce]);
+
+  function focusStepPanel(stepId: string): void {
+    focusSeq.current += 1;
+    setFocusEvent({ stepId, nonce: focusSeq.current });
+  }
+
+  const headerFocusSeen = useRef<number | null>(null);
+  useEffect(() => {
+    if (focusEvent === null || headerFocusSeen.current === focusEvent.nonce) return;
+    headerFocusSeen.current = focusEvent.nonce;
+    const laneStep = steps.find((step) => step.id === focusEvent.stepId);
+    if (laneStep !== undefined) setExpandedStep(laneStep.id);
+  }, [focusEvent, steps]);
+
   const relatedApprovals = useMemo(
     () =>
       approvals.filter((approval) => {
@@ -194,6 +232,41 @@ export function TicketTab({
     const browse = safeBrowseUrl(issue.browse_url);
     return browse === "#" ? links : [browse, ...links.filter((link) => link !== browse)];
   }, [record, events, issue.browse_url]);
+
+  // Case-360 header (U2): ticket + case record + run snapshots + lane states
+  // + gates. List rows widen to the header's run shape; missing detail is
+  // simply absent, never guessed.
+  const headerModel = useMemo(
+    () =>
+      caseHeaderModel({
+        ticket: {
+          key: issue.key,
+          summary: issue.summary,
+          status: issue.status,
+          issueType: issue.issue_type,
+          priority: issue.priority,
+          assignee: issue.assignee,
+          labels: issue.labels,
+          project: issue.project,
+        },
+        record,
+        lane,
+        steps,
+        states,
+        runs: runs.map((summary) => ({
+          ...summary,
+          attempt: 1,
+          lockTarget: null,
+          lockedBy: null,
+          outcome: null,
+          cancelReason: null,
+          steps: [],
+        })),
+        run: activeRun,
+        approvals: relatedApprovals,
+      }),
+    [issue, record, lane, steps, states, runs, activeRun, relatedApprovals],
+  );
 
   async function decide(id: string, decision: "approved" | "rejected"): Promise<void> {
     setDecidingId(id);
@@ -210,25 +283,32 @@ export function TicketTab({
 
   return (
     <section id="ticket-view" className="ticket-view">
-      <header className="ticket-view-header">
-        <div>
-          <p className="ticket-key">{issue.key}</p>
-          <h2>{issue.summary}</h2>
-          <p className="ticket-view-meta">
-            {[issue.status, issue.issue_type, issue.priority, issue.assignee ?? "Unassigned"]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
-        </div>
-        <div className="ticket-view-actions">
-          {record ? (
-            <span className="run-badge">
-              {`Case ${record.id.slice(0, 8)} · ${record.status}`}
-              {record.cost_usd_micro > 0 ? ` · ${formatCost(record.cost_usd_micro)}` : ""}
-            </span>
-          ) : null}
-        </div>
-      </header>
+      <CaseHeader
+        model={headerModel}
+        onFocusStep={focusStepPanel}
+        actions={
+          <>
+            {onOpenSearch !== undefined && (
+              <button
+                type="button"
+                className="ticket-search-trigger"
+                title="Search everything (/)"
+                onClick={onOpenSearch}
+              >
+                <IconSearch />
+                <span>Search</span>
+                <kbd className="command-kbd">/</kbd>
+              </button>
+            )}
+            {record !== null && (
+              <span className="run-badge">
+                {`Case ${record.id.slice(0, 8)} · ${record.status}`}
+                {record.cost_usd_micro > 0 ? ` · ${formatCost(record.cost_usd_micro)}` : ""}
+              </span>
+            )}
+          </>
+        }
+      />
 
       {caseState.status === "loading" && (
         <p className="ticket-notice" role="status">
@@ -255,6 +335,10 @@ export function TicketTab({
           onToggleDebug={() => setDebugOpen((open) => !open)}
           onRunsChanged={() => void refreshRuns()}
           onActiveRun={setActiveRun}
+          caseEvents={events}
+          costMicro={record?.cost_usd_micro ?? null}
+          focusStepId={focusEvent?.stepId}
+          focusNonce={focusEvent?.nonce}
         />
       ) : (
         <>

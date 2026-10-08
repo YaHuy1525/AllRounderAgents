@@ -64,6 +64,8 @@ const UI_STORAGE_KEY = "allrounder.ui.prefs";
 const TICKET_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,19}-\d+$/;
 
 export const RECENT_TICKET_LIMIT = 10;
+export const RECENT_COMMAND_LIMIT = 6;
+export const COMMAND_MAX_LENGTH = 120;
 
 export type RecentTicket = { key: string; summary: string };
 
@@ -78,6 +80,8 @@ export type UiPrefs = {
   badge: boolean;
   confirmReject: boolean;
   recentTickets: RecentTicket[];
+  /** Recent command-bar queries (most recent first), newest wins on dedupe. */
+  recentCommands: string[];
   /** True when the labeled sidebar is folded back to the 56px icon rail. */
   sidebarCollapsed: boolean;
 };
@@ -89,6 +93,7 @@ export function emptyUiPrefs(): UiPrefs {
     badge: true,
     confirmReject: true,
     recentTickets: [],
+    recentCommands: [],
     sidebarCollapsed: false,
   };
 }
@@ -121,6 +126,20 @@ function sanitizeRefresh(value: unknown): number {
     : 0;
 }
 
+function sanitizeCommands(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const commands: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const query = item.trim().slice(0, COMMAND_MAX_LENGTH);
+    if (query === "") continue;
+    if (commands.some((entry) => entry.toLowerCase() === query.toLowerCase())) continue;
+    commands.push(query);
+    if (commands.length === RECENT_COMMAND_LIMIT) break;
+  }
+  return commands;
+}
+
 export function loadUiPrefs(storage: Pick<Storage, "getItem">): UiPrefs {
   const raw = storage.getItem(UI_STORAGE_KEY);
   if (!raw) return emptyUiPrefs();
@@ -133,6 +152,7 @@ export function loadUiPrefs(storage: Pick<Storage, "getItem">): UiPrefs {
       badge: parsed.badge !== false,
       confirmReject: parsed.confirmReject !== false,
       recentTickets: sanitizeRecent(parsed.recentTickets),
+      recentCommands: sanitizeCommands(parsed.recentCommands),
       sidebarCollapsed: parsed.sidebarCollapsed === true,
     };
   } catch {
@@ -147,6 +167,7 @@ export function saveUiPrefs(storage: Pick<Storage, "setItem">, prefs: UiPrefs): 
     badge: prefs.badge !== false,
     confirmReject: prefs.confirmReject !== false,
     recentTickets: sanitizeRecent(prefs.recentTickets),
+    recentCommands: sanitizeCommands(prefs.recentCommands),
     sidebarCollapsed: prefs.sidebarCollapsed === true,
   };
   storage.setItem(UI_STORAGE_KEY, JSON.stringify(next));
@@ -166,4 +187,23 @@ export function rememberRecentTicket(
   if (!TICKET_KEY_PATTERN.test(key)) return recent;
   const entry: RecentTicket = { key, summary: ticket.summary.trim().slice(0, 240) };
   return [entry, ...recent.filter((item) => item.key !== key)].slice(0, Math.max(1, limit));
+}
+
+/**
+ * Prepend a command-bar query to the recent list. Dedupe is case-insensitive
+ * (the newest casing wins) and the list is capped so the drop-down stays a
+ * glanceable menu, not a log.
+ */
+export function rememberRecentCommand(
+  commands: string[],
+  query: string,
+  limit = RECENT_COMMAND_LIMIT,
+): string[] {
+  const clean = query.trim().slice(0, COMMAND_MAX_LENGTH);
+  if (clean === "") return commands;
+  const lowered = clean.toLowerCase();
+  return [clean, ...commands.filter((item) => item.toLowerCase() !== lowered)].slice(
+    0,
+    Math.max(1, limit),
+  );
 }

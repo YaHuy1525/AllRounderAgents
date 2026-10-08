@@ -455,6 +455,155 @@ export function parseRunSnapshot(value: unknown): RunDetail | null {
 }
 
 /**
+ * One step row of the N1 topology payload (`GET /runs/{id}/topology`): the
+ * live state from `run_snapshot()` enriched with the static satellites and
+ * lineage flags the five lenses render.
+ */
+export type RunTopologyStep = {
+  stepId: string;
+  index: number;
+  title: string;
+  state: RunStepState;
+  sideEffecting: boolean;
+  integrations: string[];
+  receipt: string | null;
+  actionHash: string | null;
+  hasArtifact: boolean;
+  hasDecision: boolean;
+  regenerations: number;
+  updatedAt: string;
+};
+
+/** One signed-receipt row of the topology's receipt trail. */
+export type RunTopologyReceipt = {
+  stepId: string;
+  receipt: string | null;
+  actionHash: string | null;
+  effectRecorded: boolean;
+};
+
+export type RunTopologyLock = {
+  target: string | null;
+  lockedBy: string | null;
+};
+
+/**
+ * Read model behind the view switcher: one payload so the graph, header,
+ * data, and timeline lenses never disagree on step state.
+ */
+export type RunTopology = {
+  runId: string;
+  workflow: string;
+  status: RunStatus;
+  attempt: number;
+  currentStepId: string | null;
+  stepCount: number;
+  stepsDone: number;
+  startedAt: string;
+  finishedAt: string | null;
+  lock: RunTopologyLock | null;
+  receipts: { signed: number; items: RunTopologyReceipt[] };
+  steps: RunTopologyStep[];
+};
+
+function parseRunTopologyStep(value: unknown): RunTopologyStep | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const stepId = asString(record.stepId);
+  const index = asNumber(record.index);
+  const title = asString(record.title);
+  if (stepId === null || index === null || title === null || !isRunStepState(record.state)) {
+    return null;
+  }
+  const rawIntegrations = record.integrations;
+  const integrations = Array.isArray(rawIntegrations)
+    ? rawIntegrations.filter((item): item is string => typeof item === "string")
+    : [];
+  return {
+    stepId,
+    index,
+    title,
+    state: record.state,
+    sideEffecting: record.sideEffecting === true,
+    integrations,
+    receipt: asString(record.receipt),
+    actionHash: asString(record.actionHash),
+    hasArtifact: record.hasArtifact === true,
+    hasDecision: record.hasDecision === true,
+    regenerations: asNumber(record.regenerations) ?? 0,
+    updatedAt: asString(record.updatedAt) ?? "",
+  };
+}
+
+/**
+ * Validate one N1 topology payload with the same discipline as
+ * ``parseRunSnapshot``: anything malformed returns null so the caller keeps
+ * its catalog-derived frame instead of rendering half a graph.
+ */
+export function parseRunTopology(value: unknown): RunTopology | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const runId = asString(record.runId);
+  const workflow = asString(record.workflow);
+  const startedAt = asString(record.startedAt);
+  const attempt = asNumber(record.attempt);
+  const stepCount = asNumber(record.stepCount);
+  const stepsDone = asNumber(record.stepsDone);
+  if (
+    runId === null ||
+    workflow === null ||
+    startedAt === null ||
+    attempt === null ||
+    stepCount === null ||
+    stepsDone === null ||
+    !isRunStatus(record.status) ||
+    !Array.isArray(record.steps)
+  ) {
+    return null;
+  }
+  const steps: RunTopologyStep[] = [];
+  for (const item of record.steps) {
+    const step = parseRunTopologyStep(item);
+    if (step === null) return null;
+    steps.push(step);
+  }
+  const receiptsRecord = asRecord(record.receipts);
+  const rawItems =
+    receiptsRecord !== null && Array.isArray(receiptsRecord.items) ? receiptsRecord.items : null;
+  if (rawItems === null) return null;
+  const items: RunTopologyReceipt[] = [];
+  for (const item of rawItems) {
+    const entry = asRecord(item);
+    const stepId = entry === null ? null : asString(entry.stepId);
+    if (entry === null || stepId === null) return null;
+    items.push({
+      stepId,
+      receipt: asString(entry.receipt),
+      actionHash: asString(entry.actionHash),
+      effectRecorded: entry.effectRecorded === true,
+    });
+  }
+  const lockRecord = asRecord(record.lock);
+  return {
+    runId,
+    workflow,
+    status: record.status,
+    attempt,
+    currentStepId: asString(record.currentStepId),
+    stepCount,
+    stepsDone,
+    startedAt,
+    finishedAt: asString(record.finishedAt),
+    lock:
+      lockRecord === null
+        ? null
+        : { target: asString(lockRecord.target), lockedBy: asString(lockRecord.lockedBy) },
+    receipts: { signed: asNumber(receiptsRecord?.signed) ?? 0, items },
+    steps,
+  };
+}
+
+/**
  * Merge one replayed or live event into the ordered history: entries dedupe
  * by sequence and stay sorted, so a re-subscribed stream can replay from
  * zero without duplicating the tail it already showed.
@@ -561,8 +710,14 @@ export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
       const stepId = asString(event.stepId);
       const action = asString(event.action);
       if (stepId === null || action === null) break;
+      // The decision event carries the freshly signed receipt; handing it to
+      // the step keeps the graph dots and the lineage chips live under SSE
+      // without waiting for a refetch.
+      const receipt = asString(event.receipt);
       next.steps = withStep(next, stepId, (step) => {
-        if (action === "proceed" || action === "edit") return { ...step, state: "done" };
+        if (action === "proceed" || action === "edit") {
+          return { ...step, state: "done", receipt: receipt ?? step.receipt };
+        }
         if (action === "regenerate") return { ...step, regenerations: step.regenerations + 1 };
         return step;
       });
@@ -882,6 +1037,16 @@ export async function listRuns(ticketKey: string): Promise<RunSummary[]> {
 
 export async function getRun(runId: string): Promise<RunDetail> {
   return api<RunDetail>(`/runs/${encodeURIComponent(runId)}`);
+}
+
+/**
+ * N1 topology for one run. Returns null instead of throwing on a malformed
+ * payload — the graph lens keeps its catalog frame when the overlay cannot
+ * be trusted.
+ */
+export async function getRunTopology(runId: string): Promise<RunTopology | null> {
+  const payload = await api<unknown>(`/runs/${encodeURIComponent(runId)}/topology`);
+  return parseRunTopology(payload);
 }
 
 export async function decideRunStep(

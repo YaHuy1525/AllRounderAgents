@@ -5,7 +5,7 @@
  * :func:`moveIndex` inside the runs view.
  */
 
-export type ShortcutAction = "board" | "runs" | "workflows" | "new-tab";
+export type ShortcutAction = "board" | "runs" | "workflows" | "new-tab" | "command";
 
 export type ShortcutResolution =
   | { kind: "pending" } // `g` seen; the next key decides the destination
@@ -27,6 +27,7 @@ export function resolveShortcut(
   }
   if (key === "g") return { kind: "pending" };
   if (key === "+") return { kind: "action", action: "new-tab" };
+  if (key === "/") return { kind: "action", action: "command" };
   return { kind: "clear" };
 }
 

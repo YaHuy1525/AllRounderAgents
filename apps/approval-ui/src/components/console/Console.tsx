@@ -11,6 +11,7 @@ import {
   emptyUiPrefs,
   loadPrefs,
   loadUiPrefs,
+  rememberRecentCommand,
   rememberRecentTicket,
   savePrefs,
   saveUiPrefs,
@@ -20,6 +21,7 @@ import {
 } from "@/lib/prefs";
 import { canDecide, canManageAccounts, canStartRun } from "@/lib/roles";
 import { workflowLabel } from "@/lib/runs";
+import { commandTarget, type SearchHit } from "@/lib/search";
 import { isTypingTarget, resolveShortcut, type ShortcutAction } from "@/lib/shortcuts";
 import { AUTH_STORAGE_KEY, getSupabaseClient } from "@/lib/supabase";
 import {
@@ -42,6 +44,7 @@ import { AccountPanel } from "./AccountPanel";
 import { ApprovalsView } from "./ApprovalsView";
 import { AssistantPanel } from "./AssistantPanel";
 import { BoardView } from "./BoardView";
+import { CommandBar } from "./CommandBar";
 import { DocsPanel } from "./DocsPanel";
 import {
   IconAccount,
@@ -154,6 +157,7 @@ export function Console() {
   const [authStatus, setAuthStatus] = useState(
     "The Jira board stays locked until you sign in.",
   );
+  const [commandOpen, setCommandOpen] = useState(false);
   const [signedInEmail, setSignedInEmail] = useState("");
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [sessionRestored, setSessionRestored] = useState(false);
@@ -420,11 +424,12 @@ export function Console() {
     else if (action === "runs") openPanel("runs");
     else if (action === "workflows") openWorkflows();
     else if (action === "new-tab") addTab();
+    else if (action === "command") setCommandOpen(true);
   };
 
-  // Global shortcuts: `g` then b/r/w for navigation, `+` for a new tab.
-  // Typing targets and modified chords are ignored; j/k list movement lives
-  // inside the runs table itself.
+  // Global shortcuts: `g` then b/r/w for navigation, `+` for a new tab, `/`
+  // for the command bar. Typing targets and modified chords are ignored;
+  // j/k list movement lives inside the runs table itself.
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent): void {
       if (event.defaultPrevented) return;
@@ -456,8 +461,17 @@ export function Console() {
     );
   }
 
-  function focusTicket(ref: TicketRef): void {
-    const next = openTicketTab(tabsRef.current, ref);
+  function rememberCommand(query: string): void {
+    setUiPrefs((current) =>
+      saveUiPrefs(window.localStorage, {
+        ...current,
+        recentCommands: rememberRecentCommand(current.recentCommands, query),
+      }),
+    );
+  }
+
+  function focusTicket(ref: TicketRef, options: { focusStepId?: string | null } = {}): void {
+    const next = openTicketTab(tabsRef.current, ref, options);
     tabsRef.current = next.tabs;
     setTabs(next.tabs);
     activeTabIdRef.current = next.activeId;
@@ -543,18 +557,50 @@ export function Console() {
   }
 
   /** Platform chips and runs rows deep-link into a standalone run inspector. */
-  function openRun(run: { runId: string; workflow: string; ticketKey?: string }): void {
+  function openRun(run: {
+    runId: string;
+    workflow: string;
+    ticketKey?: string;
+    focusStepId?: string;
+  }): void {
     const label = run.workflow === "" ? "Run" : workflowLabel(run.workflow);
     const ticketKey = run.ticketKey !== undefined && run.ticketKey !== "" ? run.ticketKey : null;
     const next = openRunTab(tabsRef.current, {
       id: run.runId,
       title: ticketKey === null ? label : `${label} · ${ticketKey}`,
       ...(ticketKey === null ? {} : { ticketKey }),
+      ...(run.focusStepId === undefined ? {} : { focusStepId: run.focusStepId }),
     });
     tabsRef.current = next.tabs;
     setTabs(next.tabs);
     activeTabIdRef.current = next.activeId;
     setActiveTabId(next.activeId);
+  }
+
+  /**
+   * Command-bar activation. Deep links only: ticket hits open their tab (and
+   * focus the linked step), run hits open the run inspector, approval hits
+   * open the approvals panel. No decision endpoint is ever called from here.
+   */
+  function navigateCommandHit(hit: SearchHit): void {
+    const target = commandTarget(hit);
+    if (target === null) return;
+    if (target.kind === "approvals") {
+      openPanel("approvals");
+      return;
+    }
+    if (target.kind === "run") {
+      openRun({
+        runId: target.runId,
+        workflow: hit.workflow ?? "",
+        ticketKey: target.ticketKey ?? undefined,
+        ...(target.stepId === null ? {} : { focusStepId: target.stepId }),
+      });
+      return;
+    }
+    const summary =
+      issues.find((issue) => issue.key === target.ticketKey)?.summary ?? hit.title;
+    focusTicket({ key: target.ticketKey, summary }, { focusStepId: target.stepId });
   }
 
   function focusChat(): void {
@@ -1045,6 +1091,9 @@ export function Console() {
                   issue={activeIssue}
                   approvals={approvals}
                   onDecide={decideSafely}
+                  onOpenSearch={() => setCommandOpen(true)}
+                  focusStepId={activeTab.focusStepId}
+                  focusNonce={activeTab.focusNonce}
                   canDecide={allowDecide}
                   canStart={allowStart}
                 />
@@ -1112,13 +1161,28 @@ export function Console() {
                   />
                 ))}
 
-              {activeTab.kind === "run" && <RunInspector runId={activeTab.runId} />}
+              {activeTab.kind === "run" && (
+                <RunInspector
+                  runId={activeTab.runId}
+                  focusStepId={activeTab.focusStepId}
+                  focusNonce={activeTab.focusNonce}
+                />
+              )}
 
               {activeTab.kind === "observability" && <ObservabilityView />}
             </div>
           </main>
 
           <AssistantPanel tickets={chatTickets} selectedKey={activeTicketKey} />
+
+          <CommandBar
+            open={commandOpen}
+            tickets={issues}
+            recent={uiPrefs.recentCommands}
+            onClose={() => setCommandOpen(false)}
+            onRemember={rememberCommand}
+            onNavigate={navigateCommandHit}
+          />
         </div>
       )}
     </>
