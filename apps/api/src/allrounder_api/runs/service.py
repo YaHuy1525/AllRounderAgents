@@ -469,29 +469,41 @@ class RunService:
 
     # ------------------------------------------------------------ internals
 
+    def _definition_or_none(self, run: WorkflowRun) -> WorkflowDefinition | None:
+        """The run's workflow definition straight off the registry.
+
+        The one registry access every consumer shares: ``_definition`` raises
+        on it, ``_gate_risk`` degrades to an unranked gate.
+        """
+        return self._workflows.get(run.workflow)
+
     def _definition(self, run: WorkflowRun) -> WorkflowDefinition:
-        definition = self._workflows.get(run.workflow)
+        definition = self._definition_or_none(run)
         if definition is None:  # pragma: no cover - registry consistency
             raise UnknownWorkflowError(run.workflow)
         return definition
 
     def _gate_risk(self, run: WorkflowRun, step_id: str) -> int | None:
         """Risk band stamped on a run-gate approval, from the step's declared
-        governance — never re-derived here.
+        governance — never re-derived here, and never raising.
 
         A step that declares an explicit band (one of ``RISK_BANDS``,
         validated at import time in ``StepDefinition.__post_init__``) uses
         it verbatim. Otherwise the default rule applies: a side-effecting
         gate is ``single_risk`` (55) and a pure one ``benign`` (10) — the
-        ``policy/risk.yaml`` scores the approval queue sorts on. A step with
-        no workflow definition is left unranked (None, sorts last) rather
-        than inventing a band; ``_definition`` would raise, so this reads
-        ``self._workflows`` directly to tolerate an unknown workflow.
+        ``policy/risk.yaml`` scores the approval queue sorts on. Anything the
+        definition cannot answer leaves the gate unranked (``None``, sorts
+        last) rather than inventing a band: a workflow with no shipped
+        definition, and a step id absent from it — which is what a run
+        persisted before a step rename looks like when resumed after.
         """
-        definition = self._workflows.get(run.workflow)
+        definition = self._definition_or_none(run)
         if definition is None:
             return None
-        step_def = definition.step(step_id)
+        try:
+            step_def = definition.step(step_id)
+        except KeyError:
+            return None
         if step_def.risk is not None:
             return step_def.risk
         return 55 if step_def.side_effecting else 10
