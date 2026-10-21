@@ -396,6 +396,9 @@ class RunService:
                 action=action_dict,
                 scope=scope,
                 run_id=run.run_id,
+                # Run-driven lane: the five-field binding is mandatory, so an
+                # unbound or cross-run receipt can never record a decision.
+                require_run_id=True,
                 now=now,
             )
         except ReceiptError as error:  # pragma: no cover - signing our own token
@@ -528,6 +531,9 @@ class RunService:
                 action=self._action_dict(run, step, action, edits),
                 scope=self._receipt_scope(run, step.step_id),
                 run_id=run.run_id,
+                # The re-verification gate before a side effect acts: the run
+                # binding must be present and match, never verified by accident.
+                require_run_id=True,
                 now=self._clock(),
             )
         except ReceiptError as error:  # pragma: no cover - defensive re-check

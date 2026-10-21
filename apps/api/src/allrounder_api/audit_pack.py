@@ -399,6 +399,9 @@ class AuditPackBuilder:
                 action=action_dict,
                 scope=scope,
                 run_id=run.run_id,
+                # Run receipts are always issued run-bound by ``RunService``;
+                # an audit pack must not certify a token missing that binding.
+                require_run_id=True,
                 now=decided_at,
             )
         except ReceiptError:
