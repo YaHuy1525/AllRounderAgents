@@ -70,6 +70,28 @@ describe("movePackageBetween", () => {
     expect(movePackageBetween(groups, "patch", "express", "major")).toBe(groups);
   });
 
+  it("returns the same array reference when the target already lists the name", () => {
+    // An artifact that ever lists one package in two groups must not append it
+    // a second time: that would duplicate the target group's React keys and
+    // its count. The no-op returns the *same* array, so the caller skips the
+    // state write like any other rejected move.
+    const groups = [
+      group("patch", [pkg("express", "patch")]),
+      group("minor", [pkg("express", "minor")]),
+      group("major", []),
+    ];
+    expect(movePackageBetween(groups, "minor", "express", "patch")).toBe(groups);
+    expect(groups[0]?.packages.map((item) => item.name)).toEqual(["express"]);
+    expect(groups[1]?.packages.map((item) => item.name)).toEqual(["express"]);
+    // The guard reads the target group only, so a move onto an empty group is
+    // still the ordinary append.
+    const moved = movePackageBetween(groups, "minor", "express", "major");
+    expect(moved).not.toBe(groups);
+    expect(moved.find((item) => item.id === "major")?.packages.map((item) => item.name)).toEqual([
+      "express",
+    ]);
+  });
+
   it("preserves order and untouched group identity for the rest of the groups", () => {
     const major = group("major", [pkg("react-router", "major"), pkg("webpack", "major")]);
     const patch = group("patch", [pkg("left-pad", "patch")]);

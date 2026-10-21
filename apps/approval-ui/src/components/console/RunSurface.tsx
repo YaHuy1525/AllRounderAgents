@@ -2999,9 +2999,13 @@ export function parseDependencyGroups(
 /**
  * The one move rule behind drag, keyboard, and click: relocate one package
  * from its group to another, appending it to the target group. A same-group
- * request or an unknown package returns the *same array reference* so callers
- * can detect the no-op and skip a state write — the semantics the component's
- * early returns had before this extraction.
+ * request, an unknown package, or a target that already lists that name all
+ * return the *same array reference* so callers can detect the no-op and skip
+ * a state write — the semantics the component's early returns had before this
+ * extraction. The duplicate-name guard matters because an artifact that ever
+ * listed a package twice could otherwise land it twice in the target (and a
+ * package present in two groups would duplicate the target group's React
+ * keys and counts; the append is exactly what must not happen then).
  */
 export function movePackageBetween(
   groups: DependencyGroupView[],
@@ -3014,6 +3018,10 @@ export function movePackageBetween(
     .find((group) => group.id === from)
     ?.packages.find((pkg) => pkg.name === name);
   if (moved === undefined) return groups;
+  const target = groups.find((group) => group.id === to);
+  if (target !== undefined && target.packages.some((pkg) => pkg.name === name)) {
+    return groups;
+  }
   return groups.map((group) => {
     if (group.id === from) {
       return { ...group, packages: group.packages.filter((pkg) => pkg.name !== name) };
@@ -3972,6 +3980,15 @@ export function ciStatusLine(status: DependencyCiStatus | null): string {
   return status === null ? CI_STATUS_NOT_RECORDED : `CI status: ${CI_STATUS_LABELS[status]}`;
 }
 
+/**
+ * Renders one artifact-level CI line. The key it reads is the artifact's
+ * top-level ``ciStatus`` — note that no current producer writes it there:
+ * the programming lane records ``validation.ciStatus`` per PR, not on the
+ * lane artifact, so this row renders the honest "not recorded" degradation
+ * today. PR2/PR3 must not read ``artifact.ciStatus`` as an established
+ * contract; wiring CI into the artifact shape is a separate cross-plane
+ * change.
+ */
 export function CiStatusRow({ artifact }: { artifact: Record<string, unknown> | null }) {
   const status = artifact === null ? null : parseCiStatus(artifact["ciStatus"]);
   return (
