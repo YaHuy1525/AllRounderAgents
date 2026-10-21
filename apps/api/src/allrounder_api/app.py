@@ -233,7 +233,7 @@ def create_app(
         max_concurrent_model_calls=config.runs_max_concurrent_model_calls,
         config=RunServiceConfig(
             lock_ttl_seconds=config.runs_lock_ttl_seconds,
-            receipt_ttl_seconds=config.runs_receipt_ttl_seconds,
+            receipt_ttl_seconds=config.runs_approval_token_ttl_seconds,
             max_run_seconds=config.runs_max_seconds,
             max_regenerations_per_step=config.runs_max_regenerations_per_step,
         ),

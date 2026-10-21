@@ -171,13 +171,13 @@ def create_production_app() -> FastAPI:
             max_concurrent_model_calls=settings.runs_max_concurrent_model_calls,
             config=RunServiceConfig(
                 lock_ttl_seconds=settings.runs_lock_ttl_seconds,
-                receipt_ttl_seconds=settings.runs_receipt_ttl_seconds,
+                receipt_ttl_seconds=settings.runs_approval_token_ttl_seconds,
                 max_run_seconds=settings.runs_max_seconds,
                 max_regenerations_per_step=settings.runs_max_regenerations_per_step,
             ),
             metrics=metrics,
             registry_ttl_seconds=settings.runs_registry_ttl_seconds,
-            receipt_ttl_seconds=settings.runs_receipt_ttl_seconds,
+            receipt_ttl_seconds=settings.runs_receipt_record_ttl_seconds,
             event_ttl_seconds=settings.runs_registry_ttl_seconds,
         ),
     )
