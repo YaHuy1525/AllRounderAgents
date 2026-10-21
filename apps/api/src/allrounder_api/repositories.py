@@ -156,6 +156,10 @@ class ApprovalRecord:
     decision: str | None = None
     comment: str | None = None
     decided_at: datetime | None = None
+    # Declared risk band on the 0-100 governance scale (policy/risk.yaml
+    # anchors: benign 10, single_risk 55, irreversible_high_blast 90).
+    # None means "no declared band" and sorts last in the approval queue.
+    risk: int | None = None
 
 
 @dataclass(frozen=True)
@@ -390,9 +394,24 @@ class InMemoryApprovalRepository:
         return deepcopy(safe)
 
     async def list(self, tenant_id: str) -> list[ApprovalRecord]:
+        # Same queue rule as the Postgres read: riskiest gate first, declared
+        # bands (policy/risk.yaml anchors 10/55/90) above unranked ones. Dict
+        # order is creation order and ``sorted`` is stable, so age breaks
+        # ties within a band oldest-first and an all-null set keeps pure
+        # insertion order — nothing silent re-ranks.
         return [
-            deepcopy(value) for value in self._approvals.values()
-            if value.tenant_id == tenant_id
+            deepcopy(value)
+            for value in sorted(
+                (
+                    approval
+                    for approval in self._approvals.values()
+                    if approval.tenant_id == tenant_id
+                ),
+                key=lambda approval: (
+                    approval.risk is None,
+                    -(approval.risk or 0),
+                ),
+            )
         ]
 
     async def get(self, approval_id: str, tenant_id: str) -> ApprovalRecord:
@@ -726,8 +745,8 @@ class PostgresRepositories:
                 """
                 insert into public.approvals
                   (id, case_id, tenant_id, payload, action, evidence,
-                   approver, scope, expires_at)
-                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s)
+                   approver, scope, expires_at, risk)
+                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
                 """,
                 (
                     approval.id, approval.case_id, approval.tenant_id,
@@ -736,6 +755,9 @@ class PostgresRepositories:
                     ),
                     json.dumps(redact(approval.action)), json.dumps(redact(approval.evidence)),
                     approval.approver, approval.scope, approval.expires_at,
+                    # Declared risk band (0-100) or NULL for "no band"; a plain
+                    # integer, so it needs no redaction like action/evidence.
+                    approval.risk,
                 ),
             )
         return approval
@@ -1319,7 +1341,7 @@ class PostgresApprovalRepository:
             cursor = await connection.execute(
                 """
                 select * from public.approvals where tenant_id = %s
-                order by created_at desc limit 200
+                order by risk desc nulls last, created_at asc limit 200
                 """,
                 (tenant_id,),
             )
@@ -1516,6 +1538,10 @@ def _connector_vault_from_row(row: dict[str, Any]) -> ConnectorVaultRecord:
 
 
 def _approval_from_row(row: dict[str, Any]) -> ApprovalRecord:
+    # A missing key (un-migrated database) or an unexpected type degrades to
+    # "no declared band" rather than crashing reads of the new column.
+    raw_risk = row.get("risk")
+    risk: int | None = raw_risk if raw_risk is None or isinstance(raw_risk, int) else None
     return ApprovalRecord(
         id=str(row["id"]), case_id=str(row["case_id"]), tenant_id=str(row["tenant_id"]),
         action=dict(row["action"]),
@@ -1525,4 +1551,5 @@ def _approval_from_row(row: dict[str, Any]) -> ApprovalRecord:
         decision=str(row["decision"]) if row["decision"] is not None else None,
         comment=str(row["comment"]) if row["comment"] is not None else None,
         decided_at=row["decided_at"],
+        risk=risk,
     )
