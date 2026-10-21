@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from .ceilings import SLOT_ORDER
+
 # Run lifecycle. ``queued`` is a first-class state: over-ceiling runs wait in
 # the open with a visible position instead of being silently dropped.
 RUN_STATUSES = (
@@ -78,6 +80,22 @@ class StepDefinition:
     # for pure computation. Declared here so the run service enforces the
     # three spec ceilings without inline conditionals in the drive loop.
     slots: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Fail loudly on a slot kind the ceiling layer does not know.
+
+        ``_pass_kinds`` filters the declared kinds against ``SLOT_ORDER``, so
+        an undeclared kind (a ``"modl"`` typo) would silently drop the
+        requirement and un-cap the step instead of capping it — the exact
+        failure mode slot discipline exists to prevent. Validation happens at
+        import time for the shipped definitions, never at run time.
+        """
+        unknown = [kind for kind in self.slots if kind not in SLOT_ORDER]
+        if unknown:
+            raise ValueError(
+                f"Step {self.id!r} declares unknown ceiling slot(s) {unknown!r}; "
+                f"valid kinds are {list(SLOT_ORDER)!r}"
+            )
 
 
 @dataclass(frozen=True)

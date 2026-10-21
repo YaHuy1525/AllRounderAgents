@@ -44,13 +44,22 @@ local rank = redis.call('ZRANK', queue_key, run_id)
 return rank + 1
 """
 
+# Release hands the freed slot to the queue head — and only then. A release
+# that freed nothing (the run held no slot on this kind) must not promote, or
+# the head gets a slot nobody gave back and ``active_count`` exceeds the cap;
+# an unqueue (the run was waiting, never granted) frees nothing either, so it
+# returns early as well. ``MemoryConcurrencyCeiling`` enforces the same rule
+# with its ``was_active`` check, keeping both back-ends in parity.
 _RELEASE_SCRIPT = """
 local slot_key = KEYS[1]
 local queue_key = KEYS[2]
 local run_id = ARGV[1]
-redis.call('ZREM', slot_key, run_id)
-local removed = redis.call('ZREM', queue_key, run_id)
-if removed == 1 then
+local freed = redis.call('ZREM', slot_key, run_id)
+local unqueued = redis.call('ZREM', queue_key, run_id)
+if unqueued == 1 then
+  return ''
+end
+if freed ~= 1 then
   return ''
 end
 local next_items = redis.call('ZRANGE', queue_key, 0, 0)

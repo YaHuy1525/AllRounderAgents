@@ -597,35 +597,82 @@ class RunService:
         queued run keeps its place). Release is always the strict reverse;
         one shared order for every holder is what prevents a hold-and-wait
         deadlock across the three ceilings.
+
+        A grant the walk cannot finish recording is given straight back: the
+        release set is derived from the persisted ``pending_pass``, so an
+        unpersisted prefix would leak ``apply``/``model`` for the whole
+        registry TTL (no acquire without a guaranteed release).
         """
         granted: list[str] = []
         record = dict(run.pending_pass or {})
-        for kind in self._pass_kinds(run):
-            position = await self._ceilings.acquire(run.run_id, kind)
-            if position is not None:
-                record["slots"] = granted
-                record["waitingOn"] = kind
-                run.pending_pass = record
-                run.status = "queued"
-                run.queue_position = position
-                await self._save(run)
-                await self._publish(
-                    run,
-                    {
-                        "type": "run.queued",
-                        "queuePosition": position,
-                        "waitingOn": kind,
-                    },
-                )
-                return False
-            granted.append(kind)
-        record["slots"] = granted
-        record.pop("waitingOn", None)
+        waiting_on: str | None = None
+        try:
+            for kind in self._pass_kinds(run):
+                position = await self._ceilings.acquire(run.run_id, kind)
+                if position is not None:
+                    waiting_on = kind
+                    record["slots"] = granted
+                    record["waitingOn"] = kind
+                    run.pending_pass = record
+                    run.status = "queued"
+                    run.queue_position = position
+                    await self._save(run)
+                    await self._publish(
+                        run,
+                        {
+                            "type": "run.queued",
+                            "queuePosition": position,
+                            "waitingOn": kind,
+                        },
+                    )
+                    return False
+                granted.append(kind)
+            record["slots"] = granted
+            record.pop("waitingOn", None)
+            run.pending_pass = record
+            run.status = "running"
+            run.queue_position = None
+            await self._save(run)
+            return True
+        except BaseException:
+            await self._rollback_partial_grant(run, granted, waiting_on)
+            raise
+
+    async def _rollback_partial_grant(
+        self, run: WorkflowRun, granted: list[str], waiting_on: str | None
+    ) -> None:
+        """Best-effort undo of an acquire walk that raised mid-way.
+
+        Releases the queue entry (if the walk was denied) plus the granted
+        prefix in the strict reverse order, then keeps the slots flowing to the
+        runs those releases promoted. Any secondary failure is logged, never
+        raised: the caller must still see the original error.
+        """
+        if not granted and waiting_on is None:
+            return
+        record = dict(run.pending_pass or {})
+        record["slots"] = list(granted)
+        if waiting_on is None:
+            record.pop("waitingOn", None)
+        else:
+            record["waitingOn"] = waiting_on
         run.pending_pass = record
-        run.status = "running"
-        run.queue_position = None
-        await self._save(run)
-        return True
+        try:
+            promoted = await self._release_slots(run)
+        except BaseException:
+            self._logger.exception("run_ceiling_rollback_failed", run_id=run.run_id)
+            return
+        try:
+            await self._save(run)
+        except BaseException:
+            # The cleared grant could not be recorded; the slots themselves are
+            # back, which is what the guaranteed-release constraint asks for.
+            self._logger.warning("run_ceiling_rollback_record_failed", run_id=run.run_id)
+        for run_id in promoted:
+            try:
+                await self._promote(run_id)
+            except BaseException:
+                self._logger.exception("run_promotion_failed", run_id=run_id)
 
     async def _drive(
         self,
@@ -834,32 +881,60 @@ class RunService:
             kinds.insert(0, waiting)
         return kinds
 
+    async def _release_slots(self, run: WorkflowRun) -> list[str]:
+        """Give back every kind this run's pass held (or queued on).
+
+        Walks ``_release_order`` (strict reverse of the acquisition order) and
+        returns the ids each release promoted, deduplicated and in freeing
+        order. No promotion is driven from here: a run must finish letting go
+        of all three ceilings before another run starts using them, otherwise
+        a finished pass keeps an apply slot and a run slot claimed for the
+        whole duration of someone else's pass and the caps stop meaning
+        anything.
+        """
+        promoted: dict[str, None] = {}
+        for kind in self._release_order(run):
+            freed = await self._ceilings.release(run.run_id, kind)
+            if freed is not None:
+                promoted[freed] = None
+        run.pending_pass = None
+        return list(promoted)
+
     async def _release_and_promote(self, run: WorkflowRun) -> None:
         """Release every kind this run's pass held (or queued on), reverse
         order, then re-drive each promoted run's recorded pass. This is the
         single seam the suspend, completion, failure and cancel/timeout
         paths share — no exit path may give back only part of the set."""
-        for kind in self._release_order(run):
-            promoted = await self._ceilings.release(run.run_id, kind)
-            if promoted is not None:
-                await self._promote(promoted)
-        if run.pending_pass is not None:
-            run.pending_pass = None
+        had_record = run.pending_pass is not None
+        promoted = await self._release_slots(run)
+        if had_record:
             await self._save(run)
+        for run_id in promoted:
+            await self._promote(run_id)
         await self._refresh_queue_positions()
 
     async def _promote(self, run_id: str) -> None:
         """A run that just received a slot on one kind finishes the ordered
         acquisition (later kinds, or queues again) and re-drives its recorded
         pass — a mid-flow promotion resumes the step it paused at, it never
-        restarts the run."""
-        try:
-            next_run = await self._registry.get_internal(run_id)
-        except KeyError:
-            return
-        if next_run.terminal:
-            return
-        if await self._try_launch(next_run):
+        restarts the run.
+
+        The reload and the re-walk run under the run's own lock (the same one
+        ``start``, ``decide`` and ``cancel`` take) so a cancel can never land
+        between them and have its terminal record overwritten by the walk's
+        ``status = "running"`` save. The pass itself is driven outside the
+        lock, like every other caller, so a cancel is never blocked behind an
+        in-flight Mastra call.
+        """
+        async with self._run_lock(run_id):
+            try:
+                next_run = await self._registry.get_internal(run_id)
+            except KeyError:
+                return
+            if next_run.terminal:
+                return
+            launched = await self._try_launch(next_run)
+        if launched:
             await self._drive_recorded_pass(next_run)
 
     async def _drive_recorded_pass(self, run: WorkflowRun) -> None:
