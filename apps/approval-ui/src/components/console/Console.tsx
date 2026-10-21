@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiError, api, apiUrl } from "@/lib/api";
+import { queueOrder } from "@/lib/approvalQueue";
 import { chooseSignInMethod, readStoredSession, signInStatusMessage, type SignInMethod } from "@/lib/auth";
 import { compactTickets, type JiraIssue } from "@/lib/board";
 import type { Approval, SessionInfo, Workspace } from "@/lib/models";
@@ -274,7 +275,7 @@ export function Console() {
   const loadApprovals = useCallback(async (): Promise<void> => {
     try {
       const result = await api<Approval[]>("/approvals");
-      setApprovals(result);
+      setApprovals(queueOrder(result));
       setApprovalsFailed(false);
     } catch {
       setApprovals([]);
