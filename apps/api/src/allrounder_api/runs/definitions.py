@@ -18,12 +18,20 @@ Step ``slots`` name the extra ceiling slots (besides ``run``) a drive pass
 that may compute the step must hold — see ``ceilings.SLOT_ORDER``. Only
 model-bearing and apply-bearing steps declare them; pure computation steps
 keep the empty default and never queue on a second ceiling.
+
+Step ``risk`` declares the approval-gate band (a ``RISK_BANDS`` anchor,
+validated at import time). Only genuinely irreversible, high-blast actions
+take the top band — under ``policy/risk.yaml``'s definition, an outbound
+write a revert cannot undo: a merge into a shared branch, an ERP or ledger
+posting, an identity revocation or a production containment. Every other
+side effect keeps the default rule in ``service._gate_risk`` (55
+side-effecting, 10 pure).
 """
 
 from __future__ import annotations
 
 from .ceilings import APPLY_SLOT, MODEL_SLOT
-from .models import FieldDefinition, StepDefinition, WorkflowDefinition
+from .models import RISK_IRREVERSIBLE, FieldDefinition, StepDefinition, WorkflowDefinition
 
 REVIEW_WORKFLOW = WorkflowDefinition(
     id="review",
@@ -84,7 +92,15 @@ DEPENDENCIES_WORKFLOW = WorkflowDefinition(
         ),
         # A failing group asks the model for a repair suggestion.
         StepDefinition(id="validate", title="Validate", slots=(MODEL_SLOT,)),
-        StepDefinition(id="merge", title="Merge", side_effecting=True, integrations=("github",)),
+        # Merging the bump PRs into the shared base branch is the irreversible
+        # top-band side effect: a revert cannot un-merge a shared branch.
+        StepDefinition(
+            id="merge",
+            title="Merge",
+            side_effecting=True,
+            integrations=("github",),
+            risk=RISK_IRREVERSIBLE,
+        ),
     ),
 )
 
@@ -139,8 +155,14 @@ VENDORS_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="risk-score", title="Risk Score", slots=(MODEL_SLOT,)),
         StepDefinition(id="approve", title="Approve"),
         # Creating the vendor master record is the side effect (idempotent by
-        # tax-ID key).
-        StepDefinition(id="create", title="Create", side_effecting=True, integrations=("erp",)),
+        # tax-ID key). An ERP master write a revert cannot undo.
+        StepDefinition(
+            id="create",
+            title="Create",
+            side_effecting=True,
+            integrations=("erp",),
+            risk=RISK_IRREVERSIBLE,
+        ),
     ),
 )
 
@@ -180,12 +202,15 @@ ONBOARDING_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="risk-score", title="Risk Score", slots=(MODEL_SLOT,)),
         StepDefinition(id="approve", title="Approve"),
         # Provisioning accounts, the equipment ticket and payroll enrollment is
-        # the side effect (idempotent by employee id).
+        # the side effect (idempotent by employee id). Six outbound system
+        # writes — identities plus a payroll enrollment — that no revert can
+        # collectively undo.
         StepDefinition(
             id="provision",
             title="Provision",
             side_effecting=True,
             integrations=("okta", "github", "aws", "jira", "slack", "workday"),
+            risk=RISK_IRREVERSIBLE,
         ),
     ),
 )
@@ -199,12 +224,14 @@ OFFBOARDING_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="access-audit", title="Access Audit", slots=(MODEL_SLOT,)),
         StepDefinition(id="approve", title="Approve"),
         # Revoking per-system access is the first side effect (idempotent by
-        # employee + system).
+        # employee + system). An identity revocation across production
+        # systems a revert cannot undo.
         StepDefinition(
             id="revoke",
             title="Revoke",
             side_effecting=True,
             integrations=("okta", "slack", "banking", "erp", "payroll"),
+            risk=RISK_IRREVERSIBLE,
         ),
         # Closing the case with the final-pay attestation is the second side
         # effect (idempotent by employee id).
@@ -255,9 +282,12 @@ SECURITY_WORKFLOW = WorkflowDefinition(
         # Executing the approved disposition (containment or close) is the
         # side effect (idempotent by alert + host). The preview the human
         # reviews is model-written, so this pass is model-bearing too.
+        # Isolating/quarantining a production host is irreversible and
+        # high-blast under policy/risk.yaml's own term lists.
         StepDefinition(
             id="contain", title="Contain", side_effecting=True, integrations=("aws",),
             slots=(MODEL_SLOT,),
+            risk=RISK_IRREVERSIBLE,
         ),
     ),
 )
@@ -301,11 +331,13 @@ BILLS_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="approve", title="Approve"),
         # Posting the draft bill to the ledger is the side effect (idempotent
         # by the flow's ledger key; Xero receives ACCPAY bills in DRAFT only).
+        # A ledger posting is an outbound write a revert cannot undo.
         StepDefinition(
             id="post",
             title="Post",
             side_effecting=True,
             integrations=("xero",),
+            risk=RISK_IRREVERSIBLE,
         ),
     ),
 )
