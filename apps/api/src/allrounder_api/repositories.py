@@ -399,6 +399,12 @@ class InMemoryApprovalRepository:
         # order is creation order and ``sorted`` is stable, so age breaks
         # ties within a band oldest-first and an all-null set keeps pure
         # insertion order — nothing silent re-ranks.
+        def queue_key(approval: ApprovalRecord) -> tuple[bool, int]:
+            """Unranked receipts last, then the highest declared band first."""
+            if approval.risk is None:
+                return (True, 0)
+            return (False, -approval.risk)
+
         return [
             deepcopy(value)
             for value in sorted(
@@ -407,10 +413,7 @@ class InMemoryApprovalRepository:
                     for approval in self._approvals.values()
                     if approval.tenant_id == tenant_id
                 ),
-                key=lambda approval: (
-                    approval.risk is None,
-                    -(approval.risk or 0),
-                ),
+                key=queue_key,
             )
         ]
 
@@ -1338,10 +1341,21 @@ class PostgresApprovalRepository:
                 (tenant_id,),
             )
             await cursor.fetchall()
+            # Bound the window first, then order it. ``limit 200`` has to pick
+            # the newest 200 receipts of the tenant — nothing deletes, purges
+            # or expires rows out of ``public.approvals``, so ordering before
+            # the limit would make the console's window the 200 OLDEST
+            # approvals and a freshly opened gate would never appear once a
+            # tenant passes the cap. The queue rule (riskiest first, unranked
+            # last, oldest first within a band) then ranks exactly the set the
+            # console can show.
             cursor = await connection.execute(
                 """
-                select * from public.approvals where tenant_id = %s
-                order by risk desc nulls last, created_at asc limit 200
+                select * from (
+                    select * from public.approvals where tenant_id = %s
+                    order by created_at desc limit 200
+                ) q
+                order by risk desc nulls last, created_at asc
                 """,
                 (tenant_id,),
             )
