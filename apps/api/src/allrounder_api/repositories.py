@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -228,6 +228,18 @@ class MspVendorRecord:
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+@dataclass
+class ConnectorVaultRecord:
+    """One tenant connection in the N2 connector vault. ``secret_ref`` holds
+    the stored credential material, write-only from the browser: list
+    endpoints return a last-four hint, never the secret."""
+
+    tenant_id: str
+    provider: str
+    secret_ref: str
+    connected_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
 class CaseRepository(Protocol):
     async def create(self, case: CaseRecord) -> CaseRecord: ...
     async def append_event(
@@ -235,6 +247,9 @@ class CaseRepository(Protocol):
     ) -> None: ...
     async def get(self, case_id: str, tenant_id: str) -> CaseRecord: ...
     async def get_by_ticket(self, ticket_key: str, tenant_id: str) -> CaseRecord: ...
+    async def costs_for_cases(
+        self, tenant_id: str, case_ids: Sequence[str]
+    ) -> dict[str, int]: ...
 
 
 class ApprovalRepository(Protocol):
@@ -294,6 +309,13 @@ class MspConnectionsRepository(Protocol):
     ) -> MspVendorRecord | None: ...
 
 
+class ConnectorVaultRepository(Protocol):
+    async def list(self, tenant_id: str) -> list[ConnectorVaultRecord]: ...
+    async def get(self, tenant_id: str, provider: str) -> ConnectorVaultRecord: ...
+    async def connect(self, record: ConnectorVaultRecord) -> ConnectorVaultRecord: ...
+    async def disconnect(self, tenant_id: str, provider: str) -> None: ...
+
+
 class InMemoryCaseRepository:
     def __init__(self) -> None:
         self._cases: dict[str, CaseRecord] = {}
@@ -337,6 +359,16 @@ class InMemoryCaseRepository:
             if case.ticket_key == ticket_key and case.tenant_id == tenant_id:
                 return deepcopy(case)
         raise KeyError("Case not found")
+
+    async def costs_for_cases(
+        self, tenant_id: str, case_ids: Sequence[str]
+    ) -> dict[str, int]:
+        costs: dict[str, int] = {}
+        for case_id in case_ids:
+            case = self._cases.get(case_id)
+            if case is not None and case.tenant_id == tenant_id:
+                costs[case_id] = int(case.cost_usd_micro)
+        return costs
 
 
 class InMemoryApprovalRepository:
@@ -583,6 +615,40 @@ class InMemoryMspConnectionsRepository:
             if any(candidate.strip().lower() == wanted for candidate in item.emails):
                 return deepcopy(item)
         return None
+
+
+class InMemoryConnectorVaultRepository:
+    def __init__(self) -> None:
+        self._refs: dict[tuple[str, str], ConnectorVaultRecord] = {}
+
+    async def list(self, tenant_id: str) -> list[ConnectorVaultRecord]:
+        rows = [
+            deepcopy(item)
+            for (owner, _), item in self._refs.items()
+            if owner == tenant_id
+        ]
+        rows.sort(key=lambda item: item.provider)
+        return rows
+
+    async def get(self, tenant_id: str, provider: str) -> ConnectorVaultRecord:
+        record = self._refs.get((tenant_id, provider))
+        if record is None:
+            raise KeyError("Connector is not connected")
+        return deepcopy(record)
+
+    async def connect(self, record: ConnectorVaultRecord) -> ConnectorVaultRecord:
+        safe = deepcopy(record)
+        existing = self._refs.get((record.tenant_id, record.provider))
+        # Rotating the secret keeps the original connected_at, mirroring the
+        # msp_connections upsert that preserves created_at.
+        safe.connected_at = existing.connected_at if existing is not None else datetime.now(UTC)
+        self._refs[(safe.tenant_id, safe.provider)] = safe
+        return deepcopy(safe)
+
+    async def disconnect(self, tenant_id: str, provider: str) -> None:
+        if (tenant_id, provider) not in self._refs:
+            raise KeyError("Connector is not connected")
+        del self._refs[(tenant_id, provider)]
 
 
 class PostgresRepositories:
@@ -865,6 +931,73 @@ class PostgresRepositories:
             )
         return await self.get_github_account(account_id, tenant_id)
 
+    async def list_connector_vault_refs(self, tenant_id: str) -> list[ConnectorVaultRecord]:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, provider, secret_ref, connected_at
+                from public.connector_vault_refs
+                where tenant_id = %s
+                order by provider
+                """,
+                (tenant_id,),
+            )
+            rows = await cursor.fetchall()
+        return [_connector_vault_from_row(row) for row in rows]
+
+    async def get_connector_vault_ref(
+        self, tenant_id: str, provider: str
+    ) -> ConnectorVaultRecord:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, provider, secret_ref, connected_at
+                from public.connector_vault_refs
+                where tenant_id = %s and provider = %s
+                """,
+                (tenant_id, provider),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("Connector is not connected")
+        return _connector_vault_from_row(row)
+
+    async def connect_connector_vault_ref(
+        self, record: ConnectorVaultRecord
+    ) -> ConnectorVaultRecord:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                insert into public.connector_vault_refs
+                  (tenant_id, provider, secret_ref, connected_at)
+                values (%s, %s, %s, %s)
+                on conflict (tenant_id, provider) do update
+                set secret_ref = excluded.secret_ref
+                returning connected_at
+                """,
+                (record.tenant_id, record.provider, record.secret_ref, record.connected_at),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Connector upsert returned no connection")
+        stored = deepcopy(record)
+        stored.connected_at = row["connected_at"]
+        return stored
+
+    async def disconnect_connector_vault_ref(self, tenant_id: str, provider: str) -> None:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                delete from public.connector_vault_refs
+                where tenant_id = %s and provider = %s
+                returning provider
+                """,
+                (tenant_id, provider),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("Connector is not connected")
+
     async def get_msp_connection(self, tenant_id: str) -> MspConnectionRecord:
         async with self.pool.connection() as connection:
             cursor = await connection.execute(
@@ -1107,6 +1240,29 @@ class PostgresCaseRepository:
             (ticket_key, tenant_id),
         )
 
+    async def costs_for_cases(
+        self, tenant_id: str, case_ids: Sequence[str]
+    ) -> dict[str, int]:
+        """Bulk ``cost_usd_micro`` read for the benchmark, keyed by case id.
+
+        Missing ids are simply absent from the map (the read-model treats an
+        absent id as zero cost). ``any(%s)`` keeps one round trip regardless of
+        how many cases the scan touched.
+        """
+        if not case_ids:
+            return {}
+        async with self._database.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select c.id, c.cost_usd_micro
+                from public.cases c
+                where c.tenant_id = %s and c.id = any(%s)
+                """,
+                (tenant_id, list(case_ids)),
+            )
+            rows = await cursor.fetchall()
+        return {str(row["id"]): int(row["cost_usd_micro"]) for row in rows}
+
     async def _fetch_case(
         self,
         statement: str,
@@ -1291,6 +1447,23 @@ class PostgresMspConnectionsRepository:
         await self._database.delete_msp_client(tenant_id, client_ref)
 
 
+class PostgresConnectorVaultRepository:
+    def __init__(self, database: PostgresRepositories) -> None:
+        self._database = database
+
+    async def list(self, tenant_id: str) -> list[ConnectorVaultRecord]:
+        return await self._database.list_connector_vault_refs(tenant_id)
+
+    async def get(self, tenant_id: str, provider: str) -> ConnectorVaultRecord:
+        return await self._database.get_connector_vault_ref(tenant_id, provider)
+
+    async def connect(self, record: ConnectorVaultRecord) -> ConnectorVaultRecord:
+        return await self._database.connect_connector_vault_ref(record)
+
+    async def disconnect(self, tenant_id: str, provider: str) -> None:
+        await self._database.disconnect_connector_vault_ref(tenant_id, provider)
+
+
 def _msp_connection_from_row(row: dict[str, Any]) -> MspConnectionRecord:
     return MspConnectionRecord(
         tenant_id=str(row["tenant_id"]),
@@ -1332,6 +1505,13 @@ def _github_account_from_row(row: dict[str, Any]) -> GithubAccountRecord:
         id=str(row["id"]), tenant_id=str(row["tenant_id"]), label=str(row["label"]),
         username=str(row["username"]), token=str(row["token"]),
         is_default=bool(row["is_default"]), created_at=row["created_at"],
+    )
+
+
+def _connector_vault_from_row(row: dict[str, Any]) -> ConnectorVaultRecord:
+    return ConnectorVaultRecord(
+        tenant_id=str(row["tenant_id"]), provider=str(row["provider"]),
+        secret_ref=str(row["secret_ref"]), connected_at=row["connected_at"],
     )
 
 
