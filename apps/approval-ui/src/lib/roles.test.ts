@@ -8,6 +8,7 @@ import {
   canDecide,
   canManageAccounts,
   canStartRun,
+  canUploadKnowledge,
   hasAnyRole,
 } from "./roles.js";
 
@@ -44,6 +45,13 @@ describe("role gates", () => {
     expect(canManageAccounts(["approver"])).toBe(false);
     expect(canManageAccounts(["viewer"])).toBe(false);
     expect(canManageAccounts([])).toBe(true);
+  });
+
+  it("gates knowledge uploads to admin only", () => {
+    expect(canUploadKnowledge(["admin"])).toBe(true);
+    expect(canUploadKnowledge(["agent"])).toBe(false);
+    expect(canUploadKnowledge(["approver", "viewer"])).toBe(false);
+    expect(canUploadKnowledge([])).toBe(true);
   });
 
   it("stays permissive while the session roles are unknown", () => {

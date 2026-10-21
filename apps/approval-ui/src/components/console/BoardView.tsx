@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import type { JiraIssue } from "@/lib/board";
-import { BOARD_COLUMNS, boardStats, groupIssues } from "@/lib/board";
+import { BOARD_COLUMNS, BOARD_SORTS, boardStats, groupIssues, sortIssues, type BoardSort } from "@/lib/board";
 import { workflowProviderIndex } from "@/lib/integrations";
 import type { JiraPrefs } from "@/lib/prefs";
 import { listRunsPage, sortRunsNewestFirst } from "@/lib/runs";
@@ -32,8 +32,11 @@ type BoardViewProps = {
   lastSync: string;
   refreshing: boolean;
   search: string;
+  /** Board card ordering; the console persists it through UiPrefs (U9). */
+  sort: BoardSort;
   activeTicketKey?: string;
   onSearchChange: (value: string) => void;
+  onSortChange: (sort: BoardSort) => void;
   onRefresh: () => void;
   onOpenDetails: (issue: JiraIssue) => void;
   /** Deep link into a ticket's latest run inspector (platform chips). */
@@ -51,10 +54,11 @@ function runOpener(
 
 /**
  * View A — the sprint board on the Dashboard tab. One board at a time: the
- * filters and stats sit in one row, the sprint header carries the
- * project/board/sprint labels, and the kanban renders the four console
- * columns with dashed empty placeholders. Switching the Jira project or
- * board lives in Settings.
+ * search and sort filters and stats sit in one row, the sprint header
+ * carries the project/board/sprint labels, and the kanban renders the four
+ * console columns with dashed empty placeholders. The sort choice is just a
+ * prop — the console owns and persists it in UiPrefs (U9). Switching the
+ * Jira project or board lives in Settings.
  */
 export function BoardView({
   prefs,
@@ -64,13 +68,15 @@ export function BoardView({
   lastSync,
   refreshing,
   search,
+  sort,
   activeTicketKey,
   onSearchChange,
+  onSortChange,
   onRefresh,
   onOpenDetails,
   onOpenRun,
 }: BoardViewProps) {
-  const grouped = groupIssues(issues, search);
+  const grouped = groupIssues(sortIssues(issues, sort), search);
   const stats = boardStats(issues);
   const [ticketRuns, setTicketRuns] = useState<ReadonlyMap<string, TicketRun>>(new Map());
 
@@ -123,6 +129,23 @@ export function BoardView({
               onChange={(event) => onSearchChange(event.target.value)}
             />
           </span>
+        </label>
+        <label className="board-sort">
+          <span>Sort</span>
+          <select
+            id="board-sort"
+            value={sort}
+            onChange={(event) => {
+              const picked = BOARD_SORTS.find((option) => option.id === event.target.value);
+              if (picked !== undefined) onSortChange(picked.id);
+            }}
+          >
+            {BOARD_SORTS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
         </label>
         <div className="stat-chips" aria-label="Sprint stats">
           <span className="stat-chip">

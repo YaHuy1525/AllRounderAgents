@@ -1,9 +1,25 @@
 import { Mastra } from "@mastra/core/mastra";
-import { InMemoryStore, type MastraCompositeStore } from "@mastra/core/storage";
+import type { MCPServerBase } from "@mastra/core/mcp";
+import { InMemoryStore, MastraCompositeStore } from "@mastra/core/storage";
+import { SpanType } from "@mastra/core/observability";
+import { MastraStorageExporter, Observability } from "@mastra/observability";
 import { Memory } from "@mastra/memory";
-import { PostgresStore } from "@mastra/pg";
+import { MCPServer } from "@mastra/mcp";
+import { PostgresStoreVNext } from "@mastra/pg";
 
 import { allRounderAgents } from "./agents/registry.js";
+import { hrHelpDrafterAgent } from "./agents/hr-help/agents/index.js";
+import { mspDrafterAgent } from "./agents/msp/agents/index.js";
+import { supportDrafterAgent } from "./agents/support/agents/index.js";
+import { webSearchTool } from "./agents/programming/tools/web-search.js";
+import { knowledgeVectorStore } from "./shared/rag.js";
+import {
+  criticAgreementScorer,
+  dispatcherRoutingScorer,
+  patchContractScorer,
+  rcaEvidenceScorer,
+  rcaGoldenPathScorer,
+} from "./shared/scorers.js";
 import {
   createAccessibilityFlow,
   type AccessibilityFlowDeps,
@@ -83,41 +99,93 @@ function postgresSsl(connectionString: string): boolean | { rejectUnauthorized: 
 }
 
 /**
+ * Per-pool connection cap for the Postgres store. Supabase's session-mode
+ * pooler limits total clients to a fixed `pool_size` (15 by default). Mastra
+ * opens a read pool and a write pool from one store, and node-postgres defaults
+ * each to 10, so the boot-time fan-out (`startWorkers` -> `loadDynamicWorkflows`)
+ * blows past the cap and dies with `EMAXCONNSESSION`. Clamp each pool low so
+ * the aggregate stays under the limit; override with `MASTRA_PG_POOL_MAX`. For
+ * higher real throughput switch the URL to the transaction-mode pooler.
+ */
+function pgPoolMax(): number {
+  const raw = Number(process.env.MASTRA_PG_POOL_MAX);
+  return Number.isInteger(raw) && raw > 0 && raw <= 20 ? raw : 4;
+}
+
+/**
+ * Tracing switch, read by the inline `Observability` config in
+ * `createAllRounderMastra`. The store itself is metrics-capable either way
+ * (see `buildMastraStorage`), so this flag only governs the exporter.
+ */
+function tracingEnabled(): boolean {
+  const flag = process.env.MASTRA_OBSERVABILITY;
+  return flag === "true" || flag === "1";
+}
+
+/**
  * Persistent Mastra storage when `DATABASE_URL` is set, in-memory otherwise
  * (tests, CI, local machines without Postgres). Persistence is what lets
  * suspended runs survive a host restart and the case index outlive a single
  * process (plan §5.1).
+ *
+ * Metrics rule from the docs: Studio's metrics panel requires an
+ * observability domain whose `getFeatures()` includes `"metrics"`. The
+ * classic `PostgresStore` stores traces but cannot serve metric queries
+ * ("Metrics are not available with your current storage") and cannot list
+ * scores, so the production store is `PostgresStoreVNext`: the normal
+ * Postgres domains plus the vNext observability domain (metrics, logs,
+ * scores, trace queries). Its `observability` connection intentionally
+ * shares the primary pool config for this low-volume deployment; the server
+ * logs one warning per boot about the shared connection, which is expected.
+ * The `DATABASE_URL`-free fallback is `InMemoryStore`, whose built-in
+ * observability domain is metrics-capable too, so tests and credential-free
+ * dev runs stay entirely in-process. DuckDB is no longer part of the stack.
  */
 function buildMastraStorage(): MastraCompositeStore {
   const connectionString = process.env.DATABASE_URL;
   if (connectionString === undefined || connectionString === "") {
     return new InMemoryStore({ id: "allrounder-orchestrator" });
   }
-  return new PostgresStore({
-    id: "allrounder-orchestrator",
+  const conn = {
     connectionString,
     ssl: postgresSsl(connectionString),
+    max: pgPoolMax(),
+    idleTimeoutMillis: 30_000,
+  };
+  return new PostgresStoreVNext({
+    id: "allrounder-orchestrator",
+    ...conn,
+    observability: { ...conn },
   });
 }
 
 /**
- * The security lane's `CaseHistory` on persistent storage (plan §5.1):
- * semantic recall engages when `MASTRA_MEMORY_EMBEDDER` names an embedder,
- * message-history recall otherwise. Without `DATABASE_URL` the fixture
- * implementation stays in place so local runs need no credentials.
+ * The one instance-level `Memory` (Studio Memory/Threads registry).
+ * Semantic recall engages when `MASTRA_MEMORY_EMBEDDER` names an embedder,
+ * plain message-history recall otherwise. Only the conversational drafters
+ * are attached to it (below); the deterministic single-shot agents stay
+ * stateless on purpose.
  */
-function buildSecurityCaseHistory(storage: MastraCompositeStore): CaseHistory {
-  const connectionString = process.env.DATABASE_URL;
-  if (connectionString === undefined || connectionString === "") return new MemoryCaseHistory();
+function buildCoreMemory(storage: MastraCompositeStore): Memory {
   const embedder = process.env.MASTRA_MEMORY_EMBEDDER;
   const semanticRecall = embedder !== undefined && embedder !== "";
-  return new MastraMemoryCaseHistory(
-    new Memory({
-      storage,
-      ...(semanticRecall ? { embedder } : {}),
-      options: { semanticRecall },
-    }),
-  );
+  return new Memory({
+    storage,
+    ...(semanticRecall ? { embedder } : {}),
+    options: { semanticRecall },
+  });
+}
+
+/**
+ * The security lane's `CaseHistory` on persistent storage (plan §5.1), now
+ * sharing the instance core memory instead of constructing its own. Without
+ * `DATABASE_URL` the fixture implementation stays in place so local runs
+ * need no credentials.
+ */
+function buildSecurityCaseHistory(memory: Memory): CaseHistory {
+  const connectionString = process.env.DATABASE_URL;
+  if (connectionString === undefined || connectionString === "") return new MemoryCaseHistory();
+  return new MastraMemoryCaseHistory(memory);
 }
 
 /**
@@ -159,69 +227,167 @@ export function createAllRounderMastra(
 ) {
   const ledger = deps.ledger ?? new MemorySandboxLedger();
   const storage = buildMastraStorage();
+  const coreMemory = buildCoreMemory(storage);
+  // Studio Vectors registry: the Mastra-owned pgvector store behind the RAG
+  // pilot (shared pool with `MastraRagHrPolicyRetriever`). Absent without
+  // `DATABASE_URL`, so credential-free runs never touch the vector path.
+  const knowledgeVectors = knowledgeVectorStore();
+  // Studio Threads need memory on the agent itself. The three conversational
+  // drafters share the instance core memory; `__setMemory` is the framework's
+  // late-wiring setter (module-level agent singletons are built before this
+  // function runs, so the constructor config is not an option). Workflow
+  // calls without a threadId stay history-less, so lane behavior is
+  // unchanged. Deterministic agents (investigator, actor, validator,
+  // dispatcher, extractors) are deliberately left memory-free.
+  for (const conversationalAgent of [hrHelpDrafterAgent, mspDrafterAgent, supportDrafterAgent]) {
+    conversationalAgent.__setMemory(coreMemory);
+  }
+  // Every workflow is defined once, as its own `const`. The lanes mounted on
+  // in-memory defaults go straight into the registry below. The six
+  // GitHub-backed lanes may stay `undefined` when the host did not inject
+  // their credentials, and each gets a one-line gate at registration: a lane
+  // that was not supplied is absent from `workflows`, never a broken stub.
+  const financeFlow = createFinanceFlow({ ledger });
+  const vendorsFlow = createVendorsFlow(deps.vendors ?? { registry: new MemoryVendorRegistry() });
+  const leaveFlow = createLeaveFlow(
+    deps.leave ?? {
+      directory: new MemoryEmployeeDirectory(),
+      registry: new MemoryLeaveRegistry(),
+    },
+  );
+  const onboardingFlow = createOnboardingFlow(
+    deps.onboarding ?? {
+      directory: new MemoryEmployeeDirectory(),
+      registry: new MemoryOnboardingRegistry(),
+    },
+  );
+  const offboardingFlow = createOffboardingFlow(
+    deps.offboarding ?? {
+      directory: new MemoryEmployeeDirectory(),
+      registry: new MemoryOffboardingRegistry(),
+    },
+  );
+  const screeningFlow = createScreeningFlow(
+    deps.screening ?? {
+      ats: new MemoryScreeningAts(),
+    },
+  );
+  const hrHelpFlow = createHrHelpFlow(
+    deps.hrHelp ?? {
+      retriever: new MemoryHrPolicyRetriever(),
+      registry: new MemoryHrHelpRegistry(),
+    },
+  );
+  const mspFlow = createMspFlow(
+    deps.msp ?? {
+      desk: new MemoryDeskAdapter(),
+      mail: new MemoryMailSender(),
+    },
+  );
+  const billsFlow = createBillsFlow(deps.bills ?? { ledger: new MemoryBillsLedger() });
+  const securityFlow = createSecurityFlow(
+    deps.security ?? {
+      telemetry: new MemoryTelemetrySearch(),
+      assets: new MemoryAssetDirectory(),
+      intel: new MemoryThreatIntel(),
+      containment: new MemoryContainmentRegistry(),
+      caseHistory: buildSecurityCaseHistory(coreMemory),
+    },
+  );
+  const codingFlow = deps.coding === undefined ? undefined : createCodingFlow(deps.coding);
+  const reviewFlow = deps.review === undefined ? undefined : createReviewFlow(deps.review);
+  const issuesFlow = deps.issues === undefined ? undefined : createIssuesFlow(deps.issues);
+  const featuresFlow = deps.features === undefined ? undefined : createFeaturesFlow(deps.features);
+  const dependenciesFlow =
+    deps.dependencies === undefined ? undefined : createDependenciesFlow(deps.dependencies);
+  const accessibilityFlow =
+    deps.accessibility === undefined
+      ? undefined
+      : createAccessibilityFlow(deps.accessibility);
   return new Mastra({
     logger: false,
     server: { timeout: serverTimeoutMs() },
     storage,
+    // Native Mastra observability, opt-in via `MASTRA_OBSERVABILITY=true`
+    // (off by default so the vitest suites and ordinary runs pay nothing; the
+    // key must be absent rather than undefined). `MastraStorageExporter`
+    // writes trace/log/metric/score events into the observability domain of
+    // the store above (Postgres vNext when `DATABASE_URL` is set, in-memory
+    // otherwise), which Mastra Studio reads back — no external collector and
+    // no side-car database. `MODEL_CHUNK` spans are dropped as pure
+    // noise, the sensitive-data filter stays on for the SOC/HR lanes' PII, and
+    // the run/tenant context keys are lifted onto spans so a
+    // suspended-then-resumed run stitches under one `runId`. Cost authority
+    // stays with `run_archive`; this is the developer diagnostic view, not the
+    // billing source of truth.
+    ...(tracingEnabled()
+      ? {
+          observability: new Observability({
+            configs: {
+              default: {
+                serviceName: "allrounder-agent",
+                excludeSpanTypes: [SpanType.MODEL_CHUNK],
+                requestContextKeys: ["runId", "tenantId", "ticketKey", "workflow"],
+                exporters: [new MastraStorageExporter()],
+              },
+            },
+            sensitiveDataFilter: true,
+          }),
+        }
+      : {}),
     agents: allRounderAgents(),
+    ...(knowledgeVectors !== undefined ? { vectors: { knowledge: knowledgeVectors } } : {}),
+    // Instance memory registry (Studio Memory/Threads). `core` is the same
+    // object the conversational drafters use and the security case history
+    // runs on, so one store backs all of it.
+    memory: { core: coreMemory },
+    // MCP exposure (Studio MCP tab): Mastra's own read-only surface for
+    // external MCP clients. Only non-mutating tools are published; the
+    // GitHub `write_*` path stays behind the consuming MCPClient's
+    // `requireToolApproval` and is never surfaced here. The upcast papers
+    // over a known library-side variance: `MCPServer.listResources()` is
+    // typed with zod-inferred `| undefined` optionals that read as wider
+    // than the core base contract under `exactOptionalPropertyTypes`. It is
+    // purely type-level; the instance extends the core base at runtime.
+    mcpServers: {
+      allrounder: new MCPServer({
+        id: "allrounder-mcp",
+        name: "AllRounder",
+        version: "1.0.0",
+        tools: { web_search: webSearchTool },
+      }) as unknown as MCPServerBase,
+    },
+    // Registered scorers (Studio Evals). `rcaEvidence` also rides the
+    // investigator agent for live sampling, but instance registration is
+    // what makes each scorer resolvable for `runEvals()`, dataset
+    // experiments, and trace scoring from Studio, and persists their
+    // results into `mastra_scorers`. The three coding-lane scorers
+    // (`rcaGoldenPath`, `patchContract`, `criticAgreement`) are the
+    // experiment targets for the coding agents' golden datasets.
+    scorers: {
+      rcaEvidence: rcaEvidenceScorer,
+      dispatcherRouting: dispatcherRoutingScorer,
+      rcaGoldenPath: rcaGoldenPathScorer,
+      patchContract: patchContractScorer,
+      criticAgreement: criticAgreementScorer,
+    },
     workflows: {
-      financeFlow: createFinanceFlow({ ledger }),
-      ...(deps.coding === undefined ? {} : { codingFlow: createCodingFlow(deps.coding) }),
-      ...(deps.review === undefined ? {} : { reviewFlow: createReviewFlow(deps.review) }),
-      ...(deps.issues === undefined ? {} : { issuesFlow: createIssuesFlow(deps.issues) }),
-      ...(deps.features === undefined ? {} : { featuresFlow: createFeaturesFlow(deps.features) }),
-      ...(deps.dependencies === undefined
-        ? {}
-        : { dependenciesFlow: createDependenciesFlow(deps.dependencies) }),
-      ...(deps.accessibility === undefined
-        ? {}
-        : { accessibilityFlow: createAccessibilityFlow(deps.accessibility) }),
-      vendorsFlow: createVendorsFlow(deps.vendors ?? { registry: new MemoryVendorRegistry() }),
-      leaveFlow: createLeaveFlow(
-        deps.leave ?? {
-          directory: new MemoryEmployeeDirectory(),
-          registry: new MemoryLeaveRegistry(),
-        },
-      ),
-      onboardingFlow: createOnboardingFlow(
-        deps.onboarding ?? {
-          directory: new MemoryEmployeeDirectory(),
-          registry: new MemoryOnboardingRegistry(),
-        },
-      ),
-      offboardingFlow: createOffboardingFlow(
-        deps.offboarding ?? {
-          directory: new MemoryEmployeeDirectory(),
-          registry: new MemoryOffboardingRegistry(),
-        },
-      ),
-      screeningFlow: createScreeningFlow(
-        deps.screening ?? {
-          ats: new MemoryScreeningAts(),
-        },
-      ),
-      hrHelpFlow: createHrHelpFlow(
-        deps.hrHelp ?? {
-          retriever: new MemoryHrPolicyRetriever(),
-          registry: new MemoryHrHelpRegistry(),
-        },
-      ),
-      mspFlow: createMspFlow(
-        deps.msp ?? {
-          desk: new MemoryDeskAdapter(),
-          mail: new MemoryMailSender(),
-        },
-      ),
-      billsFlow: createBillsFlow(deps.bills ?? { ledger: new MemoryBillsLedger() }),
-      securityFlow: createSecurityFlow(
-        deps.security ?? {
-          telemetry: new MemoryTelemetrySearch(),
-          assets: new MemoryAssetDirectory(),
-          intel: new MemoryThreatIntel(),
-          containment: new MemoryContainmentRegistry(),
-          caseHistory: buildSecurityCaseHistory(storage),
-        },
-      ),
+      financeFlow,
+      vendorsFlow,
+      leaveFlow,
+      onboardingFlow,
+      offboardingFlow,
+      screeningFlow,
+      hrHelpFlow,
+      mspFlow,
+      billsFlow,
+      securityFlow,
+      ...(codingFlow !== undefined ? { codingFlow } : {}),
+      ...(reviewFlow !== undefined ? { reviewFlow } : {}),
+      ...(issuesFlow !== undefined ? { issuesFlow } : {}),
+      ...(featuresFlow !== undefined ? { featuresFlow } : {}),
+      ...(dependenciesFlow !== undefined ? { dependenciesFlow } : {}),
+      ...(accessibilityFlow !== undefined ? { accessibilityFlow } : {}),
     },
   });
 }

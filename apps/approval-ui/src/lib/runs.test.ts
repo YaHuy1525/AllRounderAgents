@@ -21,6 +21,7 @@ import {
   runListQuery,
   runVisualState,
   sortRunsNewestFirst,
+  syntheticTaskKey,
   workflowLabel,
   workflowsForTicket,
   type RunDetail,
@@ -90,6 +91,7 @@ function makeTopologyStep(
     state: "pending",
     sideEffecting: stepId === "complete",
     integrations: stepId === "complete" ? ["github"] : [],
+    fields: [],
     receipt: null,
     actionHash: null,
     hasArtifact: false,
@@ -417,6 +419,7 @@ describe("run topology payload", () => {
         state: index < 2 ? "done" : index === 2 ? "blocked" : "pending",
         sideEffecting: id === "complete",
         integrations: id === "complete" ? ["github"] : [],
+        fields: [],
         receipt: index === 0 ? "rcpt-1" : null,
         actionHash: index === 0 ? "hash-1" : null,
         hasArtifact: index < 2,
@@ -473,6 +476,90 @@ describe("run topology payload", () => {
     expect(parseRunTopology({ ...base, receipts: { signed: 1, items: [{}] } })).toBeNull();
     // An unlocked run reports a null lock rather than a half-filled object.
     expect(parseRunTopology({ ...base, lock: null })?.lock).toBeNull();
+  });
+});
+
+describe("run topology declared fields", () => {
+  it("parses declared lane fields and clamps their max length to the 4000 cap", () => {
+    const base = makeTopology();
+    const parsed = parseRunTopology({
+      ...base,
+      steps: [
+        {
+          ...base.steps[0],
+          fields: [
+            {
+              id: "abn",
+              label: "Australian Business Number (ABN)",
+              kind: "text",
+              required: true,
+              maxLength: 9000,
+              placeholder: "11 digits, e.g. 51 824 753 556",
+              help: "Snap the tax registration.",
+              snapKey: "abn",
+            },
+            {
+              id: "certificate_expiry",
+              label: "Insurance certificate expiry",
+              kind: "date",
+              maxLength: 0,
+              snapKey: "expiry",
+            },
+            { id: "premium", label: "Premium", kind: "number" },
+          ],
+        },
+      ],
+    });
+    expect(parsed?.steps[0]?.fields).toEqual([
+      {
+        id: "abn",
+        label: "Australian Business Number (ABN)",
+        kind: "text",
+        required: true,
+        maxLength: 4000,
+        placeholder: "11 digits, e.g. 51 824 753 556",
+        help: "Snap the tax registration.",
+        snapKey: "abn",
+      },
+      {
+        id: "certificate_expiry",
+        label: "Insurance certificate expiry",
+        kind: "date",
+        required: false,
+        maxLength: 1,
+        placeholder: "",
+        help: "",
+        snapKey: "expiry",
+      },
+      {
+        id: "premium",
+        label: "Premium",
+        kind: "number",
+        required: false,
+        maxLength: 4000,
+        placeholder: "",
+        help: "",
+        snapKey: "",
+      },
+    ]);
+  });
+
+  it("defaults to no fields when the payload predates U7", () => {
+    const parsed = parseRunTopology(makeTopology());
+    expect(parsed?.steps.every((step) => step.fields.length === 0)).toBe(true);
+  });
+
+  it("keeps unknown kinds as text and fails the step on malformed field entries", () => {
+    const base = makeTopology();
+    const withOddKind = parseRunTopology({
+      ...base,
+      steps: [{ ...base.steps[0], fields: [{ id: "x", label: "X", kind: "color" }] }],
+    });
+    expect(withOddKind?.steps[0]?.fields[0]?.kind).toBe("text");
+    expect(
+      parseRunTopology({ ...base, steps: [{ ...base.steps[0], fields: [{ label: "no id" }] }] }),
+    ).toBeNull();
+    expect(parseRunTopology({ ...base, steps: [{ ...base.steps[0], fields: "nope" }] })).toBeNull();
   });
 });
 
@@ -621,6 +708,17 @@ describe("workflowsForTicket", () => {
     ).toEqual(["dependencies"]);
   });
 
+  it("routes fix:/bug signals to the issues lane for any code-ish type", () => {
+    // The SCRUM project has no Bug issue type, so Task tickets filed as bugs
+    // must reach the issues lane through their summary or labels.
+    expect(
+      workflowsForTicket({ issueType: "Task", summary: "Fix: flaky session refresh", labels: [] }),
+    ).toEqual(["issues"]);
+    expect(
+      workflowsForTicket({ issueType: "Task", summary: "Checkout returns 500", labels: ["bug"] }),
+    ).toEqual(["issues"]);
+  });
+
   it("pulls the leave workflow in from time-off keywords", () => {
     expect(
       workflowsForTicket({ issueType: "Task", summary: "Book annual leave for E-1001", labels: [] }),
@@ -719,6 +817,14 @@ describe("workflowsForTicket", () => {
     expect(
       workflowsForTicket({ issueType: "Support", summary: "Customer question", labels: [] }),
     ).toEqual(RUNNABLE_WORKFLOWS.map((workflow) => workflow.id));
+  });
+});
+
+describe("synthetic task keys", () => {
+  it("matches the TASK- pattern the API accepts for ticket keys", () => {
+    for (let i = 0; i < 100; i += 1) {
+      expect(syntheticTaskKey()).toMatch(/^TASK-[1-9][0-9]{8}$/);
+    }
   });
 });
 

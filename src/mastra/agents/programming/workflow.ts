@@ -4,6 +4,8 @@ import {
   PreviewManifestSchema,
   RootCauseAnalysisSchema,
   ValidationReportSchema,
+  type ChangeManifestEntry,
+  type CriticReport,
   type Escalation,
   type PatchPlan,
   type PreviewManifest,
@@ -16,6 +18,7 @@ import {
   GitHubWriter,
   RepositoryPolicyError,
   StaleSourceError,
+  computePatchHash,
 } from "./tools/github.js";
 import type { ValidatorRegistry } from "./tools/validators.js";
 
@@ -38,9 +41,22 @@ export interface InvestigationContext {
 }
 
 export interface CodingModel {
-  investigate(context: InvestigationContext): Promise<RootCauseAnalysis>;
-  planPatch(context: InvestigationContext, rca: RootCauseAnalysis): Promise<PatchPlan>;
+  investigate(context: InvestigationContext, brief?: string): Promise<RootCauseAnalysis>;
+  planPatch(context: InvestigationContext, rca: RootCauseAnalysis, brief?: string): Promise<PatchPlan>;
   repairPatch(context: InvestigationContext, patch: PatchPlan, report: ValidationReport): Promise<PatchPlan>;
+  /**
+   * Optional spec-based critic (A2). Runs the validatorAgent to score the
+   * patch against the ticket acceptance criteria plus the cited evidence, not
+   * the model's own restatement. Absent means the critic gate is skipped.
+   */
+  verify?(context: InvestigationContext, patch: PatchPlan, rca: RootCauseAnalysis): Promise<CriticReport>;
+  /**
+   * Optional actual-cost seam: returns the accumulated micro-USD the model
+   * spent for `runId` and clears it, so the flow can fold a run's real token
+   * spend into its terminal record. Absent means the run reports zero cost
+   * (deterministic test fakes and offline lanes never instrument usage).
+   */
+  consumeUsage?(runId: string): number;
 }
 
 export interface CodingRunRecord {
@@ -50,6 +66,30 @@ export interface CodingRunRecord {
   validation: ValidationReport;
   pr?: PullRequestReceipt;
   escalation?: Escalation;
+  /**
+   * Harness self-correction counters (A7 bridge) recorded so the benchmark can
+   * attribute the build-verify-fix effort per run, not just assert it happened.
+   */
+  harness?: CodingHarnessSignals;
+  /**
+   * Actual token-derived spend for this run in micro-USD, folded from the
+   * model's usage at the terminal step. 0 for models that do not instrument it.
+   */
+  costUsdMicro?: number;
+  /**
+   * Sandbox path: the disk fingerprint of the change (no file bodies) and a
+   * bounded diff excerpt, archived instead of transporting whole files.
+   */
+  changeManifest?: ChangeManifestEntry[];
+  diffExcerpt?: string;
+}
+
+export interface CodingHarnessSignals {
+  validationAttempts: number;
+  repairApplied: boolean;
+  criticBlocked: boolean;
+  doomLoopStops: boolean;
+  checksRun: number;
 }
 
 export interface CodingRunStore {
@@ -76,6 +116,8 @@ export interface CodingWorkflowResult {
   manifest?: PreviewManifest;
   pr?: PullRequestReceipt;
   escalation?: Escalation;
+  /** Actual token-derived spend for this run in micro-USD; 0 when uninstrumented. */
+  costUsdMicro?: number;
 }
 
 export const EMPTY_VALIDATION: ValidationReport = {
@@ -171,8 +213,17 @@ export class CodingWorkflow {
       return this.escalate(input, rca, EMPTY_VALIDATION, "stale_source", "Base branch changed after investigation");
     }
 
+    const harness: CodingHarnessSignals = {
+      validationAttempts: 1,
+      repairApplied: false,
+      criticBlocked: false,
+      doomLoopStops: false,
+      checksRun: 0,
+    };
+
     let validation = this.validators.validate(patch);
     if (!validation.passed) {
+      const failedHash = computePatchHash(patch.files);
       const repairedPatch = PatchPlanSchema.safeParse(
         await this.model.repairPatch(context, patch, validation),
       );
@@ -184,9 +235,28 @@ export class CodingWorkflow {
           "path_denied",
           "The repaired patch did not satisfy the safe patch contract",
           manifest,
+          undefined,
+          harness,
+        );
+      }
+      // A3: a repair that reproduces the identical failed patch is a doom loop,
+      // not a second attempt. Stop before spending the repair budget.
+      if (computePatchHash(repairedPatch.data.files) === failedHash) {
+        harness.doomLoopStops = true;
+        return this.escalate(
+          input,
+          rca,
+          validation,
+          "doom_loop",
+          "The repair reproduced an identical failed patch; stopping before a second attempt",
+          manifest,
+          undefined,
+          harness,
         );
       }
       patch = repairedPatch.data;
+      harness.repairApplied = true;
+      harness.validationAttempts = 2;
       try {
         manifest = PreviewManifestSchema.parse(this.writer.preflight(
           input.owner,
@@ -201,7 +271,7 @@ export class CodingWorkflow {
       } catch (error) {
         if (error instanceof RepositoryPolicyError) {
           const reason = error.code === "approval_required" ? "approval_required" : "path_denied";
-          return this.escalate(input, rca, validation, reason, error.message);
+          return this.escalate(input, rca, validation, reason, error.message, undefined, undefined, harness);
         }
         throw error;
       }
@@ -214,6 +284,34 @@ export class CodingWorkflow {
           "validation_failed_after_repair",
           "Allowlisted validation failed after the single repair attempt",
           manifest,
+          undefined,
+          harness,
+        );
+      }
+    }
+
+    // A1: optional per-repo real-tooling checks, gated to pre-Draft-PR (only
+    // after the structure floor passed). Skipped with a logged reason when the
+    // repo does not afford them.
+    const checkOutcome = await this.validators.runChecks(patch, `${input.owner}/${input.repo}`);
+    if (checkOutcome.ran) {
+      harness.checksRun = checkOutcome.results.length;
+      const failures = checkOutcome.results.filter((result) => !result.passed);
+      if (failures.length > 0) {
+        validation = ValidationReportSchema.parse({
+          ...validation,
+          results: [...validation.results, ...failures],
+          passed: false,
+        });
+        return this.escalate(
+          input,
+          rca,
+          validation,
+          "validation_failed_after_repair",
+          `Per-repo checks failed: ${failures.map((result) => `${result.validator} ${result.path}`).join("; ")}`,
+          manifest,
+          undefined,
+          harness,
         );
       }
     }
@@ -228,7 +326,7 @@ export class CodingWorkflow {
       );
     } catch (error) {
       if (error instanceof StaleSourceError) {
-        return this.escalate(input, rca, validation, "stale_source", error.message, manifest);
+        return this.escalate(input, rca, validation, "stale_source", error.message, manifest, undefined, harness);
       }
       throw error;
     }
@@ -244,9 +342,11 @@ export class CodingWorkflow {
         "GitHub checks reported failure; Draft PR remains for review",
         manifest,
         pr,
+        harness,
       );
     }
-    const record: CodingRunRecord = { input, rca, manifest, validation, pr };
+    const costUsdMicro = this.model.consumeUsage?.(input.runId) ?? 0;
+    const record: CodingRunRecord = { input, rca, manifest, validation, pr, harness, costUsdMicro };
     await this.store.save(record);
     return {
       runId: input.runId,
@@ -255,6 +355,7 @@ export class CodingWorkflow {
       validation,
       manifest,
       pr,
+      costUsdMicro,
     };
   }
 
@@ -266,19 +367,23 @@ export class CodingWorkflow {
     detail: string,
     manifest?: PreviewManifest,
     pr?: PullRequestReceipt,
+    harness?: CodingHarnessSignals,
   ): Promise<CodingWorkflowResult> {
     const escalation = EscalationSchema.parse({
       reason,
       diagnosisOnly: true,
       detail,
     });
+    const costUsdMicro = this.model.consumeUsage?.(input.runId) ?? 0;
     const record: CodingRunRecord = {
       input,
       rca,
       validation,
       ...(manifest === undefined ? {} : { manifest }),
       ...(pr === undefined ? {} : { pr }),
+      ...(harness === undefined ? {} : { harness }),
       escalation,
+      costUsdMicro,
     };
     await this.store.save(record);
     return {
@@ -289,6 +394,7 @@ export class CodingWorkflow {
       ...(manifest === undefined ? {} : { manifest }),
       ...(pr === undefined ? {} : { pr }),
       escalation,
+      costUsdMicro,
     };
   }
 }

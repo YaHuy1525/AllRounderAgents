@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -67,6 +67,14 @@ class JiraCreatedIssue:
 
 
 @dataclass(frozen=True, slots=True)
+class JiraDeletedIssue:
+    """A deletion recorded by the fake transport (one-off cleanup runs)."""
+
+    ticket_key: str
+    delete_subtasks: bool
+
+
+@dataclass(frozen=True, slots=True)
 class JiraBoardIssue:
     key: str
     project: str
@@ -78,6 +86,11 @@ class JiraBoardIssue:
     labels: tuple[str, ...]
     updated: str
     browse_url: str
+    # Atlassian Document Format body so the console can render the full
+    # description. Plain-text payloads (the agile board endpoint serializes
+    # descriptions as text) are normalized into ADF by description_to_adf.
+    # Empty dict when Jira returns no description.
+    description_adf: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +99,33 @@ class JiraBoardSummary:
     name: str
     type: str
     project: str
+
+
+def description_to_adf(value: Any) -> dict[str, Any]:
+    """Normalize one Jira description payload into Atlassian Document Format.
+
+    The search endpoints return ADF dicts, but the agile board endpoint
+    serializes the same description as plain text. Text becomes one
+    paragraph per non-empty line, the same shape the seeder writes, so the
+    console renders either source through one mdast conversion.
+    """
+
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        return {
+            "version": 1,
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": line.strip()}],
+                }
+                for line in value.splitlines()
+                if line.strip()
+            ],
+        }
+    return {}
 
 
 class JiraIssueReader(Protocol):
@@ -112,6 +152,8 @@ class JiraTransport(Protocol):
         labels: list[str],
         description: str,
     ) -> str: ...
+
+    def delete_issue(self, ticket_key: str, *, delete_subtasks: bool = False) -> None: ...
 
 
 class HttpJiraTransport:
@@ -187,6 +229,14 @@ class HttpJiraTransport:
             raise ValueError("Jira create_issue response is missing a valid key")
         return key
 
+    def delete_issue(self, ticket_key: str, *, delete_subtasks: bool = False) -> None:
+        _validate_ticket_key(ticket_key)
+        self._request(
+            "DELETE",
+            f"/rest/api/3/issue/{ticket_key}",
+            params={"deleteSubtasks": "true" if delete_subtasks else "false"},
+        )
+
     def search_issues(self, project: str, max_results: int) -> list[JiraBoardIssue]:
         if re.fullmatch(JIRA_PROJECT_KEY_PATTERN, project) is None:
             raise ValueError("Invalid Jira project key")
@@ -197,7 +247,8 @@ class HttpJiraTransport:
                 "jql": f'project = "{project}" ORDER BY rank ASC, updated DESC',
                 "maxResults": max_results,
                 "fields": (
-                    "summary,issuetype,priority,status,assignee,labels,updated"
+                    "summary,issuetype,priority,status,assignee,labels,updated,"
+                    "description"
                 ),
             },
         )
@@ -238,7 +289,8 @@ class HttpJiraTransport:
             params={
                 "maxResults": max_results,
                 "fields": (
-                    "summary,issuetype,priority,status,assignee,labels,updated"
+                    "summary,issuetype,priority,status,assignee,labels,updated,"
+                    "description"
                 ),
             },
         )
@@ -320,6 +372,7 @@ class HttpJiraTransport:
             labels=tuple(str(label) for label in labels) if isinstance(labels, list) else (),
             updated=str(fields.get("updated", datetime.min.isoformat())),
             browse_url=f"{self._client.base_url}/browse/{key}",
+            description_adf=description_to_adf(fields.get("description")),
         )
 
     def close(self) -> None:
@@ -336,6 +389,7 @@ class FakeJiraTransport:
         self.comments: list[JiraComment] = []
         self.transitions: list[JiraTransition] = []
         self.created: list[JiraCreatedIssue] = []
+        self.deleted: list[JiraDeletedIssue] = []
         self.issues = issues or []
         self.boards = boards or []
 
@@ -364,6 +418,9 @@ class FakeJiraTransport:
         )
         self.created.append(issue)
         return issue.key
+
+    def delete_issue(self, ticket_key: str, *, delete_subtasks: bool = False) -> None:
+        self.deleted.append(JiraDeletedIssue(ticket_key, delete_subtasks))
 
     def search_issues(self, project: str, max_results: int) -> list[JiraBoardIssue]:
         return [issue for issue in self.issues if issue.project == project][:max_results]

@@ -10,6 +10,7 @@ import {
   LANE_LABELS,
   laneForDomain,
   laneForWorkflow,
+  parseCaseDocSnap,
   stepStates,
   stepsForLane,
   type CaseEvent,
@@ -811,5 +812,68 @@ describe("case header model", () => {
       source: "run:run-1:outcome",
     });
     expect(model.receipts.signed).toBe(1);
+  });
+});
+
+describe("doc snap drafts", () => {
+  const SNAP = {
+    snapId: "snap-1",
+    docType: "invoice",
+    source: {
+      filename: "invoice.txt",
+      contentType: "text/plain",
+      sha256: "a".repeat(64),
+      bytes: 96,
+    },
+    fields: { abn: "51 824 753 556", expiry: "2027-03-14", junk: 7, blank: "" },
+    flags: [
+      { code: "abn_checksum", severity: "ok", message: "ABN checksum valid.", field: "abn" },
+      { code: "expiry", severity: "warning", message: "Expires in 30 day(s).", field: "expiry" },
+    ],
+    extractor: "heuristic-v1",
+    createdAt: "2026-10-09T02:00:00Z",
+  };
+
+  it("parses a stored draft and drops non-string field entries", () => {
+    const draft = parseCaseDocSnap(SNAP);
+    expect(draft).not.toBeNull();
+    expect(draft?.snapId).toBe("snap-1");
+    expect(draft?.docType).toBe("invoice");
+    expect(draft?.source.filename).toBe("invoice.txt");
+    expect(draft?.source.bytes).toBe(96);
+    expect(draft?.fields).toEqual({ abn: "51 824 753 556", expiry: "2027-03-14" });
+    expect(draft?.flags).toEqual(SNAP.flags);
+    expect(draft?.extractor).toBe("heuristic-v1");
+    expect(draft?.createdAt).toBe("2026-10-09T02:00:00Z");
+  });
+
+  it("rejects drafts without an id or a source record", () => {
+    expect(parseCaseDocSnap(null)).toBeNull();
+    expect(parseCaseDocSnap("nope")).toBeNull();
+    expect(parseCaseDocSnap({ ...SNAP, snapId: "" })).toBeNull();
+    expect(parseCaseDocSnap({ ...SNAP, source: null })).toBeNull();
+  });
+
+  it("drops malformed flags, defaults unknown severities, and fills missing text", () => {
+    const draft = parseCaseDocSnap({
+      ...SNAP,
+      flags: [
+        ...SNAP.flags,
+        { code: "x", severity: "critical" },
+        "junk",
+        { code: "y", severity: "critical", message: "Unrated severity." },
+      ],
+      docType: undefined,
+      extractor: 7,
+    });
+    expect(draft?.flags).toHaveLength(3);
+    expect(draft?.flags[2]).toEqual({
+      code: "y",
+      severity: "warning",
+      message: "Unrated severity.",
+      field: "",
+    });
+    expect(draft?.docType).toBe("unknown");
+    expect(draft?.extractor).toBe("");
   });
 });

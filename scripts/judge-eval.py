@@ -39,6 +39,9 @@ from allrounder_api.judging import (
     SuiteReport,
     aggregate_suite,
     calibrate,
+    coding_deterministic_outcomes,
+    coding_output_from_artifacts,
+    coding_state,
     compare_with_baseline,
     failure_lines,
     hr_deterministic_outcomes,
@@ -72,8 +75,12 @@ SECURITY_CORPORA = (
     ("false-positive", ROOT / "evals" / "security_fp_corpus.jsonl"),
 )
 
-SUITES = ("hr-help", "security-triage")
-WORKFLOWS = {"hr-help": "hr-help", "security-triage": "security"}
+SUITES = ("hr-help", "security-triage", "coding-quality")
+WORKFLOWS = {
+    "hr-help": "hr-help",
+    "security-triage": "security",
+    "coding-quality": "features",
+}
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 
@@ -114,6 +121,8 @@ class FakeJudge:
 def load_cases(suite: str) -> list[dict[str, Any]]:
     if suite == "hr-help":
         return load_jsonl(CASE_DIR / "hr_help_cases.jsonl")
+    if suite == "coding-quality":
+        return load_jsonl(CASE_DIR / "coding_quality_cases.jsonl")
     cases: list[dict[str, Any]] = []
     for tag, path in SECURITY_CORPORA:
         for record in load_jsonl(path):
@@ -545,6 +554,10 @@ async def judge_suite(suite: str, judge_name: str, limit: int | None) -> SuiteRe
                     resolved=resolved,
                     expected_points=[str(point) for point in case.get("expectedPoints", [])],
                 )
+            elif suite == "coding-quality":
+                output = coding_output_from_artifacts(artifacts)
+                deterministic = coding_deterministic_outcomes(output=output, tags=tags)
+                state = coding_state(ticket=case.get("input", {}), output=output)
             else:
                 output = security_output_from_artifacts(artifacts)
                 deterministic = security_deterministic_outcomes(

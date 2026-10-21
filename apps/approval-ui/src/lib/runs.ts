@@ -173,6 +173,9 @@ export const RUNNABLE_WORKFLOWS: ReadonlyArray<{
 
 /** Keyword signals that pull in their workflow even when the Jira type is generic. */
 const KEYWORD_WORKFLOW_RULES: ReadonlyArray<{ id: string; tokens: readonly string[] }> = [
+  // The SCRUM project has no Bug issue type, so the type fallback below can
+  // never reach the issues lane from the board — summary/label keywords must.
+  { id: "issues", tokens: ["fix:", "bug"] },
   { id: "onboarding", tokens: ["new hire", "new-hire", "onboarding", "new starter", "new employee"] },
   { id: "offboarding", tokens: ["offboard", "off-board", "termination", "resignation", "departure", "last day"] },
   { id: "screening", tokens: ["screen", "candidate", "recruit", "interview", "requisition"] },
@@ -238,6 +241,17 @@ export function workflowsForTicket(ticket: {
 /** Console label for a workflow id (falls back to the raw id). */
 export function workflowLabel(id: string): string {
   return RUNNABLE_WORKFLOWS.find((item) => item.id === id)?.label ?? id;
+}
+
+/**
+ * Synthetic key for describe-started runs. The server accepts any key
+ * matching the ticket pattern when opening a case (no Jira lookup), and
+ * TASK- keys are local-only: they never appear on the board.
+ */
+export function syntheticTaskKey(): string {
+  const lead = 1 + Math.floor(Math.random() * 9);
+  const rest = String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0");
+  return `TASK-${lead}${rest}`;
 }
 
 const REPOSITORY_PATTERN = /^[\w.-]+\/[\w.-]+$/;
@@ -455,6 +469,24 @@ export function parseRunSnapshot(value: unknown): RunDetail | null {
 }
 
 /**
+ * One lane-declared custom input on a topology step (U7): the lane owner
+ * configures these in ``definitions.py`` and the step surface renders them.
+ * ``snapKey`` names the canonical doc-snap extraction key (``abn``,
+ * ``expiry``, ``invoiceNumber``, ``total``) that auto-fills the field when
+ * a snapped document carries it.
+ */
+export type RunTopologyField = {
+  id: string;
+  label: string;
+  kind: "text" | "date" | "number";
+  required: boolean;
+  maxLength: number;
+  placeholder: string;
+  help: string;
+  snapKey: string;
+};
+
+/**
  * One step row of the N1 topology payload (`GET /runs/{id}/topology`): the
  * live state from `run_snapshot()` enriched with the static satellites and
  * lineage flags the five lenses render.
@@ -466,6 +498,7 @@ export type RunTopologyStep = {
   state: RunStepState;
   sideEffecting: boolean;
   integrations: string[];
+  fields: RunTopologyField[];
   receipt: string | null;
   actionHash: string | null;
   hasArtifact: boolean;
@@ -506,6 +539,26 @@ export type RunTopology = {
   steps: RunTopologyStep[];
 };
 
+function parseRunTopologyField(value: unknown): RunTopologyField | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const id = asString(record.id);
+  const label = asString(record.label);
+  if (id === null || id === "" || label === null || label === "") return null;
+  const maxLength = asNumber(record.maxLength);
+  return {
+    id,
+    label,
+    kind: record.kind === "date" || record.kind === "number" ? record.kind : "text",
+    required: record.required === true,
+    // Clamp to the same 4000-char cap every surface input enforces.
+    maxLength: Math.min(Math.max(maxLength ?? 4_000, 1), 4_000),
+    placeholder: asString(record.placeholder) ?? "",
+    help: asString(record.help) ?? "",
+    snapKey: asString(record.snapKey) ?? "",
+  };
+}
+
 function parseRunTopologyStep(value: unknown): RunTopologyStep | null {
   const record = asRecord(value);
   if (record === null) return null;
@@ -519,6 +572,18 @@ function parseRunTopologyStep(value: unknown): RunTopologyStep | null {
   const integrations = Array.isArray(rawIntegrations)
     ? rawIntegrations.filter((item): item is string => typeof item === "string")
     : [];
+  // Declared fields are strict when present and default to none when absent
+  // (payloads predating U7 keep parsing).
+  const rawFields = record.fields;
+  const fields: RunTopologyField[] = [];
+  if (rawFields !== undefined) {
+    if (!Array.isArray(rawFields)) return null;
+    for (const item of rawFields) {
+      const field = parseRunTopologyField(item);
+      if (field === null) return null;
+      fields.push(field);
+    }
+  }
   return {
     stepId,
     index,
@@ -526,6 +591,7 @@ function parseRunTopologyStep(value: unknown): RunTopologyStep | null {
     state: record.state,
     sideEffecting: record.sideEffecting === true,
     integrations,
+    fields,
     receipt: asString(record.receipt),
     actionHash: asString(record.actionHash),
     hasArtifact: record.hasArtifact === true,

@@ -13,11 +13,14 @@ export const DECIDE_ROLES = ["approver", "admin"] as const;
 export const ADMIN_ROLES = ["admin"] as const;
 /** Mirrors the API's write roles for `/github/accounts` (github_api._WRITE_ROLES). */
 export const ACCOUNT_WRITE_ROLES = ["agent", "admin"] as const;
+/** Mirrors the API's upload roles for `/kb/documents` (kb_api._UPLOAD_ROLES). */
+export const KB_UPLOAD_ROLES = ["admin"] as const;
 
 export const START_RUN_HINT = "Starting runs requires the agent or admin role.";
 export const DECIDE_HINT = "Deciding approvals requires the approver or admin role.";
 export const ADMIN_HINT = "Managing server settings requires the admin role.";
 export const ACCOUNT_HINT = "Managing GitHub accounts requires the agent or admin role.";
+export const CONNECTOR_HINT = "Managing connections requires the agent or admin role.";
 
 export function hasAnyRole(roles: readonly string[], allowed: readonly string[]): boolean {
   return roles.some((role) => allowed.includes(role));
@@ -41,4 +44,9 @@ export function canAdminSettings(roles: readonly string[]): boolean {
 /** True when the principal may manage GitHub accounts (agent/admin, per the API). */
 export function canManageAccounts(roles: readonly string[]): boolean {
   return roles.length === 0 || hasAnyRole(roles, ACCOUNT_WRITE_ROLES);
+}
+
+/** True when the principal may ingest knowledge documents (admin, per the API). */
+export function canUploadKnowledge(roles: readonly string[]): boolean {
+  return roles.length === 0 || hasAnyRole(roles, KB_UPLOAD_ROLES);
 }

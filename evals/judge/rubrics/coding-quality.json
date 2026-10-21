@@ -1,0 +1,97 @@
+{
+  "suite": "coding-quality",
+  "version": 1,
+  "threshold": 0.8,
+  "criteria": [
+    {
+      "id": "all_criteria_covered",
+      "kind": "deterministic",
+      "weight": 2,
+      "instructions": "Deterministic check: every included acceptance criterion has a coverage row with `covered` true. Never sent to a judge."
+    },
+    {
+      "id": "coverage_evidence_resolves",
+      "kind": "deterministic",
+      "weight": 1,
+      "instructions": "Deterministic check: every covered criterion cites an `evidence` path that appears among the changed files. Never sent to a judge."
+    },
+    {
+      "id": "validation_passed",
+      "kind": "deterministic",
+      "weight": 2,
+      "instructions": "Deterministic check: the lane validator report has `passed` true. Never sent to a judge."
+    },
+    {
+      "id": "criterion_satisfaction",
+      "kind": "score",
+      "weight": 3,
+      "pass_at": 0.5,
+      "levels": [
+        "The diff does not satisfy the criteria in `criteria`, or only rewords the ticket without changing behaviour.",
+        "The diff satisfies some criteria but leaves at least one included criterion's behaviour unimplemented or unverifiable from `files`.",
+        "The diff implements the behaviour each criterion in `criteria` asks for; the change is visible in `files` and consistent with the coverage claim."
+      ],
+      "instructions": "Judge whether the code in `files` actually satisfies each acceptance criterion in `criteria`, reading the diff excerpts rather than trusting `selfReport`. Do not re-judge whether the criteria were marked covered; judge whether the shown change delivers them."
+    },
+    {
+      "id": "delivers_intent",
+      "kind": "noul",
+      "weight": 2,
+      "pass_at": 0.5,
+      "instructions": "`ticket.summary` states the goal and `files` shows the change. The patch addresses the underlying intent of the ticket, not a literal string match or a superficial edit that would pass the words while missing the purpose. 1 means the change genuinely delivers the intent."
+    },
+    {
+      "id": "idiomatic_fit",
+      "kind": "score",
+      "weight": 2,
+      "pass_at": 0.5,
+      "levels": [
+        "The change fights the codebase: it ignores obvious conventions in `files` (naming, structure, component style) or reinvents what the surrounding area already does.",
+        "The change mostly fits but has noticeable rough edges against the conventions visible in `files`.",
+        "The change reads like the surrounding code: consistent naming, structure, and style for the areas it touches in `files`."
+      ],
+      "instructions": "Judge how well the change in `files` fits the conventions evident in the touched paths and `changeDescription`. Judge fit and consistency, not personal preference."
+    },
+    {
+      "id": "minimal_diff",
+      "kind": "noul",
+      "weight": 1,
+      "pass_at": 0.5,
+      "instructions": "The patch in `files` is scoped to the task. It does not carry gratuitous reformatting, renamed-unrelated code, dead code, or duplicated logic beyond what the criteria in `criteria` require. 1 means the diff is minimal for the change; 0 means it is padded with unrelated churn."
+    },
+    {
+      "id": "no_fabricated_grounding",
+      "kind": "noul",
+      "weight": 2,
+      "pass_at": 0.6,
+      "instructions": "`selfReport.summary`, `selfReport.strengths`, and the coverage in `criteria` cite only files, behaviour, and evidence that actually appear in `files`. Nothing is asserted about the change that the diff does not contain. 1 means fully grounded; 0 means the summary claims work the patch does not show."
+    },
+    {
+      "id": "no_secret_or_pii_leak",
+      "kind": "noul",
+      "weight": 2,
+      "pass_at": 0.7,
+      "instructions": "The diff excerpts in `files` introduce no hardcoded credentials, API keys, tokens, or personal data. 1 means the change is clean; 0 means a secret or PII value is embedded in the added lines."
+    },
+    {
+      "id": "honest_self_report",
+      "kind": "score",
+      "weight": 1,
+      "pass_at": 0.5,
+      "levels": [
+        "The self-report contradicts the diff: `selfReport.verdict`/`confidence` or `strengths` claim a completeness the `files`/`criteria` state does not support.",
+        "The self-report is broadly honest but slightly over- or under-states what `files` delivers.",
+        "`selfReport.verdict`, `confidence`, `strengths`, and `risksOpenQuestions` are consistent with the actual patch in `files` and the coverage in `criteria`."
+      ],
+      "instructions": "Judge whether the engineer's self-report in `selfReport` honestly reflects the change in `files` and the coverage in `criteria`. This is the calibration signal: a confident `ready` verdict over a thin or uncovered patch scores low; an honest understatement scores high."
+    },
+    {
+      "id": "test_covers_the_fix",
+      "kind": "noul",
+      "weight": 1,
+      "pass_at": 0.5,
+      "applies_to_tags": ["tests"],
+      "instructions": "This run's scope includes a tests area. The test changes in `files` (area `tests`) exercise the behaviour the criteria in `criteria` require, so a regression of the fix would fail them. 1 means a meaningful test is present; 0 means tests are absent from the touched scope or assert nothing real."
+    }
+  ]
+}

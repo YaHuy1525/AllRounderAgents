@@ -9,7 +9,7 @@ import {
   stepLineage,
 } from "./runViews.js";
 import type { CaseEvent } from "./cases.js";
-import type { RunEvent, RunStepState } from "./runs.js";
+import type { RunEvent, RunStep, RunStepState } from "./runs.js";
 
 function makeEvent(type: string, sequence: number): RunEvent {
   return { runId: "run-1", sequence, type };
@@ -19,8 +19,13 @@ function makeCaseEvent(kind: string, createdAt: string): CaseEvent {
   return { actor: "agent-1", kind, payload: {}, created_at: createdAt };
 }
 
-function makeTimelineStep(stepId: string, state: RunStepState, updatedAt: string) {
-  return { stepId, title: stepId, state, updatedAt };
+function makeTimelineStep(
+  stepId: string,
+  state: RunStepState,
+  updatedAt: string,
+  extra: Partial<Pick<RunStep, "decision" | "artifact">> = {},
+) {
+  return { stepId, title: stepId, state, updatedAt, ...extra };
 }
 
 describe("log filters", () => {
@@ -103,17 +108,19 @@ describe("mergeTimeline", () => {
         makeCaseEvent("run_started", "2026-09-12T10:00:30Z"),
         makeCaseEvent("decision_recorded", "2026-09-12T10:02:00Z"),
       ],
-      run: {
-        workflow: "review",
-        status: "awaiting_human",
-        startedAt: "2026-09-12T10:00:00Z",
-        finishedAt: null,
-        steps: [
-          makeTimelineStep("select-pr", "done", "2026-09-12T10:01:00Z"),
-          makeTimelineStep("ai-review", "pending", "2026-09-12T10:00:00Z"),
-          makeTimelineStep("complete", "awaiting_human", "2026-09-12T10:03:00Z"),
-        ],
-      },
+      runs: [
+        {
+          workflow: "review",
+          status: "awaiting_human",
+          startedAt: "2026-09-12T10:00:00Z",
+          finishedAt: null,
+          steps: [
+            makeTimelineStep("select-pr", "done", "2026-09-12T10:01:00Z"),
+            makeTimelineStep("ai-review", "pending", "2026-09-12T10:00:00Z"),
+            makeTimelineStep("complete", "awaiting_human", "2026-09-12T10:03:00Z"),
+          ],
+        },
+      ],
     });
     expect(entries.map((entry) => entry.id)).toEqual([
       "run:started",
@@ -122,7 +129,12 @@ describe("mergeTimeline", () => {
       "case:1",
       "step:complete",
     ]);
-    expect(entries[0]).toMatchObject({ kind: "run", title: "Run started", detail: "review" });
+    expect(entries[0]).toMatchObject({
+      kind: "run",
+      title: "Run started",
+      detail: "review",
+      href: null,
+    });
     expect(entries[1]).toMatchObject({ kind: "case", title: "run started" });
     expect(entries[4]).toMatchObject({ kind: "step", detail: "awaiting_human" });
   });
@@ -130,13 +142,15 @@ describe("mergeTimeline", () => {
   it("appends the finish milestone and drops unparseable timestamps", () => {
     const entries = mergeTimeline({
       caseEvents: [makeCaseEvent("closed", "")],
-      run: {
-        workflow: "review",
-        status: "completed",
-        startedAt: "2026-09-12T10:00:00Z",
-        finishedAt: "2026-09-12T10:04:00Z",
-        steps: [makeTimelineStep("select-pr", "done", "not-a-date")],
-      },
+      runs: [
+        {
+          workflow: "review",
+          status: "completed",
+          startedAt: "2026-09-12T10:00:00Z",
+          finishedAt: "2026-09-12T10:04:00Z",
+          steps: [makeTimelineStep("select-pr", "done", "not-a-date")],
+        },
+      ],
     });
     expect(entries.map((entry) => entry.id)).toEqual(["run:started", "run:finished"]);
     expect(entries[1]).toMatchObject({ title: "Run finished", detail: "completed" });
@@ -145,7 +159,7 @@ describe("mergeTimeline", () => {
   it("keeps case events alone when no run is loaded", () => {
     const entries = mergeTimeline({
       caseEvents: [makeCaseEvent("note_added", "2026-09-12T10:00:00Z")],
-      run: null,
+      runs: [],
     });
     expect(entries).toHaveLength(1);
     expect(entries[0]?.kind).toBe("case");
@@ -154,16 +168,137 @@ describe("mergeTimeline", () => {
   it("sorts across mixed ISO offsets by instant, not string order", () => {
     const entries = mergeTimeline({
       caseEvents: [makeCaseEvent("late", "2026-09-12T12:00:01+02:00")],
-      run: {
-        workflow: "review",
-        status: "running",
-        startedAt: "2026-09-12T10:00:00Z",
-        finishedAt: null,
-        steps: [],
-      },
+      runs: [
+        {
+          workflow: "review",
+          status: "running",
+          startedAt: "2026-09-12T10:00:00Z",
+          finishedAt: null,
+          steps: [],
+        },
+      ],
     });
     // 12:00:01+02:00 is 10:00:01Z — after the 10:00:00Z start.
     expect(entries.map((entry) => entry.id)).toEqual(["run:started", "case:0"]);
+  });
+
+  it("scopes row ids and labels the start row when a ticket merges runs", () => {
+    const entries = mergeTimeline({
+      caseEvents: [],
+      runs: [
+        {
+          runId: "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          workflow: "review",
+          status: "awaiting_human",
+          startedAt: "2026-09-12T10:00:00Z",
+          finishedAt: null,
+          steps: [makeTimelineStep("select-pr", "done", "2026-09-12T10:01:00Z")],
+        },
+        {
+          runId: "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          workflow: "issues",
+          status: "completed",
+          startedAt: "2026-09-12T10:05:00Z",
+          finishedAt: "2026-09-12T10:09:00Z",
+          steps: [],
+        },
+      ],
+    });
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "run:11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa:started",
+      "step:11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa:select-pr",
+      "run:22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb:started",
+      "run:22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb:finished",
+    ]);
+    expect(entries[0]).toMatchObject({ title: "Run started", detail: "review · 11111111" });
+    expect(entries[2]).toMatchObject({ detail: "issues · 22222222" });
+  });
+
+  it("replaces a decided step with its decision row", () => {
+    const entries = mergeTimeline({
+      caseEvents: [],
+      runs: [
+        {
+          workflow: "review",
+          status: "awaiting_human",
+          startedAt: "2026-09-12T10:00:00Z",
+          finishedAt: null,
+          steps: [
+            makeTimelineStep("select-pr", "done", "2026-09-12T10:01:00Z", {
+              decision: {
+                action: "proceed",
+                approver: "jane",
+                decidedAt: "2026-09-12T10:02:00Z",
+              },
+            }),
+            makeTimelineStep("draft", "awaiting_human", "2026-09-12T10:03:00Z", {
+              decision: { action: "regenerate", guidance: "no decidedAt" },
+            }),
+          ],
+        },
+      ],
+    });
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "run:started",
+      "step:select-pr",
+      "step:draft",
+    ]);
+    expect(entries[1]).toMatchObject({
+      kind: "decision",
+      title: "select-pr",
+      detail: "proceed · jane",
+      at: "2026-09-12T10:02:00Z",
+      href: null,
+    });
+    // The regenerate decision carries no clock: the plain step row survives.
+    expect(entries[2]).toMatchObject({ kind: "step", detail: "awaiting_human" });
+  });
+
+  it("derives GitHub rows from artifacts and dedupes by URL", () => {
+    const url = "https://github.com/acme/app/pull/77";
+    const entries = mergeTimeline({
+      caseEvents: [],
+      runs: [
+        {
+          runId: "run-a",
+          workflow: "review",
+          status: "completed",
+          startedAt: "2026-09-12T10:00:00Z",
+          finishedAt: null,
+          steps: [
+            makeTimelineStep("complete", "done", "2026-09-12T10:05:00Z", {
+              artifact: {
+                pr: { url: `${url}/`, number: 77, draft: true, branch: "feat/77" },
+                docs: "https://example.com/app/pull/1",
+              },
+            }),
+          ],
+        },
+        {
+          runId: "run-b",
+          workflow: "issues",
+          status: "completed",
+          startedAt: "2026-09-12T10:10:00Z",
+          finishedAt: null,
+          steps: [
+            makeTimelineStep("complete", "done", "2026-09-12T10:20:00Z", {
+              artifact: { url, number: 77, draft: false, branch: "feat/77" },
+            }),
+          ],
+        },
+      ],
+    });
+    const github = entries.filter((entry) => entry.kind === "github");
+    expect(github).toEqual([
+      {
+        id: `github:${url}`,
+        at: "2026-09-12T10:05:00Z",
+        kind: "github",
+        title: "PR #77",
+        detail: "feat/77 · draft",
+        href: url,
+      },
+    ]);
   });
 });
 

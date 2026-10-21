@@ -32,8 +32,11 @@ import {
   type IssueSelectionArtifact,
   type IssueTicketCandidate,
   type StepDecision,
+  type ValidatorName,
 } from "./contracts.js";
 import type { IssueReader, IssueSourceFile, IssueWriter } from "./tools/github-issues.js";
+import type { LaneSandbox } from "../programming/tools/sandbox-backend.js";
+import { landPatchInSandbox } from "../programming/tools/sandbox-backend.js";
 
 const FILE_BUDGET = 6_000;
 const DIFF_LINE_CAP = 1_500;
@@ -113,6 +116,45 @@ function currentDecision(
 
 function isForward(decision: StepDecision | undefined): decision is StepDecision {
   return decision?.action === "proceed" || decision?.action === "edit";
+}
+
+/** A recorded plan file with the reviewer's optional keep/drop flag. */
+type PlanFile = {
+  readonly path: string;
+  readonly content: string;
+  readonly validators: readonly ValidatorName[];
+  readonly included?: boolean | undefined;
+};
+
+/** Files a reviewer kept in the plan (an explicit `included: false` drops one). */
+function patchFilesInPlan(files: readonly PlanFile[]): PatchFile[] {
+  return files
+    .filter((file) => file.included !== false)
+    .map((file) => ({ path: file.path, content: file.content, validators: [...file.validators] }));
+}
+
+/**
+ * Plan editing: human-edited bytes are re-checked through the same
+ * deterministic validators the automatic repair loop uses, plus the min-one-file
+ * contract, before the Draft PR applies them. Returns nothing when the merged
+ * plan is clean, otherwise one message per violation.
+ */
+function editViolations(
+  registry: ValidatorRegistry,
+  files: PatchFile[],
+  regression: { path: string; content: string } | null,
+): string[] {
+  if (files.length === 0) {
+    return ["The patch must keep at least one file"];
+  }
+  const patch = regression === null ? files : [
+    ...files,
+    { path: regression.path, content: regression.content, validators: ["basic-syntax" as const] },
+  ];
+  const report = registry.validate({ summary: "human edit", files: patch }, 1);
+  return report.results
+    .filter((result) => !result.passed)
+    .map((result) => `${result.path} ${result.validator}: ${result.message}`);
 }
 
 function guidanceOf(decision: StepDecision | undefined): string | undefined {
@@ -357,6 +399,8 @@ export interface IssuesFlowDeps {
   readonly baseBranch: string;
   readonly branches?: readonly string[];
   readonly model?: IssuesModel;
+  /** Present when SANDBOX_GIT_LANES includes `issues`: per-run Docker sandbox plumbing. */
+  readonly sandbox?: LaneSandbox;
   /** How many repository files the analyst inspects (default 12). */
   readonly analysisFileLimit?: number;
 }
@@ -376,6 +420,7 @@ export function createIssuesFlow(deps: IssuesFlowDeps) {
   }
   const reader = deps.github.reader;
   const writer = deps.github.writer;
+  const sandbox = deps.sandbox;
   const model = deps.model ?? createIssuesAgentModel();
   const registries = new ValidatorRegistry();
   const analysisFileLimit = deps.analysisFileLimit ?? 12;
@@ -614,12 +659,14 @@ export function createIssuesFlow(deps: IssuesFlowDeps) {
       throw new Error("The implementation must be approved before the Draft PR can be opened");
     }
     const files = [
-      ...implementation.files.map((file) => ({
-        path: file.path,
-        status: file.status,
-        additions: file.additions,
-        deletions: file.deletions,
-      })),
+      ...implementation.files
+        .filter((file) => file.included !== false)
+        .map((file) => ({
+          path: file.path,
+          status: file.status,
+          additions: file.additions,
+          deletions: file.deletions,
+        })),
       ...(implementation.regressionTest === null
         ? []
         : [
@@ -707,7 +754,21 @@ export function createIssuesFlow(deps: IssuesFlowDeps) {
         const artifact =
           effectiveArtifact(state, "implementation", IssueImplementationArtifactSchema) ??
           (await computeImplementation(state, undefined));
-        void artifact;
+        // An edit decision carries human bytes (content changes, dropped
+        // files). They re-pass the deterministic validators here, before the
+        // side-effecting step, so a broken edit fails the run loudly.
+        if (decision.action === "edit") {
+          const failures = editViolations(
+            registries,
+            patchFilesInPlan(artifact.files),
+            artifact.regressionTest,
+          );
+          if (failures.length > 0) {
+            throw new Error(
+              `The edited implementation failed validation, nothing was applied: ${failures.join(", ")}`,
+            );
+          }
+        }
         return forwardState(state);
       }
       const artifact = await computeImplementation(state, guidanceOf(decision));
@@ -749,11 +810,7 @@ export function createIssuesFlow(deps: IssuesFlowDeps) {
           throw new Error("Implementation artifacts are missing before the Draft PR can be opened");
         }
         const patchFiles: PatchFile[] = [
-          ...implementation.files.map<PatchFile>((file) => ({
-            path: file.path,
-            content: file.content,
-            validators: [...file.validators],
-          })),
+          ...patchFilesInPlan(implementation.files),
           ...(implementation.regressionTest === null
             ? []
             : [
@@ -771,13 +828,26 @@ export function createIssuesFlow(deps: IssuesFlowDeps) {
           excerpt: file.changeDescription,
         }));
         const { owner, repo } = splitRepository(artifact.repository);
+        // Sandbox path: land the bytes in the run's container and gate on the
+        // disk manifest; apply then commits the working tree, not push_files.
+        const landed = sandbox === undefined
+          ? undefined
+          : await landPatchInSandbox(sandbox, {
+              owner,
+              repo,
+              baseBranch: artifact.baseBranch,
+              sourceSha: artifact.sourceSha,
+              branch: artifact.branch,
+              runId: state.runId,
+            }, patchFiles);
+        const gateFiles = landed ?? patchFiles;
         const manifest = writer.preflight(
           owner,
           repo,
           artifact.baseBranch,
           artifact.branch,
           artifact.sourceSha,
-          patchFiles,
+          gateFiles,
           evidence,
           [],
         );
@@ -796,7 +866,7 @@ export function createIssuesFlow(deps: IssuesFlowDeps) {
           "",
           artifact.summary,
         ].join("\n");
-        const pr = await writer.apply(manifest, patchFiles, title, body);
+        const pr = await writer.apply(manifest, gateFiles, title, body);
         const receipt = IssueReceiptSchema.parse({
           pr,
           caseId: state.caseId,
@@ -810,6 +880,12 @@ export function createIssuesFlow(deps: IssuesFlowDeps) {
           regressionTestPath: artifact.regressionTestPath,
         });
         effect = { actionHash, receipt };
+        // Sandbox teardown: the branch is pushed and the PR opened, so the
+        // host-owned container has served its purpose.
+        if (sandbox !== undefined) {
+          sandbox.backend.untrack(artifact.branch);
+          await sandbox.provisioner.destroy(artifact.branch);
+        }
       }
       const effects = { ...state.effects, complete: effect };
       return IssuesFlowOutputSchema.parse({

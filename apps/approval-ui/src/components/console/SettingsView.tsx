@@ -2,6 +2,7 @@ import { apiUrl } from "@/lib/api";
 import type { Workspace } from "@/lib/models";
 import type { JiraPrefs, UiPrefs } from "@/lib/prefs";
 
+import { ConnectionsSection } from "./ConnectionsSection";
 import { GithubAccountsSection } from "./GithubAccountsSection";
 import { MspConnectionsSection } from "./MspConnectionsSection";
 import { IconAlert, IconBoard, IconSettings } from "./icons";
@@ -206,6 +207,8 @@ export function SettingsView({
       </section>
 
       <GithubAccountsSection canManage={canManage} />
+
+      <ConnectionsSection canManage={canManage} />
 
       <MspConnectionsSection canManage={canManage} />
 

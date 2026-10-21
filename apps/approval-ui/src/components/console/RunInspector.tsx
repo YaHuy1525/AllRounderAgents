@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 
 import type { JiraIssue } from "@/lib/board";
 import type { CaseEvent } from "@/lib/cases";
+import { connectedProviders, listConnectors, resolveStepProviders } from "@/lib/connectors";
 import { integrationAccent, integrationLabel } from "@/lib/integrations";
 import {
   LOG_FILTERS,
@@ -15,6 +16,7 @@ import {
   stepLineage,
   type LogFilterId,
   type TimelineEntryKind,
+  type TimelineRun,
 } from "@/lib/runViews";
 import {
   RUNNABLE_WORKFLOWS,
@@ -42,6 +44,7 @@ import {
   IconClock,
   IconClose,
   IconCode,
+  IconExternalLink,
   IconFileText,
   IconList,
   IconLock,
@@ -235,6 +238,8 @@ const TIMELINE_KIND_TONE: Record<TimelineEntryKind, Tone> = {
   case: "info",
   run: "warn",
   step: "muted",
+  decision: "good",
+  github: "muted",
 };
 
 const LENS_STORAGE_KEY = "allrounder.run.lenses.v1";
@@ -432,6 +437,7 @@ export function RunInspector({
   onToggleDebug,
   onRunsChanged,
   onActiveRun,
+  caseId,
   caseEvents = EMPTY_CASE_EVENTS,
   costMicro = null,
   runId,
@@ -445,6 +451,8 @@ export function RunInspector({
   onToggleDebug?: () => void;
   onRunsChanged?: () => void;
   onActiveRun?: (run: RunDetail | null) => void;
+  /** The case backing this ticket (embedded mode) — where snaps find their trail. */
+  caseId?: string;
   /** The case's event trail, merged into the Timeline lens (embedded mode). */
   caseEvents?: CaseEvent[];
   /** The case's spend in micro-USD for the Logs/Timeline footer. */
@@ -468,7 +476,15 @@ export function RunInspector({
   const [timelineDown, setTimelineDown] = useState(false);
   const [timelineTick, setTimelineTick] = useState(0);
   const [topology, setTopology] = useState<RunTopology | null>(null);
+  // N2 connectors: provider ids connected for this tenant, so a connected
+  // Gmail can claim the generic `email` satellite on the steps it serves.
+  // Failures fall back to no overlay — the declared glyphs stay.
+  const [connected, setConnected] = useState<string[]>([]);
   const [logFilter, setLogFilter] = useState<LogFilterId>("all");
+  // Every run of the case, fetched lazily for the ticket-level timeline; the
+  // ref keeps failed lookups from looping until the user retries.
+  const [runCache, setRunCache] = useState<Record<string, RunDetail>>({});
+  const timelineFetchedRef = useRef<Set<string>>(new Set());
 
   const scope = embedded ? `ticket:${issue.key}` : `run:${runId ?? ""}`;
 
@@ -477,6 +493,8 @@ export function RunInspector({
     setLensLoaded(false);
     setLens(readLens(scope));
     setSelectedStepId(null);
+    timelineFetchedRef.current = new Set();
+    setRunCache({});
     setLensLoaded(true);
   }, [scope]);
 
@@ -555,6 +573,41 @@ export function RunInspector({
     };
   }, [lens, timelineRunId, timelineTick]);
 
+  // Retry affordance: bumping the timeline tick re-attempts failed detail
+  // lookups along with the stream reconnect.
+  useEffect(() => {
+    timelineFetchedRef.current = new Set();
+  }, [timelineTick]);
+
+  // Ticket-level feed: the Timeline lens covers every run of the case, not
+  // just the selected one, so fetch each listed run's detail once. Failures
+  // (and slow loads) fall back to summary rows; a run appearing in the list
+  // later fetches on the next pass.
+  useEffect(() => {
+    if (!embedded || lens !== "timeline" || runs === undefined) return;
+    const wanted = runs.filter((item) => !timelineFetchedRef.current.has(item.runId));
+    if (wanted.length === 0) return;
+    for (const item of wanted) timelineFetchedRef.current.add(item.runId);
+    let cancelled = false;
+    void (async () => {
+      const settled = await Promise.allSettled(wanted.map((item) => getRun(item.runId)));
+      if (cancelled) return;
+      setRunCache((previous) => {
+        const next = { ...previous };
+        settled.forEach((result, index) => {
+          const summary = wanted[index];
+          if (result.status === "fulfilled" && summary !== undefined) {
+            next[summary.runId] = result.value;
+          }
+        });
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [embedded, lens, runs, timelineTick]);
+
   // N1 topology: one fetch per run supplies the graph frame (side-effecting
   // steps, integration satellites, receipts, lock); failures fall back to the
   // catalog frame, and the guard below ignores a stale run's payload.
@@ -574,11 +627,30 @@ export function RunInspector({
     };
   }, [timelineRunId]);
 
+  // N2 overlay: one catalog fetch feeds the display-only provider swap below;
+  // a failure simply keeps the glyphs each workflow declares.
+  useEffect(() => {
+    let cancelled = false;
+    listConnectors()
+      .then((items) => {
+        if (!cancelled) setConnected(connectedProviders(items));
+      })
+      .catch(() => {
+        if (!cancelled) setConnected([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const graphTopology =
     topology !== null && detail !== null && topology.runId === detail.runId ? topology : null;
 
   // The graph's workflow frame: the N1 topology when it matches the run, else
   // the catalog definition, else a minimal frame from the run's step titles.
+  // Declared integrations ride the N2 connector overlay (a connected Gmail
+  // badges the steps its `email` channel serves) — display only, so the swap
+  // never grants an execution path.
   const workflowPick = useMemo((): Pick<WorkflowDefinition, "id" | "steps"> | null => {
     if (detail === null) return null;
     if (graphTopology !== null) {
@@ -588,12 +660,20 @@ export function RunInspector({
           id: step.stepId,
           title: step.title,
           sideEffecting: step.sideEffecting,
-          integrations: [...step.integrations],
+          integrations: resolveStepProviders(step.integrations, connected),
         })),
       };
     }
     const fromCatalog = catalog?.find((workflow) => workflow.id === detail.workflow) ?? null;
-    if (fromCatalog !== null) return { id: fromCatalog.id, steps: fromCatalog.steps };
+    if (fromCatalog !== null) {
+      return {
+        id: fromCatalog.id,
+        steps: fromCatalog.steps.map((step) => ({
+          ...step,
+          integrations: resolveStepProviders(step.integrations, connected),
+        })),
+      };
+    }
     return {
       id: detail.workflow,
       steps: detail.steps.map((step) => ({
@@ -603,7 +683,7 @@ export function RunInspector({
         integrations: [] as string[],
       })),
     };
-  }, [catalog, detail, graphTopology]);
+  }, [catalog, connected, detail, graphTopology]);
 
   const workflowStepsById = useMemo(() => {
     const map = new Map<string, { title: string; integrations: string[] }>();
@@ -641,9 +721,30 @@ export function RunInspector({
     [detail],
   );
 
+  // The Timeline lens covers the whole case: every listed run, enriched with
+  // its fetched detail, and the selected run's freshest state on top (it is
+  // the one the SSE stream keeps current).
+  const timelineRuns = useMemo((): TimelineRun[] => {
+    if (!embedded) return detail === null ? [] : [detail];
+    return (runs ?? []).map((item) => {
+      const fresh =
+        detail !== null && detail.runId === item.runId
+          ? detail
+          : (runCache[item.runId] ?? null);
+      return {
+        runId: item.runId,
+        workflow: item.workflow,
+        status: fresh?.status ?? item.status,
+        startedAt: fresh?.startedAt ?? item.startedAt,
+        finishedAt: fresh?.finishedAt ?? item.finishedAt,
+        steps: fresh?.steps ?? [],
+      };
+    });
+  }, [detail, embedded, runCache, runs]);
+
   const timelineEntries = useMemo(
-    () => mergeTimeline({ caseEvents, run: detail }),
-    [caseEvents, detail],
+    () => mergeTimeline({ caseEvents, runs: timelineRuns }),
+    [caseEvents, timelineRuns],
   );
 
   const filteredEvents = useMemo(() => filterRunEvents(events, logFilter), [events, logFilter]);
@@ -781,6 +882,7 @@ export function RunInspector({
                   onToggleDebug={toggleDebug}
                   onRunsChanged={onRunsChanged ?? NOOP}
                   onActiveRun={capture}
+                  caseId={caseId}
                 />
               ) : standaloneIssue !== null && standaloneSummary !== null ? (
                 <RunPanel
@@ -1031,12 +1133,27 @@ export function RunInspector({
                                 {entry.kind}
                               </span>
                               <span className="inspector-event-title">{entry.title}</span>
+                              {entry.href !== null && (
+                                <a
+                                  className="inspector-event-link"
+                                  href={entry.href}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  aria-label={`Open ${entry.title} in a new tab`}
+                                >
+                                  <IconExternalLink />
+                                </a>
+                              )}
                             </div>
                             <p className="inspector-note">{entry.detail}</p>
                           </li>
                         ))}
                       </ol>
                     )}
+                    <p className="inspector-note">
+                      Jira comments, decisions, and GitHub activity merge here; Gmail and Calendar
+                      rows arrive with the connectors vault.
+                    </p>
                   </section>
                   <div className="inspector-timeline-bar">
                     <span className="inspector-note">

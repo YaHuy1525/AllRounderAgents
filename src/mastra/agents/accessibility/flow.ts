@@ -38,6 +38,8 @@ import {
 } from "./contracts.js";
 import type { AccessibilityCrawler, AxeViolation } from "./tools/axe-crawler.js";
 import type { AccessibilityReader, AccessibilityWriter } from "./tools/github-accessibility.js";
+import type { LaneSandbox } from "../programming/tools/sandbox-backend.js";
+import { landPatchInSandbox } from "../programming/tools/sandbox-backend.js";
 
 const FILE_BUDGET = 8_000;
 const MAX_CONTEXT_FILES = 12;
@@ -419,6 +421,8 @@ export interface AccessibilityFlowDeps {
   readonly repositories: readonly string[];
   readonly baseBranch: string;
   readonly model?: AccessibilityModel;
+  /** Present when SANDBOX_GIT_LANES includes `a11y`: per-run Docker sandbox plumbing. */
+  readonly sandbox?: LaneSandbox;
   readonly routeLimit?: number;
   readonly now?: () => Date;
 }
@@ -435,6 +439,7 @@ export interface AccessibilityFlowDeps {
 export function createAccessibilityFlow(deps: AccessibilityFlowDeps) {
   const reader = deps.github.reader;
   const writer = deps.github.writer;
+  const sandbox = deps.sandbox;
   const crawler = deps.crawler;
   const model = deps.model ?? createAccessibilityAgentModel();
   const repositories = deps.repositories;
@@ -813,13 +818,26 @@ export function createAccessibilityFlow(deps: AccessibilityFlowDeps) {
       let effect = existing;
       if (effect === undefined || effect.actionHash !== actionHash) {
         const { owner, repo } = splitRepository(artifact.repository);
+        // Sandbox path: land the bytes in the run's container and gate on the
+        // disk manifest; apply then commits the working tree, not push_files.
+        const landed = sandbox === undefined
+          ? undefined
+          : await landPatchInSandbox(sandbox, {
+              owner,
+              repo,
+              baseBranch: artifact.baseBranch,
+              sourceSha: artifact.sourceSha,
+              branch: artifact.branch,
+              runId: state.runId,
+            }, patchFiles);
+        const gateFiles = landed ?? patchFiles;
         const manifest = writer.preflight(
           owner,
           repo,
           artifact.baseBranch,
           artifact.branch,
           artifact.sourceSha,
-          patchFiles,
+          gateFiles,
           evidence,
           [],
         );
@@ -850,7 +868,7 @@ export function createAccessibilityFlow(deps: AccessibilityFlowDeps) {
                 ),
               ]),
         ].join("\n");
-        const pr = await writer.apply(manifest, patchFiles, title, body);
+        const pr = await writer.apply(manifest, gateFiles, title, body);
         const receipt = AccessibilityReceiptSchema.parse({
           pr,
           caseId: state.caseId,
@@ -862,6 +880,12 @@ export function createAccessibilityFlow(deps: AccessibilityFlowDeps) {
           gate: artifact.gate,
         });
         effect = { actionHash, receipt };
+        // Sandbox teardown: the branch is pushed and the PR opened, so the
+        // host-owned container has served its purpose.
+        if (sandbox !== undefined) {
+          sandbox.backend.untrack(artifact.branch);
+          await sandbox.provisioner.destroy(artifact.branch);
+        }
       }
       const effects = { ...state.effects, "re-scan": effect };
       return AccessibilityFlowOutputSchema.parse({

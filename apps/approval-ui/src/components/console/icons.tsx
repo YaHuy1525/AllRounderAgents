@@ -59,6 +59,15 @@ export function IconDocs({ className }: IconProps) {
   );
 }
 
+export function IconBook({ className }: IconProps) {
+  return (
+    <svg {...BASE} className={className}>
+      <path d="M6.5 3.5h12a1.5 1.5 0 011.5 1.5v14a1.5 1.5 0 01-1.5 1.5h-12A2.5 2.5 0 014 18V6a2.5 2.5 0 012.5-2.5z" />
+      <path d="M6.5 3.5v17" />
+    </svg>
+  );
+}
+
 export function IconSettings({ className }: IconProps) {
   return (
     <svg {...BASE} className={className}>
@@ -223,6 +232,16 @@ export function IconSearch({ className }: IconProps) {
   );
 }
 
+export function IconDownload({ className }: IconProps) {
+  return (
+    <svg {...BASE} className={className}>
+      <path d="M12 4v9.2" />
+      <path d="M8.4 10 12 13.6 15.6 10" />
+      <path d="M5 16.4v2.1h14v-2.1" />
+    </svg>
+  );
+}
+
 export function IconFileText({ className }: IconProps) {
   return (
     <svg {...BASE} className={className}>
@@ -250,6 +269,15 @@ export function IconGitBranch({ className }: IconProps) {
       <circle cx="17.5" cy="9" r="2.2" />
       <path d="M6.5 8.2v7.6" />
       <path d="M17.5 11.2c0 3.1-3 4.4-5.4 4.9" />
+    </svg>
+  );
+}
+
+export function IconLink({ className }: IconProps) {
+  return (
+    <svg {...BASE} className={className}>
+      <path d="M10.2 13.8a4.2 4.2 0 006 0l3-3a4.24 4.24 0 00-6-6l-1.4 1.4" />
+      <path d="M13.8 10.2a4.2 4.2 0 00-6 0l-3 3a4.24 4.24 0 006 6l1.4-1.4" />
     </svg>
   );
 }
@@ -485,6 +513,22 @@ function providerPaths(provider: string) {
         <>
           <rect x="4.2" y="4.2" width="15.6" height="15.6" rx="4" />
           <path d="M9 8.4v7.2M15 8.4v7.2M9 12h6" />
+        </>
+      );
+    case "gmail":
+      return (
+        <>
+          <rect x="3.8" y="6" width="16.4" height="12" rx="2" />
+          <path d="M4.5 8 12 13.4 19.5 8" />
+          <path d="M4.5 15.8 9.8 11.6M19.5 15.8 14.2 11.6" />
+        </>
+      );
+    case "calendar":
+      return (
+        <>
+          <rect x="3.8" y="5.5" width="16.4" height="14" rx="2" />
+          <path d="M3.8 10h16.4" />
+          <path d="M8.2 3.6v3M15.8 3.6v3" />
         </>
       );
     default:

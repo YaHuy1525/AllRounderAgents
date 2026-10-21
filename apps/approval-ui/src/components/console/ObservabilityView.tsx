@@ -4,6 +4,12 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { ApiError, api, apiUrl } from "@/lib/api";
 import {
+  formatMicroUsd,
+  getBenchmark,
+  type BenchmarkLane,
+  type BenchmarkSummary,
+} from "@/lib/benchmark";
+import {
   decisionHistory,
   formatLatency,
   formatRate,
@@ -39,6 +45,11 @@ type AuditState =
   | { phase: "error" }
   | { phase: "ready"; rows: DecisionHistoryRow[] };
 
+type BenchmarkState =
+  | { phase: "loading" }
+  | { phase: "error"; message: string }
+  | { phase: "ready"; summary: BenchmarkSummary };
+
 function summaryErrorMessage(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401 || error.status === 403) {
@@ -47,6 +58,16 @@ function summaryErrorMessage(error: unknown): string {
     return `The metrics summary could not be loaded (API ${error.status}).`;
   }
   return "The metrics summary could not be loaded.";
+}
+
+function benchmarkErrorMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 401 || error.status === 403) {
+      return "Sign in with a role that can view metrics.";
+    }
+    return `The coding lane benchmark could not be loaded (API ${error.status}).`;
+  }
+  return "The coding lane benchmark could not be loaded.";
 }
 
 function formatTimestamp(value: string): string {
@@ -79,6 +100,86 @@ function ObsStat({
   );
 }
 
+/** Approval-rate cell: a compact CSS bar behind the percent, tone by threshold. */
+function ApprovalRateBar({ rate }: { rate: number | null }) {
+  const percent = rate === null ? 0 : Math.round(rate * 100);
+  const tone = rate === null ? "muted" : rate >= 0.85 ? "ok" : rate >= 0.5 ? "warn" : "danger";
+  return (
+    <span className={`obs-rate obs-rate-${tone}`}>
+      <span className="obs-rate-bar" aria-hidden>
+        <span className="obs-rate-fill" style={{ width: `${percent}%` }} />
+      </span>
+      <strong className="obs-num">{formatRate(rate)}</strong>
+    </span>
+  );
+}
+
+/**
+ * One coding lane: a pass-rate / cost-per-pass header (the "never report pass
+ * rate alone" rule made visible), the per-step approval funnel, and the A7
+ * self-correction signals that prove the harness upgrade against the archive.
+ */
+function BenchmarkLanePanel({ lane }: { lane: BenchmarkLane }) {
+  const signals = lane.selfCorrection;
+  return (
+    <div className="obs-lane">
+      <div className="obs-lane-head">
+        <strong>{workflowLabel(lane.workflow)}</strong>
+        <span className="obs-lane-metrics">
+          <span>
+            pass rate <strong className="obs-num">{formatRate(lane.passRate)}</strong>{" "}
+            <span className="obs-muted">{`${lane.passes}/${lane.terminalRuns}`}</span>
+          </span>
+          <span>
+            cost / pass <strong className="obs-num">{formatMicroUsd(lane.costPerPassUsdMicro)}</strong>
+          </span>
+        </span>
+      </div>
+      {lane.steps.length === 0 ? (
+        <p className="obs-empty">No gated decisions archived for this lane yet.</p>
+      ) : (
+        <div className="obs-table" role="table" aria-label={`${lane.title} approval funnel`}>
+          <div className="obs-table-row obs-table-head obs-bench-row" role="row">
+            <span role="columnheader">Step</span>
+            <span role="columnheader">Gates</span>
+            <span role="columnheader">Approve</span>
+            <span role="columnheader">Retry</span>
+            <span role="columnheader">Stop</span>
+            <span role="columnheader">Approval rate</span>
+          </div>
+          {lane.steps.map((step) => (
+            <div key={step.stepId} className="obs-table-row obs-bench-row" role="row">
+              <strong className="obs-step">{step.title}</strong>
+              <span className="obs-num">{step.gates}</span>
+              <span className="obs-num obs-ok">{step.approvals}</span>
+              <span className="obs-num obs-warn">{step.retries}</span>
+              <span className="obs-num obs-danger">{step.stops}</span>
+              <ApprovalRateBar rate={step.approvalRate} />
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="obs-lane-signals">
+        <span className="obs-decision-chip">
+          repairs <strong className="obs-num">{signals.repairApplied}</strong>
+        </span>
+        <span className="obs-decision-chip">
+          critic blocks <strong className="obs-num">{signals.criticBlocked}</strong>
+        </span>
+        <span className="obs-decision-chip">
+          doom-loop stops <strong className="obs-num">{signals.doomLoopStops}</strong>
+        </span>
+        <span className="obs-decision-chip">
+          checks run <strong className="obs-num">{signals.checksRun}</strong>
+        </span>
+        <span className="obs-decision-chip">
+          gate receipts <strong className="obs-num">{lane.gateReceipts}</strong>
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Observability dashboard: run counts, success rate, queue depth, and latency
  * percentiles from `GET /metrics/summary`, plus a read-only decision history
@@ -89,6 +190,7 @@ function ObsStat({
 export function ObservabilityView() {
   const [state, setState] = useState<SummaryState>({ phase: "loading" });
   const [audit, setAudit] = useState<AuditState>({ phase: "loading" });
+  const [benchmark, setBenchmark] = useState<BenchmarkState>({ phase: "loading" });
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -121,6 +223,24 @@ export function ObservabilityView() {
         const denied =
           error instanceof ApiError && (error.status === 401 || error.status === 403);
         setAudit(denied ? { phase: "denied" } : { phase: "error" });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [tick]);
+
+  // The benchmark read-model is derived from the durable run archive, so it
+  // survives a restart and refreshes on the same tick as the live metrics.
+  useEffect(() => {
+    let cancelled = false;
+    setBenchmark({ phase: "loading" });
+    getBenchmark().then(
+      (summary) => {
+        if (!cancelled) setBenchmark({ phase: "ready", summary });
+      },
+      (error: unknown) => {
+        if (!cancelled) setBenchmark({ phase: "error", message: benchmarkErrorMessage(error) });
       },
     );
     return () => {
@@ -334,6 +454,38 @@ export function ObservabilityView() {
           </div>
         </>
       )}
+
+      <section className="obs-card obs-benchmark" aria-label="Coding lane benchmark">
+        <div className="obs-card-head">
+          <h3>Coding lane benchmark</h3>
+          <span className="obs-card-note">
+            per-step approval funnel + pass rate · from the durable run archive
+          </span>
+        </div>
+        {benchmark.phase === "loading" && (
+          <p className="obs-empty" role="status">
+            <IconActivity />
+            Loading benchmark…
+          </p>
+        )}
+        {benchmark.phase === "error" && (
+          <p className="obs-empty" role="alert">
+            <IconAlert />
+            {benchmark.message}
+          </p>
+        )}
+        {benchmark.phase === "ready" && benchmark.summary.lanes.length === 0 && (
+          <p className="obs-empty">
+            <IconInbox />
+            No archived coding-lane runs yet — the funnel fills once terminal runs
+            are mirrored to the run archive.
+          </p>
+        )}
+        {benchmark.phase === "ready" &&
+          benchmark.summary.lanes.map((lane) => (
+            <BenchmarkLanePanel key={lane.workflow} lane={lane} />
+          ))}
+      </section>
 
       <section className="obs-card obs-audit" aria-label="Decision history">
         <div className="obs-card-head">

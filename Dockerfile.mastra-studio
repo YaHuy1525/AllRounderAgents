@@ -1,0 +1,42 @@
+# Container that serves Mastra Studio (the control panel) plus the API.
+# Unlike Dockerfile.mastra (a lean, Studio-less production bundle), this keeps
+# the dev dependencies so the `mastra` CLI and its bundled Studio SPA
+# (node_modules/mastra/dist/studio) are present, and runs `mastra dev`, which is
+# the mode that mounts Studio at the server root. Intended for local or internal
+# use, not a hardened public surface.
+
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+
+# Full install (dev + prod): the Studio assets ship inside the `mastra` CLI, so
+# this image must not use --omit=dev the way the runtime production stage does.
+COPY package.json package-lock.json ./
+COPY apps/approval-ui/package.json ./apps/approval-ui/package.json
+
+# Match Dockerfile.mastra: the .npmrc legacy-peer-deps setting is not copied into
+# the image, so `ci` must pass the flag or it demands the dropped peer entries
+# (nested zod, @atlaskit's react@18) and reports the lock out of sync. The
+# installer is pinned to one npm major so a build matches a fresh local ci.
+RUN npm install --global npm@11
+RUN npm ci --workspaces=false --legacy-peer-deps
+
+# Source tree in the repo layout so fixture paths (resolved three levels up from
+# the bundle) line up with /app/fixtures, exactly as they do for local `mastra dev`.
+COPY tsconfig.json ./
+COPY src ./src
+COPY fixtures ./fixtures
+
+# Bind on every interface inside the container; the compose service maps a host
+# port to it. `mastra dev` is the mode that serves Studio, not the welcome page.
+ENV NODE_ENV=development \
+    PORT=4111 \
+    MASTRA_HOST=0.0.0.0
+
+# The dev-server lockfile (see the script) survives container restarts on the
+# container's own filesystem layer, so startup must clear it first.
+COPY deploy/scripts/mastra-studio-entrypoint.sh /usr/local/bin/mastra-studio-entrypoint.sh
+
+EXPOSE 4111
+
+ENTRYPOINT ["/usr/local/bin/mastra-studio-entrypoint.sh"]

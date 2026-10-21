@@ -41,6 +41,20 @@ interface PolicyChunk {
   readonly stale: boolean;
 }
 
+export type { PolicyChunk };
+
+/**
+ * The paragraph-chunked policy corpus as plain data (no scoring). The
+ * Mastra RAG pilot seeds its own vector index from exactly these chunks, so
+ * chunking and staleness semantics never fork from this file's.
+ */
+export function loadPolicyChunks(
+  dir: string = resolvePolicyDir(),
+  now: Date = new Date(),
+): readonly PolicyChunk[] {
+  return loadChunks(dir, now);
+}
+
 /** Fixture path lookup: repo-root `fixtures/` first, source-tree fallback. */
 function resolvePolicyDir(): string {
   const direct = resolve(process.cwd(), "fixtures", "hr_policy");

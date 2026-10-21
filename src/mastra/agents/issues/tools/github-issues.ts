@@ -1,8 +1,8 @@
 import {
   GitHubSourceReader,
   RepositoryPolicyError,
+  type GitHubBackend,
   type GitHubPolicy,
-  type GitHubTransport,
   type GitHubWriter,
 } from "../../programming/tools/github.js";
 
@@ -42,30 +42,19 @@ const VENDOR_SEGMENTS = new Set([
   "__pycache__",
 ]);
 
-function bodyObject(response: { status: number; body: unknown }): Record<string, unknown> {
-  if (
-    response.status < 200 ||
-    response.status >= 300 ||
-    typeof response.body !== "object" ||
-    response.body === null ||
-    Array.isArray(response.body)
-  ) {
-    throw new Error(`GitHub request failed (${response.status})`);
-  }
-  return response.body as Record<string, unknown>;
-}
-
 /**
- * GitHub REST read surface for the issues workflow: the coding lane's
+ * GitHub read surface for the issues workflow: the coding lane's
  * `GitHubSourceReader` (source SHA + allowlisted file reads) plus a bounded
- * recursive tree listing so the analyst can cite real paths. Every call is
- * scoped by the same repository path policy the coding lane enforces, so a
- * listed path can always be read.
+ * candidate-file listing so the analyst can cite real paths. Both the source
+ * reads and the file listing go through the shared `GitHubBackend`, which the
+ * coding lane runs on the GitHub MCP tools, so there is no per-lane REST here.
+ * Every call is scoped by the same repository path policy the coding lane
+ * enforces, so a listed path can always be read.
  */
 export class GitHubIssueReader implements IssueReader {
   constructor(
     private readonly source: GitHubSourceReader,
-    private readonly transport: GitHubTransport,
+    private readonly backend: GitHubBackend,
     private readonly policy: GitHubPolicy,
   ) {}
 
@@ -95,23 +84,8 @@ export class GitHubIssueReader implements IssueReader {
     if (!this.policy.repositories.includes(`${owner}/${repo}`)) {
       throw new RepositoryPolicyError("repository_denied", "Repository not allowed");
     }
-    const response = await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/git/trees/${sourceSha}?recursive=1`,
-      undefined,
-      this.policy.timeoutMs,
-    );
-    const body = bodyObject(response);
-    const tree = Array.isArray(body.tree) ? body.tree : [];
+    const tree = await this.backend.listFiles(owner, repo, sourceSha);
     return tree
-      .filter(
-        (item): item is { type: string; path: string } =>
-          typeof item === "object" &&
-          item !== null &&
-          (item as { type?: unknown }).type === "blob" &&
-          typeof (item as { path?: unknown }).path === "string",
-      )
-      .map((item) => item.path)
       .filter((path) => !path.split("/").some((segment) => VENDOR_SEGMENTS.has(segment)))
       .filter((path) => this.source.allowsPath(path))
       .slice(0, limit);

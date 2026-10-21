@@ -351,6 +351,188 @@ def security_state(
     }
 
 
+# -------------------------------------------------------- coding-lane state
+
+# The judge reads a bounded excerpt of each file's diff: a full diff can run to
+# hundreds of KB and the judge only needs enough to read intent and grounding.
+_DIFF_EXCERPT_CHARS = 1_200
+
+
+def _dict_rows(value: Any) -> list[dict[str, Any]]:
+    return [item for item in (value or []) if isinstance(item, dict)]
+
+
+def coding_output_from_artifacts(
+    artifacts: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Normalize the features-lane artifacts the judge and checks read.
+
+    The features flow records one artifact per step. ``implementation`` carries
+    the patch (files, per-criterion coverage, validation, and the engineer's
+    self-report), ``feature-selection`` the acceptance-criteria checklist, and
+    ``complete`` the coverage totals. A missing step degrades to empty so a
+    partially-recorded run still scores whatever it produced.
+    """
+    implementation = artifacts.get("implementation")
+    if not isinstance(implementation, dict):
+        return {}
+    selection = artifacts.get("feature-selection")
+    completion = artifacts.get("complete")
+    selection = selection if isinstance(selection, dict) else {}
+    completion = completion if isinstance(completion, dict) else {}
+    validation = implementation.get("validation")
+    return {
+        "verdict": str(implementation.get("verdict", "")),
+        "confidence": implementation.get("confidence"),
+        "summary": str(implementation.get("summary", "")),
+        "strengths": [str(item) for item in (implementation.get("strengths") or [])],
+        "risksOpenQuestions": [
+            str(item) for item in (implementation.get("risksOpenQuestions") or [])
+        ],
+        "files": _dict_rows(implementation.get("files")),
+        "criteriaCoverage": _dict_rows(implementation.get("criteriaCoverage")),
+        "validation": validation if isinstance(validation, dict) else {},
+        "acceptanceCriteria": _dict_rows(selection.get("acceptanceCriteria")),
+        "criteriaTotal": completion.get("criteriaTotal"),
+        "criteriaCovered": completion.get("criteriaCovered"),
+    }
+
+
+def _changed_paths(files: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {
+        str(item.get("path", ""))
+        for item in files
+        if item.get("included", True) is not False and str(item.get("path", ""))
+    }
+
+
+def coding_deterministic_outcomes(
+    *, output: Mapping[str, Any], tags: Sequence[str]
+) -> list[CriterionOutcome]:
+    """Mechanically-checkable coding gates, never sent to a judge.
+
+    Coverage, evidence grounding, and the validator verdict are facts recorded
+    on the artifact, so they are enforced deterministically; the judge layers
+    the fuzzy quality on top. A failure on any of these forces the case to fail
+    regardless of the judge score.
+    """
+    coverage = output.get("criteriaCoverage", [])
+    changed = _changed_paths(output.get("files", []))
+    included_ids = {
+        str(item.get("id"))
+        for item in output.get("acceptanceCriteria", [])
+        if item.get("included") is True
+    }
+    covered_ids = {str(item.get("id")) for item in coverage if item.get("covered") is True}
+    checked_ids = included_ids or covered_ids
+    missing = sorted(checked_ids - covered_ids)
+    outcomes = [
+        _check(
+            "all_criteria_covered",
+            bool(checked_ids) and not missing,
+            f"covered {len(checked_ids & covered_ids)} of {len(checked_ids)} criteria"
+            + (f"; uncovered: {', '.join(missing)}" if missing else ""),
+        )
+    ]
+    orphan = sorted(
+        str(item.get("id"))
+        for item in coverage
+        if item.get("covered") is True and str(item.get("evidence") or "") not in changed
+    )
+    outcomes.append(
+        _check(
+            "coverage_evidence_resolves",
+            not orphan,
+            "every covered criterion cites a changed file"
+            if not orphan
+            else f"covered criteria with no changed-file evidence: {', '.join(orphan)}",
+        )
+    )
+    validation = output.get("validation", {})
+    outcomes.append(
+        _check(
+            "validation_passed",
+            validation.get("passed") is True,
+            f"validator passed={validation.get('passed')} attempts={validation.get('attempts')}",
+        )
+    )
+    return outcomes
+
+
+def _diff_excerpt(diff: Any) -> str:
+    text = str(diff or "")
+    if len(text) <= _DIFF_EXCERPT_CHARS:
+        return text
+    return text[:_DIFF_EXCERPT_CHARS] + "\n...[truncated]"
+
+
+def coding_state(*, ticket: Mapping[str, Any], output: Mapping[str, Any]) -> dict[str, Any]:
+    """Assemble the judge's view of a coding run: the diff, the criteria, and
+    the engineer's own claims about it.
+
+    Calibration reads the gap between ``selfReport`` (verdict, confidence,
+    strengths) and what ``files``/``criteria`` actually show, so an inflated
+    self-report on a thin patch is scored rather than trusted.
+    """
+    criteria = [
+        {
+            "id": str(row.get("id", "")),
+            "text": str(row.get("text", "")),
+            "covered": row.get("covered"),
+            "evidence": row.get("evidence"),
+        }
+        for row in output.get("criteriaCoverage", [])
+    ]
+    covered_ids = {item["id"] for item in criteria}
+    for item in output.get("acceptanceCriteria", []):
+        criterion_id = str(item.get("id", ""))
+        if criterion_id in covered_ids:
+            continue
+        criteria.append(
+            {
+                "id": criterion_id,
+                "text": str(item.get("text", "")),
+                "included": item.get("included"),
+                "covered": False,
+                "evidence": None,
+            }
+        )
+    files = [
+        {
+            "path": str(item.get("path", "")),
+            "status": str(item.get("status", "")),
+            "area": str(item.get("area", "")),
+            "additions": item.get("additions"),
+            "deletions": item.get("deletions"),
+            "changeDescription": str(item.get("changeDescription", "")),
+            "criteriaIds": [str(cid) for cid in (item.get("criteriaIds") or [])],
+            "diffExcerpt": _diff_excerpt(item.get("diff")),
+        }
+        for item in output.get("files", [])
+    ]
+    validation = output.get("validation", {})
+    return {
+        "ticket": {
+            "ticketKey": str(ticket.get("ticketKey", "")),
+            "summary": str(ticket.get("ticketSummary", ticket.get("summary", ""))),
+        },
+        "selfReport": {
+            "verdict": output.get("verdict"),
+            "confidence": output.get("confidence"),
+            "summary": output.get("summary"),
+            "strengths": list(output.get("strengths", [])),
+            "risksOpenQuestions": list(output.get("risksOpenQuestions", [])),
+        },
+        "criteria": criteria,
+        "files": files,
+        "validation": {
+            "passed": validation.get("passed"),
+            "attempts": validation.get("attempts"),
+            "ciStatus": validation.get("ciStatus"),
+        },
+    }
+
+
 # ---------------------------------------------------------------- judges
 
 

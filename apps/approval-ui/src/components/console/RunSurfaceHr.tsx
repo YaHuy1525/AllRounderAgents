@@ -7,7 +7,10 @@
 
 import { useId, useState } from "react";
 
+import type { RunPill } from "@/lib/pills";
+
 import { Markdown } from "./Markdown";
+import { PillTextArea } from "./PillTextArea";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -3595,11 +3598,13 @@ export function HrHelpDraftSurface({
   editing = false,
   draft = null,
   onChange,
+  pills,
 }: {
   artifact: Record<string, unknown>;
   editing?: boolean;
   draft?: HrHelpDraftState | null;
   onChange?: (draft: HrHelpDraftState) => void;
+  pills?: readonly RunPill[];
 }) {
   const answerId = useId();
   const [tab, setTab] = useState<"write" | "preview">("write");
@@ -3653,14 +3658,16 @@ export function HrHelpDraftSurface({
             </div>
             {tab === "write" ? (
               <label className="md-editor-field" htmlFor={answerId}>
-                <textarea
+                <PillTextArea
                   id={answerId}
-                  className="md-editor-input"
+                  textareaClassName="md-editor-input"
                   rows={9}
                   maxLength={4000}
                   value={value.answer}
                   placeholder="Write the answer in markdown — headings, lists and links render in the preview."
-                  onChange={(event) => onChange?.({ answer: event.target.value })}
+                  onChange={(answer) => onChange?.({ answer })}
+                  pills={pills}
+                  fieldLabel="Draft answer"
                 />
                 <span className="md-editor-count">{`${value.answer.length}/4000`}</span>
               </label>

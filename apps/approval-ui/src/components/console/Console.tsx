@@ -19,7 +19,7 @@ import {
   type JiraPrefs,
   type UiPrefs,
 } from "@/lib/prefs";
-import { canDecide, canManageAccounts, canStartRun } from "@/lib/roles";
+import { canDecide, canManageAccounts, canStartRun, canUploadKnowledge } from "@/lib/roles";
 import { workflowLabel } from "@/lib/runs";
 import { commandTarget, type SearchHit } from "@/lib/search";
 import { isTypingTarget, resolveShortcut, type ShortcutAction } from "@/lib/shortcuts";
@@ -46,11 +46,13 @@ import { AssistantPanel } from "./AssistantPanel";
 import { BoardView } from "./BoardView";
 import { CommandBar } from "./CommandBar";
 import { DocsPanel } from "./DocsPanel";
+import { KnowledgeView } from "./KnowledgeView";
 import {
   IconAccount,
   IconActivity,
   IconApprovals,
   IconBoard,
+  IconBook,
   IconChat,
   IconChevronRight,
   IconClock,
@@ -69,11 +71,20 @@ import { ObservabilityView } from "./ObservabilityView";
 import { RunInspector } from "./RunInspector";
 import { RunsView } from "./RunsView";
 import { SettingsView } from "./SettingsView";
+import { TaskInboxView } from "./TaskInboxView";
 import { TicketTab } from "./TicketTab";
 import { WorkflowCatalogView } from "./WorkflowCatalogView";
 import { WorkflowDetailView } from "./WorkflowDetailView";
 
-type PanelKind = "approvals" | "docs" | "settings" | "account" | "runs" | "observability";
+type PanelKind =
+  | "approvals"
+  | "inbox"
+  | "kb"
+  | "docs"
+  | "settings"
+  | "account"
+  | "runs"
+  | "observability";
 
 type BoardResult = {
   project: string;
@@ -745,6 +756,7 @@ export function Console() {
   const allowStart = canStartRun(accountInfo.roles);
   const allowDecide = canDecide(accountInfo.roles);
   const allowAccounts = canManageAccounts(accountInfo.roles);
+  const allowKnowledge = canUploadKnowledge(accountInfo.roles);
 
   return (
     <>
@@ -890,6 +902,28 @@ export function Console() {
               >
                 <IconActivity />
                 <span className="rail-label">Runs</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "inbox" ? " active" : ""}`}
+                data-view="inbox"
+                aria-label="Inbox"
+                title="Inbox"
+                onClick={() => openPanel("inbox")}
+              >
+                <IconInbox />
+                <span className="rail-label">Inbox</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "kb" ? " active" : ""}`}
+                data-view="knowledge"
+                aria-label="Knowledge"
+                title="Knowledge"
+                onClick={() => openPanel("kb")}
+              >
+                <IconBook />
+                <span className="rail-label">Knowledge</span>
               </button>
               <button
                 type="button"
@@ -1077,8 +1111,10 @@ export function Console() {
                   lastSync={lastSync}
                   refreshing={refreshing}
                   search={search}
+                  sort={uiPrefs.boardSort}
                   activeTicketKey={activeTicketKey}
                   onSearchChange={setSearch}
+                  onSortChange={(boardSort) => applyUiPrefs({ boardSort })}
                   onRefresh={() => void loadBoard()}
                   onOpenDetails={openTicket}
                   onOpenRun={openRun}
@@ -1139,12 +1175,24 @@ export function Console() {
                   issues={issues}
                   status={status}
                   onOpenTicket={openTicket}
+                  onOpenRun={(run) => openRun(run)}
                   initialWorkflowId={activeTab.workflowId}
                   canStart={allowStart}
                 />
               )}
 
               {activeTab.kind === "runs" && <RunsView onOpenRun={openRun} />}
+
+              {activeTab.kind === "inbox" && (
+                <TaskInboxView
+                  tickets={issues}
+                  canDecide={allowDecide}
+                  onOpenRun={openRun}
+                  onOpenTicket={(ticket) => focusTicket(ticket)}
+                />
+              )}
+
+              {activeTab.kind === "kb" && <KnowledgeView canUpload={allowKnowledge} />}
 
               {activeTab.kind === "workflow" &&
                 (activeTab.workflowId ? (
@@ -1173,7 +1221,16 @@ export function Console() {
             </div>
           </main>
 
-          <AssistantPanel tickets={chatTickets} selectedKey={activeTicketKey} />
+          <AssistantPanel
+            tickets={chatTickets}
+            selectedKey={activeTicketKey}
+            onOpenRun={openRun}
+            onOpenTicket={(ticketKey) => {
+              const issue = issues.find((item) => item.key === ticketKey);
+              focusTicket({ key: ticketKey, summary: issue?.summary ?? "" });
+            }}
+            onOpenInbox={() => openPanel("inbox")}
+          />
 
           <CommandBar
             open={commandOpen}

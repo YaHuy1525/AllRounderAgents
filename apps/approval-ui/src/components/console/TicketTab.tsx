@@ -7,6 +7,7 @@ import { safeBrowseUrl, ticketFacts, type JiraIssue } from "@/lib/board";
 import {
   caseHeaderModel,
   collectHttpsLinks,
+  downloadCasePack,
   eventsForStep,
   formatCost,
   inferLane,
@@ -27,6 +28,7 @@ import {
   IconCheck,
   IconCode,
   IconClose,
+  IconDownload,
   IconExternalLink,
   IconLock,
   IconSearch,
@@ -117,6 +119,8 @@ export function TicketTab({
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
   const [debugOpen, setDebugOpen] = useState(false);
   const [decidingId, setDecidingId] = useState<string | null>(null);
+  const [packBusy, setPackBusy] = useState(false);
+  const [packError, setPackError] = useState<string | null>(null);
   const panelRefs = useRef(new Map<string, HTMLElement>());
   const focusSeq = useRef(0);
   const [focusEvent, setFocusEvent] = useState<{ stepId: string; nonce: number } | null>(null);
@@ -277,6 +281,26 @@ export function TicketTab({
     }
   }
 
+  // U6 export: the server renders the pack PDF from the immutable trail —
+  // decisions, receipts, citations, diffs, and cost. Failures surface inline
+  // by the header instead of displacing the tab.
+  async function exportPack(): Promise<void> {
+    if (record === null) return;
+    setPackBusy(true);
+    setPackError(null);
+    try {
+      await downloadCasePack(record.id, issue.key);
+    } catch (error) {
+      setPackError(
+        error instanceof ApiError && error.status === 404
+          ? "No case record backs this ticket on the server, so there is nothing to export."
+          : "The audit pack could not be downloaded. Try again in a moment.",
+      );
+    } finally {
+      setPackBusy(false);
+    }
+  }
+
   function focusStep(step: LaneStep): void {
     setExpandedStep(step.id);
   }
@@ -298,6 +322,18 @@ export function TicketTab({
                 <IconSearch />
                 <span>Search</span>
                 <kbd className="command-kbd">/</kbd>
+              </button>
+            )}
+            {record !== null && (
+              <button
+                type="button"
+                className="ticket-pack-trigger"
+                title="Download the audit pack (PDF): decisions, receipts, citations, diffs, and cost"
+                disabled={packBusy}
+                onClick={() => void exportPack()}
+              >
+                {packBusy ? <span className="spinner" aria-hidden="true" /> : <IconDownload />}
+                <span>Export pack</span>
               </button>
             )}
             {record !== null && (
@@ -326,6 +362,11 @@ export function TicketTab({
           The case record could not be loaded. Sign out and back in, then open the tab again.
         </p>
       )}
+      {packError !== null && (
+        <p className="run-action-error" role="alert">
+          {packError}
+        </p>
+      )}
 
       {runs.length > 0 ? (
         <RunInspector
@@ -335,6 +376,7 @@ export function TicketTab({
           onToggleDebug={() => setDebugOpen((open) => !open)}
           onRunsChanged={() => void refreshRuns()}
           onActiveRun={setActiveRun}
+          caseId={record?.id}
           caseEvents={events}
           costMicro={record?.cost_usd_micro ?? null}
           focusStepId={focusEvent?.stepId}

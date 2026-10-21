@@ -10,18 +10,27 @@
     "apps/approval-ui"
   ],
   "scripts": {
+    "dev": "node scripts/dev.mjs",
     "dev:mastra": "mastra dev --dir src/mastra",
     "studio": "mastra studio",
     "lint": "tsc -p tsconfig.json --noEmit && npm run lint -w @allrounder/approval-ui",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json && npm run typecheck -w @allrounder/approval-ui",
     "test": "vitest run && npm run test -w @allrounder/approval-ui",
     "test:coverage": "vitest run --coverage",
+    "eval:seed": "node --env-file=.env scripts/seed-mastra-datasets.mjs",
+    "eval:run": "node scripts/run-coding-eval.mjs",
     "build": "npm run build --workspaces --if-present"
   },
   "dependencies": {
-    "@mastra/core": "^1.64.0",
+    "@mastra/agent-browser": "^0.5.3",
+    "@mastra/core": "^1.76.0",
+    "@mastra/docker": "^0.10.0",
+    "@mastra/evals": "^1.10.6",
+    "@mastra/mcp": "^2.3.0",
     "@mastra/memory": "^1.30.0",
+    "@mastra/observability": "^1.18.4",
     "@mastra/pg": "^1.25.0",
+    "@mastra/rag": "^2.6.7",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.76"
   },

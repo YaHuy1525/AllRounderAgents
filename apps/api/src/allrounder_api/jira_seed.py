@@ -1,17 +1,22 @@
 """Create workflow test tickets in the configured Jira project.
 
 Idempotent: every ticket is deduped with an exact JQL summary search, so
-re-runs skip what already exists. The set covers the finance-lane demo and
-two test cases per console workflow (PR Review, Issue Resolution, Feature
-Implementation, Dependency Update, Accessibility Audit, Vendor Onboarding,
-Leave Request, New-Hire Onboarding, Employee Offboarding, Candidate
-Screening, HR Help), plus the two security-lane alerts in the ``SEC``
-project. The MSP and Bills lanes start from email intake instead of Jira
-tickets, so the demo scripts seed those two, not this one.
+re-runs skip what already exists. The set covers two test cases per console
+workflow (PR Review, Issue Resolution, Feature Implementation, Dependency
+Update, Accessibility Audit, Vendor Onboarding, Leave Request, New-Hire
+Onboarding, Employee Offboarding, Candidate Screening, HR Help), plus the
+two security-lane alerts and the coding-lane refresh
+batch anchored to the open Draft PRs. The MSP and Bills lanes start from
+email intake instead of Jira tickets, so the demo scripts seed those two,
+not this one.
+
+``--match`` seeds only the tickets whose summary or labels contain the given
+text.
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
 from typing import NotRequired, TypedDict
 
@@ -31,39 +36,6 @@ class TicketSpec(TypedDict):
 
 
 TICKETS: tuple[TicketSpec, ...] = (
-    # -- finance lane -------------------------------------------------------
-    {
-        "summary": "Reconcile September month-end ledger against bank",
-        "labels": ["finance", "reconciliation", "ledger"],
-        "description": (
-            "Compare the September ledger to bank deposits. Flag unmatched journal "
-            "items and keep posting read-only until an approval receipt exists."
-        ),
-    },
-    {
-        "summary": "Invoice variance requires audit",
-        "labels": ["finance", "invoice", "audit"],
-        "description": (
-            "INV-2 ledger and bank amounts differ. Produce an audit pack before any "
-            "sandbox journal posting."
-        ),
-    },
-    {
-        "summary": "Unmatched bank deposit needs treasury RCA",
-        "labels": ["finance", "bank", "treasury"],
-        "description": (
-            "DEP-9 arrived on the bank file with no ledger match. Route to treasury "
-            "for cutoff and deposits-in-transit RCA."
-        ),
-    },
-    {
-        "summary": "Journal posting request for adjusting entry",
-        "labels": ["finance", "journal", "variance"],
-        "description": (
-            "Request a sandbox journal for month-end adjusting entries. Do not post "
-            "to any live ledger without a finance:post approval receipt."
-        ),
-    },
     # -- PR Review ----------------------------------------------------------
     {
         "summary": "PR review: tenantId schema draft (AllRounderAgents PR 2, MCP proof)",
@@ -363,11 +335,10 @@ TICKETS: tuple[TicketSpec, ...] = (
             "verbatim."
         ),
     },
-    # -- Security lane (SEC project) ----------------------------------------
+    # -- Security lane (keyword-routed to the security workflow) ------------
     {
         "summary": "Security alert: credential phishing email reported by finance",
         "labels": ["security", "phishing", "workflow-test"],
-        "project": "SEC",
         "description": (
             "Workflow test case for the security lane. A user reported a "
             "credential-harvesting page at https://evil-login.example/login that "
@@ -379,7 +350,6 @@ TICKETS: tuple[TicketSpec, ...] = (
     {
         "summary": "Security alert: suspicious encoded PowerShell on fin-db-01 (EDR)",
         "labels": ["security", "edr", "workflow-test"],
-        "project": "SEC",
         "description": (
             "Workflow test case for the security lane. EDR flagged powershell.exe "
             "running with -enc on fin-db-01 (user FIN\\svc-backup): the base64 "
@@ -388,6 +358,416 @@ TICKETS: tuple[TicketSpec, ...] = (
             "Start the security run with alertSource edr, host fin-db-01 and the c2 "
             "indicator; containment executes only with the signed security:contain "
             "receipt at the decide/approve/contain checkpoints."
+        ),
+    },
+    # -- coding lane refresh (docs drafts first, then self-contained work) ---
+    {
+        "summary": "PR review: smart-ac usage guide draft (smart-ac PR 2)",
+        "labels": ["review", "workflow-test", "coding"],
+        "description": (
+            "Workflow test case for PR Review. Review the open Draft PR 2 "
+            "(\"Add docs/usage.md: Smart AC usage guide\") in YaHuy1525/smart-ac "
+            "against main.\n\n"
+            "Inspect the diff, confirm the quick-start commands and the port table "
+            "match the stack described in smart-ac/README.md, and post the verdict "
+            "comment only — no merges. Start the run with repository "
+            "YaHuy1525/smart-ac and PR 2."
+        ),
+    },
+    {
+        "summary": "PR review: coding lane smoke-test runbook draft (AllRounderAgents PR 3)",
+        "labels": ["review", "workflow-test", "coding"],
+        "description": (
+            "Workflow test case for PR Review. Review the open Draft PR 3 "
+            "(\"Add docs/coding-lane-smoke-test.md: coding lane smoke test\") in "
+            "YaHuy1525/AllRounderAgents against main.\n\n"
+            "Inspect the diff, check the seeding and start-run steps against the "
+            "console flow, and post the verdict comment only — no merges. Start "
+            "the run with repository YaHuy1525/AllRounderAgents and PR 3."
+        ),
+    },
+    {
+        "summary": "Fix: smart-ac README references architecture diagrams missing from the repo",
+        "labels": ["bug", "workflow-test", "coding"],
+        "description": (
+            "Workflow test case for Issue Resolution. smart-ac/README.md renders "
+            "two image references (../architecture_diagram.png and "
+            "../data_flow_diagram.png) that do not exist anywhere in the "
+            "repository, so both diagrams are broken on GitHub.\n\n"
+            "Either commit the exported diagrams to the repository root or correct "
+            "the references, keeping the README structure intact. Keep the change "
+            "to the README plus the two assets."
+        ),
+    },
+    {
+        "summary": "Fix: list-gh-repos.mjs caps the listing at the first page of repositories",
+        "labels": ["bug", "workflow-test", "coding"],
+        "description": (
+            "Workflow test case for Issue Resolution. scripts/list-gh-repos.mjs "
+            "calls /user/repos with per_page=100 and never follows pagination, so "
+            "accounts with more than 100 repositories are silently truncated.\n\n"
+            "Follow the Link header (or loop pages) until the listing is "
+            "exhausted, keep the current output format, and keep the guarantee "
+            "that the token is never printed. Update the header comment if "
+            "needed."
+        ),
+    },
+    {
+        "summary": "Feature: add JSON output to list-gh-repos.mjs",
+        "labels": ["feature", "workflow-test", "coding"],
+        "description": (
+            "Workflow test case for Feature Implementation. Add a --json flag to "
+            "scripts/list-gh-repos.mjs that prints the repository list as a JSON "
+            "array of {full_name, private, default_branch, push} objects so "
+            "scripts and CI can consume it.\n\n"
+            "The default human-readable output must stay unchanged and the token "
+            "must never appear in either format. Small change: one script."
+        ),
+    },
+    {
+        "summary": "Feature: add Jest coverage for the queue emulator semantics",
+        "labels": ["feature", "workflow-test", "coding"],
+        "description": (
+            "Workflow test case for Feature Implementation. The queue emulator "
+            "(smart-ac/services/queue, backed by its REST server.js) implements "
+            "SQS-style semantics but ships without tests, and the tests/ "
+            "directory the README's layout documents is absent from the repo.\n\n"
+            "Recreate smart-ac/tests/ with Jest unit tests covering the "
+            "documented queue behaviour: visibility timeout on receive, "
+            "receipt-handle delete, at-least-once redelivery after expiry and "
+            "the depth stats endpoint — no containers required. Keep the jest "
+            "--runInBand setup working from smart-ac/."
+        ),
+    },
+    {
+        "summary": (
+            "Dependency upgrade: smart-ac manifest audit "
+            "(jest range and lockfile freshness)"
+        ),
+        "labels": ["dependency", "upgrade", "workflow-test", "coding"],
+        "description": (
+            "Workflow test case for Dependency Update. Audit smart-ac/package.json "
+            "and smart-ac/package-lock.json: bump the jest dev dependency to the "
+            "latest 29.x patch, sync the lockfile, and confirm npm test still "
+            "passes from smart-ac/.\n\n"
+            "No major version jumps; present the grouped change for the merge "
+            "gate."
+        ),
+    },
+    {
+        "summary": "Accessibility audit: new-tab run launcher keyboard access and focus order",
+        "labels": ["accessibility", "a11y", "workflow-test", "coding"],
+        "description": (
+            "Workflow test case for Accessibility Audit. Crawl the console "
+            "run-launcher surfaces (target URL http://localhost:3000): the "
+            "+ tab ticket picker, the workflow list, the describe-your-own-run "
+            "form and the Start a run card.\n\n"
+            "Collect the violations for labels, landmarks, focus order and "
+            "keyboard reachability, apply the fix set on the frontend markup and "
+            "styles, re-scan to confirm the violations are resolved, then open "
+            "the fix PR through the gate."
+        ),
+    },
+    # -- Wukong upgrade backlog (remaining N items) -------------------------
+    {
+        "summary": "Feature: branch, loop and delay step kinds with a merge-once receipt pilot",
+        "labels": ["wukong", "coding", "workflow-test"],
+        "description": (
+            "Extend the run model beyond linear steps. StepDefinition gains kind "
+            "(linear, branch, loop or delay) plus arms and merge metadata snapshotted "
+            "at run start. A branch step fans into 2 to 11 arms that run in parallel "
+            "where safe, loops repeat with per-iteration data pills, and delays wait "
+            "before continuing. The merge requires every arm to finish and mints one "
+            "single-use receipt for the whole fan-out.\n\n"
+            "Pilot one lane first: the SOC investigate step as a 3-arm fan-out "
+            "(identity, endpoint and network evidence) merged into the existing "
+            "evidence pack output. Fan-out stays behind the existing ceilings and "
+            "locks, side effects still happen only at merge with a single actionHash, "
+            "and the graph stays a read-only overlay while the linear rail remains "
+            "the source of truth (no free-form DAG saving).\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md section N4, "
+            "slice 4 (automate). Done when the pilot branch runs its arms safely, "
+            "merges once with a single receipt, and the governance suite stays green."
+        ),
+    },
+    {
+        "summary": "Feature: run triggers for schedule, webhook and callable entries",
+        "labels": ["wukong", "coding", "workflow-test"],
+        "description": (
+            "Runs today start only from the Start-run card (plus the Jira webhook "
+            "entry). Add three thin trigger entries that funnel into POST /runs with "
+            "eventId idempotency and the existing policy gate: a schedule (cron with "
+            "timezone, sequential wait or concurrent overlap), a per-workflow webhook "
+            "URL for external pushes, and a callable entry so one run can invoke "
+            "another synchronously (wait for the result) or asynchronously (fire and "
+            "forget).\n\n"
+            "No new execution path: every trigger produces the same receipted run "
+            "history as a manual start, and callable runs carry the caller context "
+            "only when explicitly configured. Expose the trigger settings on the "
+            "workflow detail view.\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md section N5, "
+            "slice 4. Done when a scheduled run and a webhook run both produce "
+            "identically receipted histories as manual runs."
+        ),
+    },
+    {
+        "summary": "Feature: test-run sandbox with a dry-run flag and zero side effects",
+        "labels": ["wukong", "coding", "workflow-test"],
+        "description": (
+            "Every run is live today, so users hesitate before pressing Proceed. Add "
+            "a Test run action next to Start run: an input.dryRun flag runs the full "
+            "pass with real inputs while every side-effecting step records what it "
+            "would do and writes nothing. No receipt is minted and no external call "
+            "is made. The run panel shows a DRY RUN banner with per-node inputs and "
+            "outputs, then offers Discard or Activate, where Activate starts the live "
+            "run from the same inputs.\n\n"
+            "Enforce the regeneration budget through the existing regenerations cap "
+            "and surface dry-run counters through metrics so adoption is "
+            "measurable.\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md section N6, "
+            "slice 4. Done when a dry run shows per-node input and output with no "
+            "receipt minted and no external write, and the same inputs activate as a "
+            "live run."
+        ),
+    },
+    {
+        "summary": "Feature: Slack approver mirror for run-step decisions",
+        "labels": ["wukong", "workflow-test"],
+        "description": (
+            "Approvers live in chat, not in the console. Mirror awaiting decisions "
+            "into Slack: a card per awaiting step (title, step, receipt hash, "
+            "Approve and Deny buttons) posted to a channel scoped by tenant_id. "
+            "Pressing a button calls the same decision endpoint with the same signed "
+            "single-use receipt as the web action, so Slack and web approvals are "
+            "interchangeable and a replay returns the original receipt.\n\n"
+            "Mirror only: no inbound execution and no second writer. Add a "
+            "slack:approve entry to policy/tools.yaml (class approval), keep "
+            "ApprovalsView parity, and take the channel and workspace from the "
+            "connector registry (N2).\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md section N8, "
+            "slice 5 (scale). Done when a Slack approval and a web approval of the "
+            "same step produce identical receipts."
+        ),
+    },
+    {
+        "summary": "Feature: eval workbench for datasets, experiments and scorer comparisons",
+        "labels": ["wukong", "coding", "workflow-test"],
+        "description": (
+            "Evals are files today (evals/*.jsonl plus the lane-evals vitest "
+            "harness) and invisible to users. Promote them to a Datasets page "
+            "(import CSV or JSON, pin versions) and an Experiments page (run every "
+            "item, attach scorers) with a side-by-side comparison of two runs and "
+            "their score deltas.\n\n"
+            "Reuse the test_knowledge_hybrid.py harness and the calibrated judge "
+            "harness, and surface the per-tenant RetrievalTuning knobs (rrf_k, "
+            "recall_k) in a Settings eval section. Keep the golden-eval gate for "
+            "dispatcher routing intact.\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md section N9, "
+            "slice 5. Done when a non-engineer runs an experiment and can cite the "
+            "score delta in a decision."
+        ),
+    },
+    {
+        "summary": "Feature: knowledge catalog and lineage read-only views",
+        "labels": ["wukong", "kb", "workflow-test"],
+        "description": (
+            "Auditors ask where an answer came from. Add read-only "
+            "GET /knowledge/catalog and GET /knowledge/lineage endpoints over the "
+            "existing kb_documents and kb_chunks tables (source, version, stale "
+            "flag, pull time), plus an Observability tab section with a Sources page "
+            "and a Lineage drawer that walks answer to note to roster to pull "
+            "time.\n\n"
+            "Strictly read-only: no write engine, no background auto-merge and no "
+            "bulk ETL designer. Golden-record preview appears only inside "
+            "receipt-bound steps (vendors:create by tax ID), and the per-line "
+            "source chips on KB answers link into the lineage drawer.\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md section "
+            "N10, slice 5. Done when any answer traces to its source, version and "
+            "pull time in two clicks."
+        ),
+    },
+    {
+        "summary": "Feature: ranked board strips for blocked, overdue and awaiting-you cases",
+        "labels": ["wukong", "coding", "workflow-test"],
+        "description": (
+            "Board columns are static lists with a user-chosen sort, so a lead "
+            "with thirty open cases cannot see which ones need them first. Add "
+            "ranked board strips where each strip sorts one result set by one "
+            "plain question. Awaiting-you ranks cases assigned to the viewer "
+            "that sit on a gate, blocked ranks cases stuck behind a ceiling, a "
+            "lock or a failure, and overdue ranks cases past their SLA or due "
+            "date. Build it once and reuse it on the board, runs, finance and "
+            "hiring views, with the scoring formula swapped per lane.\n\n"
+            "Scores must be deterministic arithmetic over data that already "
+            "exists, following the deterministic-first rule of the plan. A rank "
+            "is a sort hint and never an execution path. Awaiting steps keep "
+            "their receipt chips and the manual sort stays available.\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md "
+            "section F3, the board scores half of slice 2. Done when a lead "
+            "opens the board, sees the top three awaiting cases in order and "
+            "can explain every score from visible data."
+        ),
+    },
+    {
+        "summary": "Feature: save an approved draft as a reusable lane template",
+        "labels": ["wukong", "coding", "workflow-test"],
+        "description": (
+            "The template gallery shows the twelve curated workflows, but the "
+            "good answers people write at decision gates never come back. Add a "
+            "save-as-template action to an approved decision: the draft text and "
+            "its field map become a lane-scoped template any permitted agent can "
+            "start from, and the card shows the author, the originating case and "
+            "the approval behind it.\n\n"
+            "Templates stay curated and reviewable. Saving requires the agent or "
+            "admin role, the stored template keeps a provenance link to the "
+            "approved run, and a run started from a template still walks the "
+            "full gate chain, so no approval is skipped because the content "
+            "looks trusted. No bulk import, the same governance line the "
+            "gallery keeps.\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md "
+            "section F10, the playbook reuse follow-on to slice 3. Done when a "
+            "saved support reply appears in the gallery, launches a fresh run "
+            "and that run cites the template provenance."
+        ),
+    },
+    {
+        "summary": "Feature: Gmail and Calendar vault consumption with cross-platform proof runs",
+        "labels": ["wukong", "coding", "workflow-test"],
+        "description": (
+            "The connector registry lists Gmail and Calendar and the vault "
+            "stores credentials, but no lane step reads them, so the promised "
+            "cross-platform proof is unreachable. Wire the consumers: the hr "
+            "lanes and the timeline read Gmail threads and calendar events "
+            "through the vault reference for the tenant, filed into the merged "
+            "case feed, and every new write gains a tool-matrix entry plus a "
+            "side-effect scope before it ships.\n\n"
+            "Nothing changes about how runs execute. Proof runs are receipted "
+            "exactly like manual runs, and this wiring shares the one-writer "
+            "rule with the Slack mirror.\n\n"
+            "Plan: docs/AllRounderAgent_Wukong_Upgrade_Guide_20261006.md "
+            "section N2, slice 4 (cross-platform proof). Done when an HR answer "
+            "citing a Gmail thread and a timeline carrying a calendar event "
+            "both complete end to end using vault-stored credentials only."
+        ),
+    },
+    # -- Agent workflow benchmarking (A2I2 project alignment) ----------------
+    {
+        "summary": "Task: add bare, test-first and spec-driven workflow profiles for coding runs",
+        "labels": ["benchmark", "coding", "workflow-test"],
+        "description": (
+            "The benchmark question is how the process around a coding agent "
+            "changes what it produces, so the first requirement is a way to "
+            "switch the process on and off. Add named workflow profiles to the "
+            "coding lane intake: bare (vendor default, describe and go), "
+            "test-first (failing tests authored before implementation and "
+            "required green), and spec-driven (full written spec, contract "
+            "output and the review gate, which is how the lanes run today). A "
+            "profile is run input stored on the run record, never a hidden "
+            "execution branch, and every gate a profile enables still needs "
+            "its own human approval.\n\n"
+            "Benchmark brief: Deakin A2I2 project 'Benchmarking Agent "
+            "Workflows for Software Development', objective 1 (identify "
+            "agentic workflows from no process to spec-driven). Done when "
+            "one coding task can be launched under each of the three "
+            "profiles and the run record shows which profile produced it."
+        ),
+    },
+    {
+        "summary": (
+            "Feature: pin a benchmark task suite from board tickets and a small "
+            "fresh project"
+        ),
+        "labels": ["benchmark", "coding", "workflow-test"],
+        "description": (
+            "Experiments need fixed material. Assemble the benchmark task "
+            "suite: a pinned selection of representative coding tasks drawn "
+            "from this repository (the coding lane refresh tickets are the "
+            "candidate pool) plus one small greenfield project built only to "
+            "host benchmark tasks. Pin every task to an immutable snapshot: "
+            "repository, starting commit, task statement, and the checks "
+            "that decide success, stored as a fixtures file next to the "
+            "golden tickets so a rerun months later starts from the exact "
+            "same state.\n\n"
+            "Benchmark brief: objective 2 (coding tasks from an existing "
+            "repository and a new small project). Done when the suite file "
+            "lists at least eight tasks, each replayable from its pinned "
+            "commit, and a smoke check proves the suite loads without "
+            "touching live models."
+        ),
+    },
+    {
+        "summary": (
+            "Task: build a benchmark runner that replays every task under every "
+            "workflow profile"
+        ),
+        "labels": ["benchmark", "coding", "workflow-test"],
+        "description": (
+            "Add the experiment driver: for each task in the pinned suite and "
+            "each workflow profile, launch the coding lane run, let it walk "
+            "its gates in automated test mode, and archive the result. Every "
+            "archived run carries the task id, the profile tag, the pinned "
+            "commit and the full run log, so run_archive becomes the durable "
+            "evidence store behind the harness. The runner is resumable, "
+            "idempotent per task and profile pair, and bounded by the "
+            "existing run ceilings so a full sweep cannot flood the serving "
+            "plane or the model budget.\n\n"
+            "Benchmark brief: objective 3 (run experiments across every "
+            "task under every workflow) and expected outcome 1 (a working "
+            "test harness with run logs for every workflow). Done when one "
+            "command completes the full matrix and every cell has a "
+            "terminal run with a retrievable log."
+        ),
+    },
+    {
+        "summary": "Feature: per-profile quality and cost comparison on the benchmark scorecard",
+        "labels": ["benchmark", "coding", "workflow-test"],
+        "description": (
+            "The scorecard endpoint already aggregates terminal coding-lane "
+            "runs into pass rate, cost per pass, approval gate counts and "
+            "self-corrections. Extend it to group by workflow profile and "
+            "task, so each profile shows its own pass rate, cost per pass, "
+            "gate load and self-correction rate side by side. Add one "
+            "quality column scored by the calibrated judge over the produced "
+            "diff against the task's pinned checks, keeping aggregation "
+            "deterministic arithmetic over archived runs.\n\n"
+            "Benchmark brief: objective 4 (compare and analyse the "
+            "results). Done when GET /metrics/benchmark returns a per-"
+            "profile comparison table for the pinned suite and the numbers "
+            "reconcile with run_archive."
+        ),
+    },
+    {
+        "summary": "Task: export a reproducible benchmark bundle of fixtures, logs and results",
+        "labels": ["benchmark", "coding", "workflow-test"],
+        "description": (
+            "Reproducibility is an expected outcome, so add a one-command "
+            "export that captures a benchmark experiment as a versioned "
+            "bundle: the pinned task suite, the profile definitions, the "
+            "runner scripts and their inputs, every run log, and the "
+            "scorecard snapshot at export time. Re-importing a bundle into a "
+            "clean environment must rebuild the same scorecard from the "
+            "logs alone, with no live runs and no model calls, which is the "
+            "check that the reported numbers can be regenerated exactly.\n\n"
+            "Benchmark brief: expected outcome 2 (reproducible scripts and "
+            "results). Done when an exported bundle passes its re-import "
+            "check and the rebuilt scorecard matches the snapshot field for "
+            "field."
+        ),
+    },
+    {
+        "summary": "Feature: analysis tables and charts from archived benchmark runs",
+        "labels": ["benchmark", "coding", "workflow-test"],
+        "description": (
+            "For the write-up the raw scorecard is not enough. Add an "
+            "analysis step that reads the archived runs of one experiment "
+            "and produces report-ready artifacts: per-profile summary "
+            "tables, cost and pass-rate charts across tasks, and the "
+            "variance and effect sizes for each profile comparison, all "
+            "generated from the bundle export so figures in any draft "
+            "trace back to specific run logs.\n\n"
+            "Benchmark brief: stretch outcome (a publication). Done when "
+            "one command turns a completed sweep into a folder of tables "
+            "and charts, and every figure cites the run ids behind it."
         ),
     },
 )
@@ -414,6 +794,7 @@ def _seed_via_mcp(
     email: str,
     token: str,
     project: str,
+    tickets: tuple[TicketSpec, ...],
 ) -> int:
     """MCP path: dedupe + create tickets through the Rovo server."""
     transport = McpJiraTransport(
@@ -425,7 +806,7 @@ def _seed_via_mcp(
     )
     try:
         created: list[str] = []
-        for ticket in TICKETS:
+        for ticket in tickets:
             ticket_project = ticket.get("project", project)
             existing = transport.search_jql(
                 f'project = "{ticket_project}" AND summary ~ "{ticket["summary"]}"',
@@ -454,7 +835,13 @@ def _seed_via_mcp(
         transport.close()
 
 
-def _seed_via_rest(base_url: str, email: str, token: str, project: str) -> int:
+def _seed_via_rest(
+    base_url: str,
+    email: str,
+    token: str,
+    project: str,
+    tickets: tuple[TicketSpec, ...],
+) -> int:
     """Legacy REST path: seed tickets over the Jira REST API (ADF bodies)."""
     created: list[str] = []
     failed: list[str] = []
@@ -464,7 +851,7 @@ def _seed_via_rest(base_url: str, email: str, token: str, project: str) -> int:
         headers={"accept": "application/json", "content-type": "application/json"},
         timeout=20,
     ) as client:
-        for ticket in TICKETS:
+        for ticket in tickets:
             ticket_project = ticket.get("project", project)
             existing = client.get(
                 "/rest/api/3/search/jql",
@@ -521,7 +908,26 @@ def _seed_via_rest(base_url: str, email: str, token: str, project: str) -> int:
     return 0
 
 
+def _selected_tickets(match: str) -> tuple[TicketSpec, ...]:
+    """All specs, or only the ones matching ``match`` (case-insensitive)."""
+    if match == "":
+        return TICKETS
+    needle = match.lower()
+
+    def haystack(ticket: TicketSpec) -> str:
+        return f"{ticket['summary']} {' '.join(ticket['labels'])}".lower()
+
+    return tuple(ticket for ticket in TICKETS if needle in haystack(ticket))
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Seed the workflow test tickets.")
+    parser.add_argument(
+        "--match",
+        default="",
+        help="only seed tickets whose summary or labels contain this text",
+    )
+    args = parser.parse_args()
     settings = Settings()
     base_url = settings.jira_base_url.rstrip("/")
     email = settings.jira_email
@@ -530,9 +936,13 @@ def main() -> int:
     if not base_url or not email or not token or not project:
         print("jira_env_missing", file=sys.stderr)
         return 1
+    tickets = _selected_tickets(args.match)
+    if not tickets:
+        print("no tickets matched", file=sys.stderr)
+        return 1
     if settings.jira_transport == "mcp":
-        return _seed_via_mcp(settings, base_url, email, token, project)
-    return _seed_via_rest(base_url, email, token, project)
+        return _seed_via_mcp(settings, base_url, email, token, project, tickets)
+    return _seed_via_rest(base_url, email, token, project, tickets)
 
 
 if __name__ == "__main__":

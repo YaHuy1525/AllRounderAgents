@@ -1,3 +1,5 @@
+import { ApiError, api, apiUrl, sessionHeaders } from "./api";
+
 export type CaseEvent = {
   actor: string;
   kind: string;
@@ -21,6 +23,37 @@ export type TicketStatus = {
   caseId: string;
   status: string;
   costUsdMicro: number;
+};
+
+/** One auto-check result on a doc-snap draft (U7). */
+export type CaseDocSnapFlag = {
+  code: string;
+  severity: "ok" | "warning" | "error";
+  message: string;
+  field: string;
+};
+
+/** One doc-snap draft as stored on the case trail (U7). */
+export type CaseDocSnap = {
+  snapId: string;
+  docType: string;
+  source: {
+    filename: string;
+    contentType: string;
+    sha256: string;
+    bytes: number;
+  };
+  fields: Record<string, string>;
+  flags: CaseDocSnapFlag[];
+  extractor: string;
+  createdAt: string;
+};
+
+/** The base64 body one snap sends; the browser reads the picked file. */
+export type CaseDocSnapRequest = {
+  filename: string;
+  contentType: string;
+  contentBase64: string;
 };
 
 export type LaneId =
@@ -1281,6 +1314,142 @@ export function caseHeaderModel(input: CaseHeaderInput): CaseHeaderModel {
 export function formatCost(micro: number): string {
   const amount = micro / 1_000_000;
   return `$${amount.toFixed(micro === 0 ? 2 : 4)}`;
+}
+
+export function casePackFilename(ticketKey: string): string {
+  return `case-pack-${ticketKey}.pdf`;
+}
+
+/**
+ * Downloads the per-case audit pack as a PDF (U6): decisions, receipts,
+ * citations, diffs, and cost from the immutable trail. Binary responses
+ * cannot ride through the JSON helper, so the body becomes a blob and the
+ * browser saves it under the server's filename.
+ */
+export async function downloadCasePack(caseId: string, ticketKey: string): Promise<void> {
+  if (!apiUrl) throw new Error("NEXT_PUBLIC_API_URL is not configured");
+  const auth = await sessionHeaders();
+  const response = await fetch(`${apiUrl}/cases/${encodeURIComponent(caseId)}/pack?format=pdf`, {
+    headers: auth,
+  });
+  if (!response.ok) throw new ApiError(response.status);
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = casePackFilename(ticketKey);
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function snapRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function parseSnapFlag(value: unknown): CaseDocSnapFlag | null {
+  const record = snapRecord(value);
+  if (record === null) return null;
+  const code = typeof record.code === "string" ? record.code : "";
+  const message = typeof record.message === "string" ? record.message : "";
+  if (code === "" || message === "") return null;
+  const severity = record.severity;
+  return {
+    code,
+    severity:
+      severity === "ok" || severity === "warning" || severity === "error" ? severity : "warning",
+    message,
+    field: typeof record.field === "string" ? record.field : "",
+  };
+}
+
+/** Validate one doc-snap draft payload; anything malformed returns null. */
+export function parseCaseDocSnap(value: unknown): CaseDocSnap | null {
+  const record = snapRecord(value);
+  if (record === null) return null;
+  const snapId = typeof record.snapId === "string" ? record.snapId : "";
+  const source = snapRecord(record.source);
+  if (snapId === "" || source === null) return null;
+  const fields: Record<string, string> = {};
+  const rawFields = snapRecord(record.fields);
+  if (rawFields !== null) {
+    for (const [key, entry] of Object.entries(rawFields)) {
+      if (typeof entry === "string" && entry !== "") fields[key] = entry;
+    }
+  }
+  const flags: CaseDocSnapFlag[] = [];
+  if (Array.isArray(record.flags)) {
+    for (const item of record.flags) {
+      const flag = parseSnapFlag(item);
+      if (flag !== null) flags.push(flag);
+    }
+  }
+  return {
+    snapId,
+    docType: typeof record.docType === "string" ? record.docType : "unknown",
+    source: {
+      filename: typeof source.filename === "string" ? source.filename : "",
+      contentType: typeof source.contentType === "string" ? source.contentType : "",
+      sha256: typeof source.sha256 === "string" ? source.sha256 : "",
+      bytes: typeof source.bytes === "number" ? source.bytes : 0,
+    },
+    fields,
+    flags,
+    extractor: typeof record.extractor === "string" ? record.extractor : "",
+    createdAt: typeof record.createdAt === "string" ? record.createdAt : "",
+  };
+}
+
+/**
+ * Snaps one document onto the case trail (U7) and returns the draft the
+ * server built: extracted fields plus validation flags. The snap itself
+ * posts nothing — its values become a change only through the normal edit
+ * decision and its receipt gate.
+ */
+export async function snapCaseDocument(
+  caseId: string,
+  request: CaseDocSnapRequest,
+): Promise<CaseDocSnap | null> {
+  const payload = await api<unknown>(`/cases/${encodeURIComponent(caseId)}/doc-snaps`, {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+  return parseCaseDocSnap(payload);
+}
+
+/** The case's snap drafts, newest first; malformed entries are skipped. */
+export async function listCaseDocSnaps(caseId: string): Promise<CaseDocSnap[]> {
+  const payload = await api<unknown>(`/cases/${encodeURIComponent(caseId)}/doc-snaps`);
+  const record = snapRecord(payload);
+  if (record === null || !Array.isArray(record.docSnaps)) return [];
+  const drafts: CaseDocSnap[] = [];
+  for (const item of record.docSnaps) {
+    const draft = parseCaseDocSnap(item);
+    if (draft !== null) drafts.push(draft);
+  }
+  return drafts;
+}
+
+/**
+ * Reads one picked file into the base64 snap request the API expects
+ * (``FileReader`` keeps older embedded browsers working; the data-URL
+ * prefix is stripped so only the content is sent).
+ */
+export function fileToSnapRequest(file: File): Promise<CaseDocSnapRequest> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("The file could not be read"));
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const comma = result.indexOf(",");
+      resolve({
+        filename: file.name,
+        contentType: file.type !== "" ? file.type : "application/octet-stream",
+        contentBase64: comma >= 0 ? result.slice(comma + 1) : result,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 /**

@@ -265,27 +265,6 @@ function sumCents(lines: LedgerLine[]): number | null {
   return lines.reduce((total, line) => total + line.amountCents, 0);
 }
 
-export class FakeFinanceApprovalGate implements FinanceApprovalGate {
-  readonly suspended: Array<{ actionHash: string; posting: PostingInstruction }> = [];
-
-  constructor(private readonly decision: "approved" | "rejected" | "expired") {}
-
-  async suspend(payload: {
-    caseId: string;
-    ticketKey: string;
-    actionHash: string;
-    posting: PostingInstruction;
-  }): Promise<
-    | { decision: "approved"; receipt: string }
-    | { decision: "rejected" | "expired"; receipt?: never }
-  > {
-    this.suspended.push({ actionHash: payload.actionHash, posting: payload.posting });
-    return this.decision === "approved"
-      ? { decision: "approved", receipt: `fake:${payload.actionHash}` }
-      : { decision: this.decision };
-  }
-}
-
 export class MemorySandboxLedger implements SandboxLedger {
   readonly posted: PostingInstruction[] = [];
   private readonly receipts = new Map<string, { artifact: string }>();

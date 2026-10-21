@@ -8,6 +8,7 @@ import {
   AccessibilityViolationsSurface,
   AiReviewSurface,
   CompleteSurface,
+  DeclaredFieldsCard,
   DependencyApplySurface,
   DependencyGroupSurface,
   DependencyMergeSurface,
@@ -95,6 +96,7 @@ import {
   parseScreeningShortlist,
   type ScreeningShortlistDraft,
 } from "@/components/console/RunSurfaceHr";
+import type { RunTopologyField } from "@/lib/runs";
 
 const PR = {
   number: 7,
@@ -561,6 +563,47 @@ describe("issue implementation surface", () => {
     expect(html).toContain("regression test");
   });
 
+  it("offers a keep/drop toggle per file and dims a dropped file", () => {
+    const html = renderToString(
+      <IssueImplementationSurface
+        artifact={issueImplementationArtifact({
+          files: [
+            {
+              path: "src/lib/retry.ts",
+              status: "modified",
+              additions: 3,
+              deletions: 1,
+              diff: "+guarded",
+              content: "const retry = guarded();",
+              validators: ["basic-syntax"],
+            },
+            {
+              path: "config/retries.json",
+              status: "added",
+              additions: 2,
+              deletions: 0,
+              diff: "+{}",
+              content: "{}",
+              validators: ["json"],
+            },
+          ],
+        })}
+        editing
+        draft={{
+          summary: "Guard the 409 before scheduling a retry.",
+          files: { "src/lib/retry.ts": "const retry = guarded();", "config/retries.json": "{}" },
+          included: { "src/lib/retry.ts": true, "config/retries.json": false },
+          regressionTest: null,
+        }}
+        onChange={() => {}}
+      />,
+    );
+    expect(html).toContain("Keep in patch");
+    expect(html).toContain("Uncheck a file to drop it from the patch");
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain("file-card editing dropped");
+  });
+
   it("keeps patch content as text, never markup", () => {
     const html = renderToString(
       <IssueImplementationSurface
@@ -952,6 +995,55 @@ describe("feature implementation surface", () => {
     expect(html).toContain("Implementation summary");
     expect(html).toContain("content-editor");
     expect(html).toContain("export function SearchPage() {}");
+  });
+
+  it("offers a keep/drop toggle per file and dims a dropped file", () => {
+    const html = renderToString(
+      <FeatureImplementationSurface
+        artifact={featureImplementationArtifact({
+          files: [
+            {
+              path: "src/orders/SearchPage.tsx",
+              status: "added",
+              area: "ui",
+              changeDescription: "Render the status filter row.",
+              criteriaIds: ["ac-1"],
+              additions: 4,
+              deletions: 0,
+              diff: "+<FilterRow />",
+              content: "export function SearchPage() {}",
+              validators: ["basic-syntax"],
+            },
+            {
+              path: "src/orders/useOrderFilter.ts",
+              status: "added",
+              area: "logic",
+              changeDescription: "Hold the filter state.",
+              criteriaIds: ["ac-1"],
+              additions: 2,
+              deletions: 0,
+              diff: "+useState",
+              content: "export function useOrderFilter() {}",
+              validators: ["basic-syntax"],
+            },
+          ],
+        })}
+        editing
+        draft={{
+          summary: "Add the filter bar and wire it into the orders query.",
+          files: {
+            "src/orders/SearchPage.tsx": "export function SearchPage() {}",
+            "src/orders/useOrderFilter.ts": "export function useOrderFilter() {}",
+          },
+          included: { "src/orders/SearchPage.tsx": true, "src/orders/useOrderFilter.ts": false },
+        }}
+        onChange={() => {}}
+      />,
+    );
+    expect(html).toContain("Keep in plan");
+    expect(html).toContain("Uncheck a file to drop it from the plan");
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain("file-card editing dropped");
   });
 
   it("keeps the plan content as text, never markup", () => {
@@ -4770,5 +4862,152 @@ describe("security contain surface", () => {
     expect(parseSecurityReceipt(SECURITY_RECEIPT)?.registryRef).toBe(
       "containment-registry:SEC-2FCF0A5A",
     );
+  });
+});
+
+const DECLARED_FIELDS: RunTopologyField[] = [
+  {
+    id: "abn",
+    label: "Australian Business Number (ABN)",
+    kind: "text",
+    required: true,
+    maxLength: 4000,
+    placeholder: "11 digits, e.g. 51 824 753 556",
+    help: "Snap the tax registration and the ABN fills in with a checksum check.",
+    snapKey: "abn",
+  },
+  {
+    id: "certificate_expiry",
+    label: "Insurance certificate expiry",
+    kind: "date",
+    required: false,
+    maxLength: 4000,
+    placeholder: "",
+    help: "",
+    snapKey: "expiry",
+  },
+];
+
+describe("declared fields card", () => {
+  it("renders each declared field with its value and the snap control", () => {
+    const html = renderToString(
+      <DeclaredFieldsCard
+        fields={DECLARED_FIELDS}
+        values={{ abn: "51 824 753 556" }}
+        flags={[]}
+        editable
+        snapBusy={false}
+        snapNote={null}
+        snapError={null}
+        onChange={() => {}}
+        onSnap={() => {}}
+      />,
+    );
+    expect(html).toContain("Lane fields");
+    expect(html).toContain("Australian Business Number (ABN)");
+    expect(html).toContain("51 824 753 556");
+    expect(html).toContain("Snap document");
+    expect(html).toContain("required");
+    expect(html).toContain('type="date"');
+    expect(html).toContain("Snap the tax registration and the ABN fills in with a checksum check.");
+  });
+
+  it("marks flagged fields and lists the auto-check results", () => {
+    const html = renderToString(
+      <DeclaredFieldsCard
+        fields={DECLARED_FIELDS}
+        values={{}}
+        flags={[
+          { code: "abn_checksum", severity: "ok", message: "ABN checksum valid.", field: "abn" },
+          {
+            code: "expiry",
+            severity: "warning",
+            message: "Expires in 30 day(s) (2026-11-08).",
+            field: "expiry",
+          },
+        ]}
+        editable
+        snapBusy={false}
+        snapNote="Snapped invoice.txt · heuristic-v1 · 2 check(s)"
+        snapError={null}
+        onChange={() => {}}
+        onSnap={() => {}}
+      />,
+    );
+    expect(html).toContain("flag-ok");
+    expect(html).toContain("flag-warning");
+    expect(html).toContain("severity-ok");
+    expect(html).toContain("severity-warning");
+    expect(html).toContain("ABN checksum valid.");
+    expect(html).toContain("Expires in 30 day(s) (2026-11-08).");
+    expect(html).toContain("Snapped invoice.txt · heuristic-v1 · 2 check(s)");
+  });
+
+  it("locks the inputs and hides the snap control when not editable", () => {
+    const html = renderToString(
+      <DeclaredFieldsCard
+        fields={DECLARED_FIELDS}
+        values={{}}
+        flags={[]}
+        editable={false}
+        snapBusy={false}
+        snapNote={null}
+        snapError={null}
+        onChange={() => {}}
+        onSnap={() => {}}
+      />,
+    );
+    expect(html).toContain('readOnly=""');
+    expect(html).not.toContain("Snap document");
+  });
+
+  it("surfaces snap errors with an alert and renders nothing without fields", () => {
+    const html = renderToString(
+      <DeclaredFieldsCard
+        fields={DECLARED_FIELDS}
+        values={{}}
+        flags={[]}
+        editable
+        snapBusy={false}
+        snapNote={null}
+        snapError="The document is too large to snap (2 MiB maximum)."
+        onChange={() => {}}
+        onSnap={() => {}}
+      />,
+    );
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("The document is too large to snap (2 MiB maximum).");
+    const empty = renderToString(
+      <DeclaredFieldsCard
+        fields={[]}
+        values={{}}
+        flags={[]}
+        editable
+        snapBusy={false}
+        snapNote={null}
+        snapError={null}
+        onChange={() => {}}
+        onSnap={() => {}}
+      />,
+    );
+    expect(empty).toBe("");
+  });
+
+  it("shows the busy label while a snap is reading", () => {
+    const html = renderToString(
+      <DeclaredFieldsCard
+        fields={DECLARED_FIELDS}
+        values={{}}
+        flags={[]}
+        editable
+        snapBusy
+        snapNote={null}
+        snapError={null}
+        onChange={() => {}}
+        onSnap={() => {}}
+      />,
+    );
+    expect(html).toContain("Reading…");
+    expect(html).not.toContain("Snap document");
   });
 });

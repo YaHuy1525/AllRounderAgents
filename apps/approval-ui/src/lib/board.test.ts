@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOARD_SORTS,
   boardStats,
   columnForStatus,
   compactTickets,
+  DEFAULT_BOARD_SORT,
   groupIssues,
   safeBrowseUrl,
+  sanitizeBoardSort,
+  sortIssues,
   ticketFacts,
   type JiraIssue,
 } from "./board.js";
@@ -101,5 +105,66 @@ describe("Jira board model", () => {
     );
     expect(safeBrowseUrl("javascript:alert(1)")).toBe("#");
     expect(safeBrowseUrl("not a URL")).toBe("#");
+  });
+});
+
+describe("board sorting (U9)", () => {
+  const kit = (key: string, overrides: Partial<JiraIssue> = {}): JiraIssue => ({
+    key,
+    project: key.split("-")[0] ?? "ENG",
+    summary: `Summary for ${key}`,
+    issue_type: "Task",
+    priority: "Medium",
+    status: "To Do",
+    assignee: null,
+    labels: [],
+    updated: "2026-09-07T00:00:00Z",
+    browse_url: `https://example.atlassian.net/browse/${key}`,
+    ...overrides,
+  });
+
+  it("orders the newest update first and sinks unparseable clocks", () => {
+    const older = kit("ENG-1", { updated: "2026-09-01T00:00:00Z" });
+    const newer = kit("ENG-2", { updated: "2026-09-12T00:00:00Z" });
+    const broken = kit("ENG-3", { updated: "not-a-date" });
+    const input = [older, broken, newer];
+    expect(sortIssues(input, "updated").map((issue) => issue.key)).toEqual([
+      "ENG-2",
+      "ENG-1",
+      "ENG-3",
+    ]);
+    // The input array keeps its order — sorting never mutates it.
+    expect(input.map((issue) => issue.key)).toEqual(["ENG-1", "ENG-3", "ENG-2"]);
+  });
+
+  it("ranks priorities highest first and breaks ties by recency", () => {
+    const low = kit("ENG-1", { priority: "Low" });
+    const top = kit("ENG-2", { priority: "Highest" });
+    const midOld = kit("ENG-3", { priority: "Medium", updated: "2026-09-01T00:00:00Z" });
+    const midNew = kit("ENG-4", { priority: "Medium", updated: "2026-09-10T00:00:00Z" });
+    const unknown = kit("ENG-5", { priority: "Seasonal" });
+    expect(
+      sortIssues([low, top, midOld, unknown, midNew], "priority").map((issue) => issue.key),
+    ).toEqual(["ENG-2", "ENG-4", "ENG-3", "ENG-1", "ENG-5"]);
+  });
+
+  it("walks keys in natural order so ENG-2 precedes ENG-10", () => {
+    const ten = kit("ENG-10");
+    const two = kit("ENG-2");
+    const other = kit("OPS-1");
+    expect(sortIssues([other, ten, two], "key").map((issue) => issue.key)).toEqual([
+      "ENG-2",
+      "ENG-10",
+      "OPS-1",
+    ]);
+  });
+
+  it("narrows stored sort choices to the known set", () => {
+    expect(BOARD_SORTS.map((option) => option.id)).toEqual(["updated", "priority", "key"]);
+    expect(sanitizeBoardSort("priority")).toBe("priority");
+    expect(sanitizeBoardSort("key")).toBe("key");
+    expect(sanitizeBoardSort("updated")).toBe("updated");
+    expect(sanitizeBoardSort("size")).toBe(DEFAULT_BOARD_SORT);
+    expect(sanitizeBoardSort(undefined)).toBe(DEFAULT_BOARD_SORT);
   });
 });

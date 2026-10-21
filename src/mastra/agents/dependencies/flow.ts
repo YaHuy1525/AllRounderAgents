@@ -47,6 +47,8 @@ import {
   type ValidateGroup,
 } from "./contracts.js";
 import type { DependencyReader, DependencyWriter } from "./tools/github-dependencies.js";
+import type { LaneSandbox } from "../programming/tools/sandbox-backend.js";
+import { landPatchInSandbox } from "../programming/tools/sandbox-backend.js";
 import type {
   DependencyQuery,
   DependencyRegistry,
@@ -514,6 +516,8 @@ export interface DependenciesFlowDeps {
   readonly baseBranch: string;
   readonly branches?: readonly string[];
   readonly model?: DependenciesModel;
+  /** Present when SANDBOX_GIT_LANES includes `deps`: per-run Docker sandbox plumbing. */
+  readonly sandbox?: LaneSandbox;
 }
 
 /**
@@ -530,6 +534,7 @@ export function createDependenciesFlow(deps: DependenciesFlowDeps) {
   }
   const reader = deps.github.reader;
   const writer = deps.github.writer;
+  const sandbox = deps.sandbox;
   const registry = deps.registry;
   const model = deps.model ?? createDependenciesAgentModel();
   const registries = new ValidatorRegistry();
@@ -1050,13 +1055,27 @@ export function createDependenciesFlow(deps: DependenciesFlowDeps) {
                 ]),
           ];
           const { owner, repo } = splitRepository(applyArtifact.repository);
+          // Sandbox path: dependency bumps are a manifest of changed
+          // manifest/lockfile bytes landed on a reset checkout, so each group
+          // PR carries exactly its own bump on top of the pinned source.
+          const landed = sandbox === undefined
+            ? undefined
+            : await landPatchInSandbox(sandbox, {
+                owner,
+                repo,
+                baseBranch: applyArtifact.baseBranch,
+                sourceSha: applyArtifact.sourceSha,
+                branch: preview.branch,
+                runId: state.runId,
+              }, patchFiles, { resetWorkingTree: true });
+          const gateFiles = landed ?? patchFiles;
           const manifest = writer.preflight(
             owner,
             repo,
             applyArtifact.baseBranch,
             preview.branch,
             applyArtifact.sourceSha,
-            patchFiles,
+            gateFiles,
             [
               {
                 path: changes.manifest.path,
@@ -1091,8 +1110,13 @@ export function createDependenciesFlow(deps: DependenciesFlowDeps) {
             "",
             applyArtifact.summary,
           ].join("\n");
-          const pr = await writer.apply(manifest, patchFiles, title, body);
+          const pr = await writer.apply(manifest, gateFiles, title, body);
           prs.push({ groupId: preview.id, pr });
+          // Sandbox teardown per group branch once its PR is open.
+          if (sandbox !== undefined) {
+            sandbox.backend.untrack(preview.branch);
+            await sandbox.provisioner.destroy(preview.branch);
+          }
         }
         for (const cve of artifact.groups.flatMap((group) => group.cveFixes)) {
           cveFixes.add(cve);

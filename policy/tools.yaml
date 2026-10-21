@@ -5,6 +5,8 @@
 # asserts:
 #   * every write on a transport appears here (no undeclared tools),
 #   * every side-effecting workflow step maps to `run.side-effect`,
+#   * every connectable provider (N2 `connectors:` below) carries a reviewed
+#     scope + class and is renderable in the console vocabulary,
 #   * every `approval` tool in the matrix has a denial path exercised in the
 #     suite (receipt verification, never the caller's claim).
 #
@@ -142,3 +144,78 @@ tools:
     description: Hybrid retrieval over the knowledge store (citations returned).
     scope: knowledge-domains
     class: read-only
+
+  # Coding-lane web search (Path B tool loop): a read-only function tool the
+  # investigator/actor/critic may call for current external context (library
+  # docs, API references, known issues). It cannot mutate anything, so it
+  # carries no idempotency, exactly like the other read-only research tools.
+  - name: web.search
+    description: Read-only web search for current external context (library docs, API references, known issues).
+    scope: web-search
+    class: read-only
+
+  # Coding-lane repository reads (agent quality upgrade, Phase 1): read-only
+  # function tools that let the investigator and actor see allowlisted repo
+  # state for themselves instead of relying only on flow-stuffed context. The
+  # GITHUB_REPOSITORY_ALLOWLIST is re-checked inside every call and fails
+  # closed when unset; with no GitHub credentials the tools degrade to an
+  # availability error string. Write-side GitHub actions stay flow-owned
+  # behind run.side-effect receipts — agents hold no mutation tools.
+  - name: repo.read_file
+    description: Read one file (or a line window) from an allowlisted repository at a pinned ref.
+    scope: repo-allowlist
+    class: read-only
+
+  - name: repo.list_dir
+    description: List the directory entries of an allowlisted repository.
+    scope: repo-allowlist
+    class: read-only
+
+  - name: repo.search_code
+    description: Search an allowlisted repository for code matches (paths and previews only).
+    scope: repo-allowlist
+    class: read-only
+
+  # Actor self-verification loop (Phase 2): the same deterministic structure
+  # floor (json/yaml/xml/basic-syntax) the flow scores with, exposed in-turn
+  # so the actor fixes failures before returning. Pure function, no network,
+  # no mutation; the flow's validators remain the authoritative pass.
+  - name: patch.validate
+    description: Validate a draft patch against the deterministic structure validators.
+    scope: coding-lane-local
+    class: read-only
+
+# Connectable providers (N2 connector registry). Each entry is a console
+# connection home (Settings -> Connections): the provider id is the display
+# vocabulary shared with apps/approval-ui (lib/integrations.ts), the scope is
+# the reviewed permission scope the connection is registered under (slack is
+# catalog-only: the connection never carries a workflow action), and the class
+# is the strongest approval posture of any action that flows through it.
+# Connecting a provider never grants a tool — execution permissions stay in
+# the matrix above, and the durable seed mirror lives in
+# supabase/migrations/202610100015_connectors.sql (pinned by test_connectors).
+connectors:
+  - provider: github
+    description: Repository reads and pull-request actions for the coding lanes.
+    scope: repo-allowlist
+    class: read-only
+
+  - provider: jira
+    description: Comment, transition and spawn tickets behind the desk seam.
+    scope: jira-projects
+    class: auto
+
+  - provider: gmail
+    description: Sends the HR help desk reply behind the hr-help:send receipt.
+    scope: hr-help:send
+    class: approval
+
+  - provider: calendar
+    description: Schedules interview slots behind the screening:schedule receipt.
+    scope: screening:schedule
+    class: approval
+
+  - provider: slack
+    description: Approver notifications only — never a workflow action.
+    scope: approver-notify
+    class: approval

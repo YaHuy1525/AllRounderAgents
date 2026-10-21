@@ -12,6 +12,8 @@ import {
 
 // Pinned to the backend seed vocabulary (runs.definitions + test_workflows.py
 // PROVIDER_VOCAB): adding a provider must be a deliberate two-sided edit.
+// gmail/calendar are connectable-only (N2): no seed declares them; they are
+// render keys for the Connections panel and the satellite badge overlay.
 const PROVIDER_VOCAB = [
   "github",
   "jira",
@@ -28,6 +30,8 @@ const PROVIDER_VOCAB = [
   "payroll",
   "xero",
   "halopsa",
+  "gmail",
+  "calendar",
 ];
 
 describe("integration registry", () => {

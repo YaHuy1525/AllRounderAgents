@@ -2,6 +2,8 @@ export type TabKind =
   | "dashboard"
   | "ticket"
   | "approvals"
+  | "inbox"
+  | "kb"
   | "docs"
   | "settings"
   | "account"
@@ -15,6 +17,8 @@ const TAB_KINDS: readonly string[] = [
   "dashboard",
   "ticket",
   "approvals",
+  "inbox",
+  "kb",
   "docs",
   "settings",
   "account",
@@ -115,6 +119,8 @@ export function openTicketTab(
 
 export type SingletonKind =
   | "approvals"
+  | "inbox"
+  | "kb"
   | "docs"
   | "settings"
   | "account"
@@ -123,6 +129,8 @@ export type SingletonKind =
 
 const SINGLETON_TITLES: Record<SingletonKind, string> = {
   approvals: "Approvals",
+  inbox: "Inbox",
+  kb: "Knowledge",
   docs: "Docs & help",
   settings: "Settings",
   account: "Account",

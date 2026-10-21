@@ -19,6 +19,19 @@ import {
 } from "./agents/dependencies/tools/npm-registry.js";
 import type { FeaturesFlowDeps } from "./agents/features/flow.js";
 import { GitHubFeatureReader } from "./agents/features/tools/github-features.js";
+import type { HrHelpFlowDeps } from "./agents/hr-help/flow.js";
+import {
+  HR_POLICY_DOMAIN,
+  HttpHrPolicyRetriever,
+} from "./agents/hr-help/tools/hr-knowledge.js";
+import { MemoryHrPolicyRetriever, type HrPolicyRetriever } from "./agents/hr-help/tools/hr-policy.js";
+import { MemoryHrHelpRegistry } from "./agents/hr-help/tools/hr-help-registry.js";
+import { fixtureFile } from "./shared/fixtures.js";
+import {
+  MastraRagHrPolicyRetriever,
+  knowledgeVectorStore,
+  readEmbeddingSettings,
+} from "./shared/rag.js";
 import type { IssuesFlowDeps } from "./agents/issues/flow.js";
 import { GitHubIssueReader, type IssueReader } from "./agents/issues/tools/github-issues.js";
 import type { BillsFlowDeps } from "./agents/bills/flow.js";
@@ -31,9 +44,17 @@ import type { CodingFlowDeps } from "./agents/programming/flow.js";
 import {
   FetchGitHubTransport,
   GitHubRepositoryTools,
+  type GitHubBackend,
   type GitHubPolicy,
 } from "./agents/programming/tools/github.js";
-import { McpGitHubBackend } from "./agents/programming/tools/mcp.js";
+import { McpClientGitHubBackend } from "./agents/programming/tools/mcp.js";
+import { SandboxGitHubBackend, type LaneSandbox } from "./agents/programming/tools/sandbox-backend.js";
+import {
+  SandboxProvisioner,
+  attachSandboxLifecycle,
+  isDockerReachable,
+  sweepOrphanedSandboxes,
+} from "./agents/programming/tools/sandbox.js";
 import type { ReviewFlowDeps } from "./agents/review/flow.js";
 import { GitHubReviewTools } from "./agents/review/tools/github-review.js";
 import { HaloDeskAdapter } from "./desks/halo.js";
@@ -66,7 +87,11 @@ import { OutboxMailSender } from "./mail/outbox.js";
  * set, keeps the in-memory ledger otherwise, and reads the vendor registry
  * over the platform service bridge. Without the GitHub block the instance
  * still boots with the finance and vendors flows, matching the documented
- * optional-flow contract in `createAllRounderMastra`.
+ * optional-flow contract in `createAllRounderMastra`. The HR help lane grounds
+ * answers on the `hr:policy` knowledge partition through the same service
+ * bridge once HR_KB_TENANT names the tenant that owns it (see
+ * buildHrHelpDeps), with the company handbook `fixtures/company/hr_policy`
+ * as its outage fallback.
  */
 function readStringArrayEnv(name: string): string[] | undefined {
   const raw = process.env[name];
@@ -188,6 +213,88 @@ const discoveredRepositories = await discoverTokenRepositories(
   process.env.GITHUB_TOKEN?.trim() || process.env.GITHUB_MCP_TOKEN?.trim(),
 );
 
+/**
+ * Rollout flag for the sandbox-git migration: SANDBOX_GIT_LANES is a csv of
+ * lane tokens (coding,issues,features,a11y,deps). A listed lane gets the
+ * per-run Docker sandbox backend and manifest-based state; any other lane keeps
+ * the MCP push_files path. The migration is now the default: an UNSET flag
+ * enables all five PR lanes. Rolling back is explicit — set SANDBOX_GIT_LANES
+ * to an empty value to force every lane onto push_files. Independently, a host
+ * with no reachable Docker daemon downgrades all lanes to the flag-off path
+ * below, so a run never fails purely because the sandbox provider is absent.
+ */
+const ALL_SANDBOX_LANES = "coding,issues,features,a11y,deps";
+const sandboxLanes = new Set(
+  (process.env.SANDBOX_GIT_LANES ?? ALL_SANDBOX_LANES)
+    .split(",")
+    .map((token) => token.trim().toLowerCase())
+    .filter((token) => token !== ""),
+);
+
+// Sandboxed lanes need a live Docker daemon; without one (Docker Desktop not
+// running, or a CI host with no daemon) fall back to the MCP path instead of
+// failing. The probe only runs when at least one lane is otherwise enabled.
+if (sandboxLanes.size > 0 && !isDockerReachable()) {
+  console.warn(
+    "[mastra] sandbox lanes requested but no reachable Docker daemon; every PR"
+      + " lane falls back to the MCP push_files path for this process.",
+  );
+  sandboxLanes.clear();
+}
+
+function laneSandboxed(lane: "coding" | "issues" | "features" | "a11y" | "deps"): boolean {
+  return sandboxLanes.has(lane);
+}
+
+/** One provisioner for the whole instance: every sandboxed lane shares it. */
+const sandboxProvisioner = new SandboxProvisioner({
+  memory: readOptionalIntegerEnv("SANDBOX_MEMORY_MB"),
+  pidsLimit: readOptionalIntegerEnv("SANDBOX_PIDS_LIMIT"),
+  cpuQuota: readOptionalIntegerEnv("SANDBOX_CPU_QUOTA_US"),
+  cpuPeriod: readOptionalIntegerEnv("SANDBOX_CPU_PERIOD_US"),
+  timeout: readPositiveNumberEnv("SANDBOX_COMMAND_TIMEOUT_SECONDS", 300) * 1000,
+  startTimeoutMs: readPositiveNumberEnv("SANDBOX_START_TIMEOUT_SECONDS", 900) * 1000,
+});
+
+// Sandboxed lanes own host-visible containers, so only when at least one lane
+// is enabled do we sweep containers orphaned by a prior crashed process and
+// tear the running ones down on a clean signal-driven shutdown. A resource cap
+// set here bounds what a repository's own test/build may consume inside the
+// Docker Desktop VM; CPU is quota/period in microseconds (e.g. 100000/100000
+// caps a container at one core). Both hooks are inert on a flag-off host.
+if (sandboxLanes.size > 0) {
+  const swept = sweepOrphanedSandboxes();
+  if (swept > 0) {
+    console.info(`[mastra] swept ${swept} orphaned sandbox container(s) at startup.`);
+  }
+  attachSandboxLifecycle(sandboxProvisioner);
+}
+
+/**
+ * Backend selection for a PR lane: the sandbox backend wraps the MCP backend
+ * (API facts still come from GitHub), and the policy records sandboxMode so
+ * the byte cap bounds changed-file bytes rather than transported bodies.
+ */
+function laneBackend(
+  lane: "coding" | "issues" | "features" | "a11y" | "deps",
+  policy: GitHubPolicy,
+): { backend: GitHubBackend; policy: GitHubPolicy; sandbox?: LaneSandbox } {
+  const mcp = new McpClientGitHubBackend();
+  if (!laneSandboxed(lane)) {
+    return { backend: mcp, policy };
+  }
+  const backend = new SandboxGitHubBackend(
+    (branch) => sandboxProvisioner.reattach(branch),
+    mcp,
+  );
+  const sandboxPolicy: GitHubPolicy = { ...policy, sandboxMode: true };
+  return {
+    backend,
+    policy: sandboxPolicy,
+    sandbox: { mode: "sandbox", provisioner: sandboxProvisioner, backend },
+  };
+}
+
 function buildRepositoryPolicy(): GitHubPolicy | undefined {
   const allowlist = readStringArrayEnv("GITHUB_REPOSITORY_ALLOWLIST");
   if (allowlist === undefined || allowlist.length === 0) {
@@ -218,22 +325,18 @@ function buildCodingDeps(): CodingFlowDeps | undefined {
   if (policy === undefined) {
     return undefined;
   }
-  const access = process.env.GITHUB_ACCESS?.trim() || "mcp";
-  if (access === "mcp") {
-    const token = process.env.GITHUB_MCP_TOKEN?.trim() ?? process.env.GITHUB_TOKEN?.trim();
-    if (token === undefined || token === "") {
-      console.warn(
-        "[mastra] GITHUB_ACCESS=mcp but neither GITHUB_MCP_TOKEN nor GITHUB_TOKEN is"
-        + " set; first write (apply) will fail with an authorization error.",
-      );
-    }
-    return { github: new GitHubRepositoryTools(new McpGitHubBackend(), policy) };
-  }
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = process.env.GITHUB_MCP_TOKEN?.trim() ?? process.env.GITHUB_TOKEN?.trim();
   if (token === undefined || token === "") {
-    return undefined;
+    console.warn(
+      "[mastra] neither GITHUB_MCP_TOKEN nor GITHUB_TOKEN is set; the coding lane's"
+      + " first write (apply) will fail with an authorization error.",
+    );
   }
-  return { github: new GitHubRepositoryTools(new FetchGitHubTransport(token), policy) };
+  const lane = laneBackend("coding", policy);
+  return {
+    github: new GitHubRepositoryTools(lane.backend, lane.policy),
+    ...(lane.sandbox === undefined ? {} : { sandbox: lane.sandbox }),
+  };
 }
 
 function buildReviewDeps(): ReviewFlowDeps | undefined {
@@ -249,7 +352,9 @@ function buildReviewDeps(): ReviewFlowDeps | undefined {
     );
     return undefined;
   }
-  return { github: new GitHubReviewTools(new FetchGitHubTransport(token), policy) };
+  return {
+    github: new GitHubReviewTools(new McpClientGitHubBackend(), new FetchGitHubTransport(token), policy),
+  };
 }
 
 function buildIssuesDeps(): IssuesFlowDeps | undefined {
@@ -257,21 +362,22 @@ function buildIssuesDeps(): IssuesFlowDeps | undefined {
   if (policy === undefined) {
     return undefined;
   }
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = process.env.GITHUB_MCP_TOKEN?.trim() ?? process.env.GITHUB_TOKEN?.trim();
   if (token === undefined || token === "") {
     console.warn(
-      "[mastra] GITHUB_TOKEN is not set; issuesFlow is not registered (issue resolution"
-      + " reads repositories over the REST API).",
+      "[mastra] no GitHub MCP token; issuesFlow is not registered (issue resolution"
+      + " reads repositories via the GitHub MCP tools).",
     );
     return undefined;
   }
-  const transport = new FetchGitHubTransport(token);
-  const tools = new GitHubRepositoryTools(transport, policy);
-  const reader: IssueReader = new GitHubIssueReader(tools.reader, transport, policy);
+  const lane = laneBackend("issues", policy);
+  const tools = new GitHubRepositoryTools(lane.backend, lane.policy);
+  const reader: IssueReader = new GitHubIssueReader(tools.reader, lane.backend, lane.policy);
   return {
     github: { reader, writer: tools.writer },
-    repositories: policy.repositories,
-    baseBranch: policy.baseBranch,
+    repositories: lane.policy.repositories,
+    baseBranch: lane.policy.baseBranch,
+    ...(lane.sandbox === undefined ? {} : { sandbox: lane.sandbox }),
   };
 }
 
@@ -280,21 +386,22 @@ function buildFeaturesDeps(): FeaturesFlowDeps | undefined {
   if (policy === undefined) {
     return undefined;
   }
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = process.env.GITHUB_MCP_TOKEN?.trim() ?? process.env.GITHUB_TOKEN?.trim();
   if (token === undefined || token === "") {
     console.warn(
-      "[mastra] GITHUB_TOKEN is not set; featuresFlow is not registered (feature"
-      + " implementation reads repositories over the REST API).",
+      "[mastra] no GitHub MCP token; featuresFlow is not registered (feature"
+      + " implementation reads repositories via the GitHub MCP tools).",
     );
     return undefined;
   }
-  const transport = new FetchGitHubTransport(token);
-  const tools = new GitHubRepositoryTools(transport, policy);
-  const reader = new GitHubFeatureReader(tools.reader, transport, policy);
+  const lane = laneBackend("features", policy);
+  const tools = new GitHubRepositoryTools(lane.backend, lane.policy);
+  const reader = new GitHubFeatureReader(tools.reader, lane.backend, lane.policy);
   return {
     github: { reader, writer: tools.writer },
-    repositories: policy.repositories,
-    baseBranch: policy.baseBranch,
+    repositories: lane.policy.repositories,
+    baseBranch: lane.policy.baseBranch,
+    ...(lane.sandbox === undefined ? {} : { sandbox: lane.sandbox }),
   };
 }
 
@@ -303,22 +410,23 @@ function buildDependenciesDeps(): DependenciesFlowDeps | undefined {
   if (policy === undefined) {
     return undefined;
   }
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = process.env.GITHUB_MCP_TOKEN?.trim() ?? process.env.GITHUB_TOKEN?.trim();
   if (token === undefined || token === "") {
     console.warn(
-      "[mastra] GITHUB_TOKEN is not set; dependenciesFlow is not registered (dependency"
-      + " bumps read manifests and open pull requests over the REST API).",
+      "[mastra] no GitHub MCP token; dependenciesFlow is not registered (dependency"
+      + " bumps read manifests and open pull requests via the GitHub MCP tools).",
     );
     return undefined;
   }
-  const transport = new FetchGitHubTransport(token);
-  const tools = new GitHubRepositoryTools(transport, policy);
-  const reader: DependencyReader = new GitHubDependencyReader(tools.reader, transport, policy);
+  const lane = laneBackend("deps", policy);
+  const tools = new GitHubRepositoryTools(lane.backend, lane.policy);
+  const reader: DependencyReader = new GitHubDependencyReader(tools.reader, lane.backend, lane.policy);
   return {
     github: { reader, writer: tools.writer },
     registry: new NpmRegistryClient(new FetchRegistryTransport()),
-    repositories: policy.repositories,
-    baseBranch: policy.baseBranch,
+    repositories: lane.policy.repositories,
+    baseBranch: lane.policy.baseBranch,
+    ...(lane.sandbox === undefined ? {} : { sandbox: lane.sandbox }),
   };
 }
 
@@ -327,26 +435,27 @@ function buildAccessibilityDeps(): AccessibilityFlowDeps | undefined {
   if (policy === undefined) {
     return undefined;
   }
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token = process.env.GITHUB_MCP_TOKEN?.trim() ?? process.env.GITHUB_TOKEN?.trim();
   if (token === undefined || token === "") {
     console.warn(
-      "[mastra] GITHUB_TOKEN is not set; accessibilityFlow is not registered (the audit"
-      + " reads route components and opens the fix pull request over the REST API).",
+      "[mastra] no GitHub MCP token; accessibilityFlow is not registered (the audit"
+      + " reads route components and opens the fix pull request via the GitHub MCP tools).",
     );
     return undefined;
   }
-  const transport = new FetchGitHubTransport(token);
-  const tools = new GitHubRepositoryTools(transport, policy);
+  const lane = laneBackend("a11y", policy);
+  const tools = new GitHubRepositoryTools(lane.backend, lane.policy);
   const reader: AccessibilityReader = new GitHubAccessibilityReader(
     tools.reader,
-    transport,
-    policy,
+    lane.backend,
+    lane.policy,
   );
   return {
     github: { reader, writer: tools.writer },
     crawler: new AxeCrawlerClient(new FetchCrawlTransport(process.env.AXE_AUDIT_URL?.trim())),
-    repositories: policy.repositories,
-    baseBranch: policy.baseBranch,
+    repositories: lane.policy.repositories,
+    baseBranch: lane.policy.baseBranch,
+    ...(lane.sandbox === undefined ? {} : { sandbox: lane.sandbox }),
   };
 }
 
@@ -567,6 +676,82 @@ function buildBillsDeps(): BillsFlowDeps {
 
 const bills = buildBillsDeps();
 
+/**
+ * HR help lane wiring: with KNOWLEDGE_API_URL, KNOWLEDGE_SERVICE_TOKEN and
+ * HR_KB_TENANT set, answers ground on the tenant's `hr:policy` knowledge
+ * partition through the platform API's hybrid retrieval (pgvector plus the
+ * Postgres lexical arm, fused). The fallback for an unreachable service is
+ * the on-disk company handbook (`fixtures/company/hr_policy` — the very
+ * files the seeder ingests), so an outage never answers from the golden
+ * fixture corpus, which quotes different numbers. Without the trio the lane
+ * keeps the fixture retriever, so the flow, its citations and its tests run
+ * exactly as before. Seed the partition with `scripts/hr-kb-seed.py`.
+ *
+ * `MASTRA_RAG_PILOT=true` opts the lane into the Phase 4 experiment: the
+ * baseline above becomes the fallback and a Mastra-owned pgvector index
+ * (`hr_policy_pilot`, never the Python-owned `kb_chunks`) answers first,
+ * embedded through the pinned `EMBEDDING_*`/`MODEL_*` block. Needs
+ * `DATABASE_URL` plus an embedding key; without either the pilot stays off
+ * and the chain below is returned untouched. Any pilot failure degrades to
+ * the baseline, so the lane never goes dark because the experiment did.
+ */
+function buildHrHelpDeps(): HrHelpFlowDeps {
+  const registry = new MemoryHrHelpRegistry();
+  const baseline = buildHrHelpBaselineRetriever();
+  if (process.env.MASTRA_RAG_PILOT === "true") {
+    const store = knowledgeVectorStore();
+    const embedding = readEmbeddingSettings();
+    if (store !== undefined && embedding !== undefined) {
+      console.info(
+        "[mastra] hrHelpFlow RAG pilot ON: cosine top-k over the Mastra-owned"
+          + " hr_policy_pilot index, falling back to the baseline retriever.",
+      );
+      return {
+        retriever: new MastraRagHrPolicyRetriever({ store, embedding, fallback: baseline }),
+        registry,
+      };
+    }
+    console.warn(
+      "[mastra] MASTRA_RAG_PILOT=true but DATABASE_URL and/or the EMBEDDING_*/MODEL_*"
+        + " block is missing; hrHelpFlow keeps the baseline retriever.",
+    );
+  }
+  return { retriever: baseline, registry };
+}
+
+/** The non-pilot HR retrieval chain: platform hybrid, else on-disk fixtures. */
+function buildHrHelpBaselineRetriever(): HrPolicyRetriever {
+  const baseUrl = process.env.KNOWLEDGE_API_URL?.trim();
+  const serviceToken = process.env.KNOWLEDGE_SERVICE_TOKEN?.trim();
+  const tenantId = process.env.HR_KB_TENANT?.trim();
+  const present = [baseUrl, serviceToken, tenantId].filter(
+    (value) => value !== undefined && value !== "",
+  ).length;
+  if (present === 3) {
+    console.info(
+      `[mastra] hrHelpFlow grounds answers on the ${HR_POLICY_DOMAIN} knowledge partition`
+        + ` (tenant ${tenantId as string}).`,
+    );
+    return new HttpHrPolicyRetriever({
+      baseUrl: baseUrl as string,
+      serviceToken: serviceToken as string,
+      tenantId: tenantId as string,
+      fallback: new MemoryHrPolicyRetriever({
+        directory: fixtureFile("company/hr_policy"),
+      }),
+    });
+  }
+  if (present > 0) {
+    console.warn(
+      "[mastra] KNOWLEDGE_API_URL, KNOWLEDGE_SERVICE_TOKEN and HR_KB_TENANT must all be"
+        + " set together; hrHelpFlow keeps the on-disk policy corpus.",
+    );
+  }
+  return new MemoryHrPolicyRetriever();
+}
+
+const hrHelp = buildHrHelpDeps();
+
 export const mastra = createAllRounderMastra({
   ...(coding === undefined ? {} : { coding }),
   ...(review === undefined ? {} : { review }),
@@ -576,4 +761,5 @@ export const mastra = createAllRounderMastra({
   ...(accessibility === undefined ? {} : { accessibility }),
   msp,
   bills,
+  hrHelp,
 });

@@ -18,6 +18,7 @@ from .definitions import WORKFLOW_DEFINITIONS
 from .models import (
     TERMINAL_RUN_STATUSES,
     WorkflowRun,
+    run_pills,
     run_snapshot,
     run_summary,
     run_topology,
@@ -158,6 +159,20 @@ def build_runs_router(
         except KeyError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Resource not found") from None
         return run_topology(run, WORKFLOW_DEFINITIONS.get(run.workflow))
+
+    @router.get("/{run_id}/pills")
+    async def get_run_pills(
+        run_id: str,
+        identity: Principal = Depends(principal),
+    ) -> dict[str, object]:
+        # Data-pill catalog (N3): the earlier outputs a downstream field can
+        # reference as ``{{ref}}`` tokens, picker-facing and read-only.
+        require_role(identity, "viewer", "approver", "agent", "admin")
+        try:
+            run = await service.get(run_id, identity.tenant_id)
+        except KeyError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Resource not found") from None
+        return run_pills(run)
 
     @router.get("/{run_id}/events")
     async def run_events(

@@ -1,3 +1,5 @@
+import { DEFAULT_BOARD_SORT, sanitizeBoardSort, type BoardSort } from "./board";
+
 const STORAGE_KEY = "allrounder.jira.prefs";
 const PROJECT_PATTERN = /^[A-Z][A-Z0-9_]{0,19}$/;
 
@@ -70,15 +72,17 @@ export const COMMAND_MAX_LENGTH = 120;
 export type RecentTicket = { key: string; summary: string };
 
 /**
- * Local-only console preferences (theme, refresh cadence, notifications, and
- * the history rail). They ride a separate storage key from the Jira prefs so
- * the sign-in cache keeps its existing shape.
+ * Local-only console preferences (theme, refresh cadence, notifications, the
+ * board sort, and the history rail). They ride a separate storage key from
+ * the Jira prefs so the sign-in cache keeps its existing shape.
  */
 export type UiPrefs = {
   theme: "light" | "dark";
   autoRefreshSec: number;
   badge: boolean;
   confirmReject: boolean;
+  /** Board card ordering; the dashboard's filter row writes it back (U9). */
+  boardSort: BoardSort;
   recentTickets: RecentTicket[];
   /** Recent command-bar queries (most recent first), newest wins on dedupe. */
   recentCommands: string[];
@@ -92,6 +96,7 @@ export function emptyUiPrefs(): UiPrefs {
     autoRefreshSec: 0,
     badge: true,
     confirmReject: true,
+    boardSort: DEFAULT_BOARD_SORT,
     recentTickets: [],
     recentCommands: [],
     sidebarCollapsed: false,
@@ -151,6 +156,7 @@ export function loadUiPrefs(storage: Pick<Storage, "getItem">): UiPrefs {
       autoRefreshSec: sanitizeRefresh(parsed.autoRefreshSec),
       badge: parsed.badge !== false,
       confirmReject: parsed.confirmReject !== false,
+      boardSort: sanitizeBoardSort(parsed.boardSort),
       recentTickets: sanitizeRecent(parsed.recentTickets),
       recentCommands: sanitizeCommands(parsed.recentCommands),
       sidebarCollapsed: parsed.sidebarCollapsed === true,
@@ -166,6 +172,7 @@ export function saveUiPrefs(storage: Pick<Storage, "setItem">, prefs: UiPrefs): 
     autoRefreshSec: sanitizeRefresh(prefs.autoRefreshSec),
     badge: prefs.badge !== false,
     confirmReject: prefs.confirmReject !== false,
+    boardSort: sanitizeBoardSort(prefs.boardSort),
     recentTickets: sanitizeRecent(prefs.recentTickets),
     recentCommands: sanitizeCommands(prefs.recentCommands),
     sidebarCollapsed: prefs.sidebarCollapsed === true,
