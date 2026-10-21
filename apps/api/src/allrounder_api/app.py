@@ -479,7 +479,8 @@ def create_app(
 
 
 def _schedule_run_sweeper(app: FastAPI, service: RunService, interval_seconds: int) -> None:
-    """Background sweeper: time out over-budget passes, unblock stale locks."""
+    """Background sweeper: time out passes stalled past the heartbeat budget,
+    unblock runs whose lock has expired."""
 
     async def sweep_loop() -> None:
         while True:

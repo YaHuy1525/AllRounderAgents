@@ -187,6 +187,10 @@ class WorkflowRun:
     cancel_reason: str | None = None
     side_effects: dict[str, dict[str, object]] = field(default_factory=dict)
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    # Last-progress clock: stamped at every serving-plane step transition
+    # (start, pass launch, suspension, decision, terminal). The sweep's
+    # deadline is measured from here, and ``run_snapshot`` publishes it as
+    # ``heartbeatAt`` — the console's single liveness surface.
     heartbeat_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     finished_at: datetime | None = None
     # Actual spend for this run in micro-USD, derived from real token usage on
@@ -267,6 +271,14 @@ class WorkflowRun:
         input_value = raw.get("input")
         finished = raw.get("finishedAt")
         pending_pass = raw.get("pendingPass")
+        started_at = _parse_datetime(raw.get("startedAt"))
+        # Additive-serialization discipline: a record written before
+        # ``heartbeatAt`` existed has made no progress since it started, so
+        # its last-progress clock falls back to ``started_at`` (the sweep's
+        # original reference point). Defaulting to "now" instead would make
+        # such a record permanently immune to the timeout sweep.
+        heartbeat_raw = raw.get("heartbeatAt")
+        heartbeat_at = started_at if heartbeat_raw is None else _parse_datetime(heartbeat_raw)
         return cls(
             run_id=str(raw["runId"]),
             tenant_id=str(raw["tenantId"]),
@@ -287,8 +299,8 @@ class WorkflowRun:
             outcome=str(raw["outcome"]) if raw.get("outcome") is not None else None,
             cancel_reason=str(raw["cancelReason"]) if raw.get("cancelReason") is not None else None,
             side_effects=side_effects if isinstance(side_effects, dict) else {},
-            started_at=_parse_datetime(raw.get("startedAt")),
-            heartbeat_at=_parse_datetime(raw.get("heartbeatAt")),
+            started_at=started_at,
+            heartbeat_at=heartbeat_at,
             finished_at=_parse_datetime(finished) if finished else None,
             cost_usd_micro=int(raw.get("costUsdMicro", 0) or 0),
             pending_pass=pending_pass if isinstance(pending_pass, dict) else None,

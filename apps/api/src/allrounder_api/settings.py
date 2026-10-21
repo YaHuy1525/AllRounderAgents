@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     runs_max_concurrent_model_calls: int = Field(default=4, ge=1, le=20)
     runs_lock_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     runs_receipt_ttl_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    # Sweep budget for a queued/running run measured from its last
+    # serving-plane progress event (``heartbeat_at``), never from start time:
+    # a run advancing through steps is not reaped for total elapsed time.
     runs_max_seconds: int = Field(default=1_800, ge=60, le=86_400)
     runs_sweep_interval_seconds: int = Field(default=0, ge=0, le=86_400)
     runs_registry_ttl_seconds: int = Field(default=604_800, ge=3_600, le=2_592_000)

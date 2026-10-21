@@ -106,6 +106,10 @@ class RunMetrics(Protocol):
 class RunServiceConfig:
     lock_ttl_seconds: int = 900
     receipt_ttl_seconds: int = 3_600
+    # Sweep budget measured from the run's last serving-plane progress event
+    # (``heartbeat_at``), not from ``started_at``: a run that keeps advancing
+    # through steps is never reaped for total elapsed time, while a run that
+    # stops advancing is reaped within one sweep interval of this budget.
     max_run_seconds: int = 1_800
     max_regenerations_per_step: int = 1
 
@@ -632,6 +636,13 @@ class RunService:
             run.pending_pass = record
             run.status = "running"
             run.queue_position = None
+            # Step transition in the serving plane: control is about to pass
+            # to the computed step, so this is the moment liveness is stamped.
+            # A pass in flight is bounded by the Mastra client/server timeout
+            # (settings cap 600s) and every pass ends in a heartbeat-stamped
+            # outcome, so measuring the sweep from here keeps a healthy — even
+            # a long — run immune while a hung one stays bounded.
+            run.heartbeat_at = self._clock()
             await self._save(run)
             return True
         except BaseException:
@@ -968,18 +979,23 @@ class RunService:
                 )
 
     async def sweep_expired(self, now: datetime | None = None) -> list[str]:
-        """Timeout over-budget passes and unblock runs whose lock has expired.
+        """Timeout stalled passes and unblock runs whose lock has expired.
 
-        Only runs actively consuming compute (queued/running) are timed out;
-        runs parked on a human or a lock keep their receipts and are never
+        Only runs actively consuming compute (queued/running) are timed out,
+        and the deadline is measured from ``heartbeat_at`` — the last
+        serving-plane progress event (pass launch, step suspension, decision)
+        — never from ``started_at``: a run that keeps advancing through steps
+        is never reaped for total elapsed time, while a run that stops
+        advancing is bounded within one sweep interval of the budget. Runs
+        parked on a human or a lock keep their receipts and are never
         auto-approved.
         """
         moment = now or self._clock()
         affected: list[str] = []
         for active in await self._registry.list_active():
             if active.status in ("queued", "running"):
-                age = (moment - active.started_at).total_seconds()
-                if age > self._config.max_run_seconds:
+                stalled = (moment - active.heartbeat_at).total_seconds()
+                if stalled > self._config.max_run_seconds:
                     await self.cancel(
                         run_id=active.run_id,
                         tenant_id=active.tenant_id,
