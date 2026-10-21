@@ -106,6 +106,8 @@ function makeSummary(overrides: Partial<RunSummary> = {}): RunSummary {
     ticketKey: "ENG-1",
     status: "awaiting_human",
     queuePosition: null,
+    waitingOn: null,
+    heldSlots: [],
     currentStepId: "review-options",
     stepCount: 4,
     stepsDone: 1,

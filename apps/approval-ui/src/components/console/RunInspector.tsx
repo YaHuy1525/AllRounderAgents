@@ -154,6 +154,8 @@ function runSummaryOf(run: RunDetail): RunSummary {
     ticketKey: run.ticketKey,
     status: run.status,
     queuePosition: run.queuePosition,
+    waitingOn: run.waitingOn,
+    heldSlots: run.heldSlots,
     currentStepId: run.currentStepId,
     stepCount: run.stepCount,
     stepsDone: run.stepsDone,

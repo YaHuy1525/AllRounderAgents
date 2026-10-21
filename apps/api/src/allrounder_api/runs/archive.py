@@ -143,6 +143,11 @@ def _archive_summary(record: Mapping[str, Any]) -> dict[str, object]:
         "ticketKey": str(record.get("ticket_key", "")),
         "status": str(record.get("status", "")),
         "queuePosition": None,
+        # Archived rows are terminal, so they never wait on or hold a
+        # ceiling; the keys match ``run_summary`` so merged list rows keep
+        # one shape.
+        "waitingOn": None,
+        "heldSlots": [],
         "currentStepId": None,
         "stepCount": len(steps),
         "stepsDone": done,

@@ -20,6 +20,8 @@ function makeSummary(overrides: Partial<RunSummary> = {}): RunSummary {
     ticketKey: "PO-884",
     status: "awaiting_human",
     queuePosition: null,
+    waitingOn: null,
+    heldSlots: [],
     currentStepId: "chase",
     stepCount: 4,
     stepsDone: 2,

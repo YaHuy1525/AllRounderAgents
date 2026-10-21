@@ -64,6 +64,15 @@ export type RunSummary = {
   ticketKey: string;
   status: RunStatus;
   queuePosition: number | null;
+  /**
+   * Which ceiling a ``queued`` run waits on ("run" | "apply" | "model"),
+   * sourced server-side from the run's recorded pass; null when the run
+   * carries no pass record. Names the actual queue so the console can say
+   * more than "waiting for a run slot".
+   */
+  waitingOn: string | null;
+  /** Ceiling slots the recorded pass has already been granted. */
+  heldSlots: string[];
   currentStepId: string | null;
   stepCount: number;
   stepsDone: number;
@@ -343,6 +352,11 @@ function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/** Ceiling kind names: keep the strings, drop anything not a string. */
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
 function asNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -451,6 +465,8 @@ export function parseRunSnapshot(value: unknown): RunDetail | null {
     ticketKey,
     status: record.status,
     queuePosition: asNumber(record.queuePosition),
+    waitingOn: asString(record.waitingOn),
+    heldSlots: asStringList(record.heldSlots),
     currentStepId: asString(record.currentStepId),
     stepCount,
     stepsDone,
@@ -705,8 +721,12 @@ export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
     }
     case "run.queued": {
       const position = asNumber(event.queuePosition);
+      const waiting = asString(event.waitingOn);
       next.status = "queued";
       next.queuePosition = position;
+      // The server names the ceiling this run waits on; a missing key
+      // (pre-fix producer) keeps the previous value rather than guessing.
+      if (waiting !== null) next.waitingOn = waiting;
       break;
     }
     case "run.status": {
@@ -716,7 +736,11 @@ export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
       if (reason !== null) next.cancelReason = reason;
       const error = asString(event.error);
       if (error !== null) next.outcome = error;
-      if (isRunTerminal(next.status)) next.queuePosition = null;
+      if (isRunTerminal(next.status)) {
+        next.queuePosition = null;
+        next.waitingOn = null;
+        next.heldSlots = [];
+      }
       break;
     }
     case "run.locked": {
@@ -748,6 +772,10 @@ export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
       const suspendedIndex = run.steps.find((item) => item.stepId === stepId)?.index ?? -1;
       next.status = blocked ? "blocked" : "awaiting_human";
       next.queuePosition = null;
+      // The suspended pass has released its ceiling grants (and their queue
+      // entry), so the run waits on nothing until a decision launches a pass.
+      next.waitingOn = null;
+      next.heldSlots = [];
       next.currentStepId = stepId;
       const target = asString(event.target);
       if (target !== null) {

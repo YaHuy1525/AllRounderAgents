@@ -44,6 +44,12 @@ ACTION_BAR_ACTIONS = ("proceed", "edit", "regenerate", "back", "abort")
 # therefore speak one scale; the YAML is not loaded at approval time.
 RISK_BANDS = (10, 55, 90)
 
+# Named anchors for the three bands, so a shipped definition annotates
+# ``risk=RISK_IRREVERSIBLE`` instead of a magic number (``RISK_BANDS``
+# membership — and therefore these names — is what ``__post_init__``
+# validates against).
+RISK_BENIGN, RISK_SINGLE, RISK_IRREVERSIBLE = RISK_BANDS
+
 
 @dataclass(frozen=True)
 class FieldDefinition:
@@ -302,7 +308,12 @@ class WorkflowRun:
         # — a corrupt ``startedAt`` falling back to ``now`` beside a valid
         # old heartbeat must not revive heartbeat-before-start.
         heartbeat_at = _parse_datetime_or(raw.get("heartbeatAt"), started_at)
-        if heartbeat_at < started_at:
+        # Compare aware-to-aware: a corrupt record can pair a naive
+        # ``heartbeatAt`` (an ISO string with no offset) with an aware
+        # ``startedAt`` or the reverse, and the bare ``<`` would raise
+        # ``TypeError`` on every later read of that run. A naive value is
+        # read as UTC so the clamp degrades instead of crashing.
+        if _as_aware(heartbeat_at) < _as_aware(started_at):
             heartbeat_at = started_at
         return cls(
             run_id=str(raw["runId"]),
@@ -332,6 +343,23 @@ class WorkflowRun:
         )
 
 
+def _queue_state(run: WorkflowRun) -> tuple[str | None, list[str]]:
+    """What a ``queued`` run is waiting on and the slot kinds it already
+    holds, both sourced from ``pending_pass`` (``None``/empty when the run
+    carries no recorded pass). Additive read-model keys for
+    ``run_snapshot``/``run_summary`` so the console can name the actual
+    ceiling instead of claiming "a run slot" for every queue."""
+    pending = run.pending_pass
+    if not isinstance(pending, dict):
+        return None, []
+    waiting = pending.get("waitingOn")
+    held = pending.get("slots")
+    return (
+        str(waiting) if isinstance(waiting, str) else None,
+        [str(kind) for kind in held] if isinstance(held, list) else [],
+    )
+
+
 def run_snapshot(run: WorkflowRun) -> dict[str, object]:
     """Shared detail snapshot for the REST surface and enriched SSE events.
 
@@ -340,12 +368,15 @@ def run_snapshot(run: WorkflowRun) -> dict[str, object]:
     """
 
     current = run.current_step()
+    waiting_on, held_slots = _queue_state(run)
     return {
         "runId": run.run_id,
         "workflow": run.workflow,
         "ticketKey": run.ticket_key,
         "status": run.status,
         "queuePosition": run.queue_position,
+        "waitingOn": waiting_on,
+        "heldSlots": held_slots,
         "currentStepId": current.step_id if current is not None else None,
         "stepCount": len(run.steps),
         "stepsDone": sum(1 for step in run.steps if step.state == "done"),
@@ -369,12 +400,15 @@ def run_summary(run: WorkflowRun) -> dict[str, object]:
     (live active lists, ticket history, and the archive ∪ Redis merge)."""
 
     current = run.current_step()
+    waiting_on, held_slots = _queue_state(run)
     return {
         "runId": run.run_id,
         "workflow": run.workflow,
         "ticketKey": run.ticket_key,
         "status": run.status,
         "queuePosition": run.queue_position,
+        "waitingOn": waiting_on,
+        "heldSlots": held_slots,
         "currentStepId": current.step_id if current is not None else None,
         "stepCount": len(run.steps),
         "stepsDone": sum(1 for step in run.steps if step.state == "done"),
@@ -855,3 +889,9 @@ def _parse_datetime_or(value: object, fallback: datetime) -> datetime:
         except ValueError:
             pass
     return fallback
+
+
+def _as_aware(value: datetime) -> datetime:
+    """Attach UTC to a naive datetime so mixed records compare (ISO strings
+    with and without an offset both parse to valid ``datetime`` objects)."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)

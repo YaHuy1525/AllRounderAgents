@@ -58,6 +58,8 @@ function makeRun(overrides: Partial<RunDetail> = {}): RunDetail {
     ticketKey: "ENG-101",
     status: "running",
     queuePosition: null,
+    waitingOn: null,
+    heldSlots: [],
     currentStepId: "select-pr",
     stepCount: 4,
     stepsDone: 0,
@@ -129,6 +131,8 @@ function makeSummary(runId: string, startedAt: string): RunSummary {
     ticketKey: "ENG-101",
     status: "completed",
     queuePosition: null,
+    waitingOn: null,
+    heldSlots: [],
     currentStepId: null,
     stepCount: 4,
     stepsDone: 4,
@@ -210,6 +214,51 @@ describe("applyRunEvent", () => {
     const next = applyRunEvent(makeRun(), makeEvent({ type: "run.queued", queuePosition: 2 }));
     expect(next.status).toBe("queued");
     expect(next.queuePosition).toBe(2);
+  });
+
+  it("keeps the ceiling kind a queued event names", () => {
+    const next = applyRunEvent(
+      makeRun(),
+      makeEvent({ type: "run.queued", queuePosition: 2, waitingOn: "model" }),
+    );
+    expect(next.status).toBe("queued");
+    expect(next.waitingOn).toBe("model");
+  });
+
+  it("keeps the previous ceiling kind when the event omits the key", () => {
+    // A pre-fix producer sends the position only: the kind the run already
+    // reported stays rather than degrading to a guess.
+    const queued = makeRun({ status: "queued", queuePosition: 1, waitingOn: "apply", heldSlots: ["run"] });
+    const next = applyRunEvent(queued, makeEvent({ type: "run.queued", queuePosition: 2 }));
+    expect(next.queuePosition).toBe(2);
+    expect(next.waitingOn).toBe("apply");
+    expect(next.heldSlots).toEqual(["run"]);
+  });
+
+  it("clears the queue state on a terminal status and on a step suspend", () => {
+    const held = makeRun({
+      status: "queued",
+      queuePosition: 1,
+      waitingOn: "model",
+      heldSlots: ["run", "model"],
+    });
+
+    const terminal = applyRunEvent(held, makeEvent({ type: "run.status", status: "completed" }));
+    expect(terminal.queuePosition).toBeNull();
+    expect(terminal.waitingOn).toBeNull();
+    expect(terminal.heldSlots).toEqual([]);
+
+    const suspended = applyRunEvent(
+      held,
+      makeEvent({ type: "run.suspended", stepId: "ai-review", stepState: "awaiting_human" }),
+    );
+    expect(suspended.status).toBe("awaiting_human");
+    expect(suspended.queuePosition).toBeNull();
+    expect(suspended.waitingOn).toBeNull();
+    expect(suspended.heldSlots).toEqual([]);
+    // The source run is never mutated.
+    expect(held.waitingOn).toBe("model");
+    expect(held.heldSlots).toEqual(["run", "model"]);
   });
 
   it("applies terminal statuses without touching the source run", () => {
@@ -392,6 +441,27 @@ describe("run snapshots embedded on transition events", () => {
     expect(parseRunSnapshot({ ...base, status: "paused" })).toBeNull();
     expect(parseRunSnapshot({ ...base, steps: "nope" })).toBeNull();
     expect(parseRunSnapshot({ ...base, steps: [{ stepId: "x" }] })).toBeNull();
+  });
+
+  it("sanitizes the queue state a snapshot carries", () => {
+    const parsed = parseRunSnapshot({
+      ...makeRun({ status: "queued", queuePosition: 2 }),
+      waitingOn: "apply",
+      heldSlots: ["run", "apply", 7, null],
+    });
+    expect(parsed?.waitingOn).toBe("apply");
+    // Server content only ever lands as strings.
+    expect(parsed?.heldSlots).toEqual(["run", "apply"]);
+
+    // A pre-fix payload without either key degrades to the neutral shape
+    // rather than leaving the field undefined on a validated type.
+    const legacy = parseRunSnapshot({
+      ...makeRun({ status: "queued", queuePosition: 2 }),
+      waitingOn: undefined,
+      heldSlots: undefined,
+    });
+    expect(legacy?.waitingOn).toBeNull();
+    expect(legacy?.heldSlots).toEqual([]);
   });
 });
 

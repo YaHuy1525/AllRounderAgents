@@ -402,6 +402,8 @@ describe("case header model", () => {
       status: "awaiting_human",
       attempt: 2,
       queuePosition: null,
+      waitingOn: null,
+      heldSlots: [],
       currentStepId: "select-pr",
       stepCount: 4,
       stepsDone: 1,
@@ -558,6 +560,47 @@ describe("case header model", () => {
       tone: "warn",
       stepId: "select-pr",
       source: "run:run-1:select-pr",
+    });
+  });
+
+  it("names the ceiling a queued run actually waits on", () => {
+    const queuedNext = (overrides: Partial<CaseHeaderRun>) =>
+      caseHeaderModel(
+        headerInput({ lane: "review", run: headerRun({ status: "queued", ...overrides }) }),
+      ).next;
+
+    expect(queuedNext({ queuePosition: 1, waitingOn: "model" })).toEqual({
+      label: "Waiting for a model-call slot",
+      detail: "Queue position 1",
+      tone: "neutral",
+      stepId: "select-pr",
+      source: "run:run-1:queue",
+    });
+    expect(queuedNext({ queuePosition: 1, waitingOn: "apply" })).toEqual({
+      label: "Waiting for an apply slot",
+      detail: "Queue position 1",
+      tone: "neutral",
+      stepId: "select-pr",
+      source: "run:run-1:queue",
+    });
+    // The server's own run kind, and anything unknown, keeps the run-slot word.
+    expect(queuedNext({ queuePosition: 1, waitingOn: "run" }).label).toBe("Waiting for a run slot");
+    expect(queuedNext({ queuePosition: 2, waitingOn: "ghost" }).label).toBe("Waiting for a run slot");
+  });
+
+  it("keeps the historical wording when the server recorded no ceiling", () => {
+    const model = caseHeaderModel(
+      headerInput({
+        lane: "review",
+        run: headerRun({ status: "queued", queuePosition: null, waitingOn: null, heldSlots: [] }),
+      }),
+    );
+    expect(model.next).toEqual({
+      label: "Waiting for a run slot",
+      detail: "Queued behind other runs on a run slot",
+      tone: "neutral",
+      stepId: "select-pr",
+      source: "run:run-1:queue",
     });
   });
 

@@ -621,6 +621,11 @@ export type CaseHeaderRun = {
   status: string;
   attempt: number;
   queuePosition: number | null;
+  /** Ceiling kind a queued run waits on ("run" | "apply" | "model"); null
+   *  when the server recorded no pass. */
+  waitingOn: string | null;
+  /** Ceiling slots the recorded pass already holds. */
+  heldSlots: string[];
   currentStepId: string | null;
   stepCount: number;
   stepsDone: number;
@@ -903,6 +908,14 @@ function latestArtifactSummary(run: CaseHeaderRun | null): string | null {
   return null;
 }
 
+/** Name the ceiling a queued run actually waits on; the server records the
+ *  kind on the run's pass, an absent kind stays the historical "run slot". */
+function ceilingPhrase(run: CaseHeaderRun): string {
+  if (run.waitingOn === "apply") return "an apply slot";
+  if (run.waitingOn === "model") return "a model-call slot";
+  return "a run slot";
+}
+
 function runStatePhrase(run: CaseHeaderRun): string {
   const title = runStepTitle(run, run.currentStepId);
   switch (run.status) {
@@ -919,7 +932,9 @@ function runStatePhrase(run: CaseHeaderRun): string {
     case "running":
       return `Working on ${title}`;
     case "queued":
-      return run.queuePosition === null ? "Waiting for a run slot" : `Queued at position ${run.queuePosition}`;
+      return run.queuePosition === null
+        ? `Waiting for ${ceilingPhrase(run)}`
+        : `Queued at position ${run.queuePosition}`;
     default:
       return `Status ${run.status}`;
   }
@@ -1181,10 +1196,10 @@ export function caseHeaderModel(input: CaseHeaderInput): CaseHeaderModel {
         break;
       case "queued":
         next = {
-          label: "Waiting for a run slot",
+          label: `Waiting for ${ceilingPhrase(run)}`,
           detail:
             run.queuePosition === null
-              ? "Queued behind other runs"
+              ? `Queued behind other runs on ${ceilingPhrase(run)}`
               : `Queue position ${run.queuePosition}`,
           tone: "neutral",
           stepId,
