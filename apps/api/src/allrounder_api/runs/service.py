@@ -106,10 +106,12 @@ class RunMetrics(Protocol):
 class RunServiceConfig:
     lock_ttl_seconds: int = 900
     receipt_ttl_seconds: int = 3_600
-    # Sweep budget measured from the run's last serving-plane progress event
-    # (``heartbeat_at``), not from ``started_at``: a run that keeps advancing
-    # through steps is never reaped for total elapsed time, while a run that
-    # stops advancing is reaped within one sweep interval of this budget.
+    # Sweep budget measured from a running run's last serving-plane progress
+    # event (``heartbeat_at``), not from ``started_at``: a run that keeps
+    # advancing through steps is never reaped for total elapsed time, while
+    # a run that stops advancing is reaped within one sweep interval of this
+    # budget. Queued runs are exempt — waiting on a ceiling FIFO queue is
+    # not being stuck (see ``sweep_expired``).
     max_run_seconds: int = 1_800
     max_regenerations_per_step: int = 1
 
@@ -981,19 +983,31 @@ class RunService:
     async def sweep_expired(self, now: datetime | None = None) -> list[str]:
         """Timeout stalled passes and unblock runs whose lock has expired.
 
-        Only runs actively consuming compute (queued/running) are timed out,
+        Only runs actively consuming compute (``running``) are timed out,
         and the deadline is measured from ``heartbeat_at`` — the last
-        serving-plane progress event (pass launch, step suspension, decision)
-        — never from ``started_at``: a run that keeps advancing through steps
-        is never reaped for total elapsed time, while a run that stops
-        advancing is bounded within one sweep interval of the budget. Runs
-        parked on a human or a lock keep their receipts and are never
-        auto-approved.
+        serving-plane progress event (pass launch, step suspension,
+        decision) — never from ``started_at``: a run that keeps advancing
+        through steps is never reaped for total elapsed time, while a run
+        that stops advancing is bounded within one sweep interval of the
+        budget. Parked runs (a human, a lock) keep their receipts and are
+        never auto-approved; ``queued`` runs wait on a ceiling FIFO queue
+        and are exempt (see the branch below).
         """
         moment = now or self._clock()
         affected: list[str] = []
         for active in await self._registry.list_active():
-            if active.status in ("queued", "running"):
+            if active.status == "queued":
+                # Exempt from the idle deadline: waiting for capacity is not
+                # being stuck. The ceilings contract (runs/ceilings.py) is
+                # binding — "over-cap work is never dropped — it waits in
+                # FIFO order and reports its position" — and holding a
+                # granted ``run`` slot while queued on ``apply``/``model``
+                # is the normal post-Task-1 state. A run stranded in a
+                # correctly FIFO queue means a leaked slot: a bug to fix at
+                # the release path, not something this sweeper should paper
+                # over by reaping honest waiters.
+                continue
+            if active.status == "running":
                 stalled = (moment - active.heartbeat_at).total_seconds()
                 if stalled > self._config.max_run_seconds:
                     await self.cancel(

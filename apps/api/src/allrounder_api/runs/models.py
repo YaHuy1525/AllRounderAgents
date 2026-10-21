@@ -272,13 +272,18 @@ class WorkflowRun:
         finished = raw.get("finishedAt")
         pending_pass = raw.get("pendingPass")
         started_at = _parse_datetime(raw.get("startedAt"))
-        # Additive-serialization discipline: a record written before
-        # ``heartbeatAt`` existed has made no progress since it started, so
-        # its last-progress clock falls back to ``started_at`` (the sweep's
-        # original reference point). Defaulting to "now" instead would make
-        # such a record permanently immune to the timeout sweep.
-        heartbeat_raw = raw.get("heartbeatAt")
-        heartbeat_at = started_at if heartbeat_raw is None else _parse_datetime(heartbeat_raw)
+        # Additive-serialization discipline with a fail-closed clock: a
+        # missing or unparseable ``heartbeatAt`` (including the empty
+        # string, which is not ``None``) falls back to ``started_at``, the
+        # sweep's original reference point — never to ``_parse_datetime``'s
+        # read-time ``now``, which would re-stamp a corrupt record on every
+        # read and keep it (and its slots) immune until the registry TTL.
+        # The heartbeat is then clamped so it can never precede ``started_at``
+        # — a corrupt ``startedAt`` falling back to ``now`` beside a valid
+        # old heartbeat must not revive heartbeat-before-start.
+        heartbeat_at = _parse_datetime_or(raw.get("heartbeatAt"), started_at)
+        if heartbeat_at < started_at:
+            heartbeat_at = started_at
         return cls(
             run_id=str(raw["runId"]),
             tenant_id=str(raw["tenantId"]),
@@ -815,3 +820,18 @@ def _parse_datetime(value: object) -> datetime:
         except ValueError:
             pass
     return datetime.now(UTC)
+
+
+def _parse_datetime_or(value: object, fallback: datetime) -> datetime:
+    """Parse an optional timestamp, failing closed to a caller-chosen safe
+    value. Unlike ``_parse_datetime`` the fallback is never read-time
+    ``now``: a missing or corrupt clock field must revive stale-but-bounded,
+    not re-immortalized on every read."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    return fallback
