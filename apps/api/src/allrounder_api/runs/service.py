@@ -487,9 +487,18 @@ class RunService:
         """Risk band stamped on a run-gate approval, from the step's declared
         governance — never re-derived here, and never raising.
 
+        This is a declared *static step band*, not the dispatcher's computed
+        action score: the dispatcher scores each planned action's text at
+        pre-flight (``policy/risk.yaml`` triage/preflight math), while the run
+        plane reads the band the shipped definition declares (or the default
+        rule below). The two share the same scale without ever being
+        reconciled for the same action — that reconciliation is a follow-up.
+
         A step that declares an explicit band (one of ``RISK_BANDS``,
         validated at import time in ``StepDefinition.__post_init__``) uses
-        it verbatim. Otherwise the default rule applies: a side-effecting
+        it verbatim — currently the irreversible, high-blast side effects
+        annotated ``risk=RISK_IRREVERSIBLE`` (90) in ``definitions.py``.
+        Otherwise the default rule applies: a side-effecting
         gate is ``single_risk`` (55) and a pure one ``benign`` (10) — the
         ``policy/risk.yaml`` scores the approval queue sorts on. Anything the
         definition cannot answer leaves the gate unranked (``None``, sorts
@@ -957,13 +966,33 @@ class RunService:
         """Release every kind this run's pass held (or queued on), reverse
         order, then re-drive each promoted run's recorded pass. This is the
         single seam the suspend, completion, failure and cancel/timeout
-        paths share — no exit path may give back only part of the set."""
+        paths share — no exit path may give back only part of the set.
+
+        A failed record save must never strand a promoted run: the slots
+        are already back and the queue entry already removed, so skipping
+        the promotions here would leave the promoted run ``queued`` while
+        holding a granted slot with no queue entry — sweep-exempt forever.
+        The promotions therefore run in a ``finally`` with logging, the
+        same save-with-logging-and-promote-anyway discipline as
+        ``_rollback_partial_grant``, and ``_refresh_queue_positions`` heals
+        any run still caught in that window.
+        """
         had_record = run.pending_pass is not None
         promoted = await self._release_slots(run)
-        if had_record:
-            await self._save(run)
-        for run_id in promoted:
-            await self._promote(run_id)
+        try:
+            if had_record:
+                await self._save(run)
+        except BaseException:
+            # The cleared grant could not be recorded, but the slots are
+            # back, which is what the guaranteed-release constraint asks
+            # for; keep the promotions flowing regardless.
+            self._logger.warning("run_release_record_failed", run_id=run.run_id)
+        finally:
+            for run_id in promoted:
+                try:
+                    await self._promote(run_id)
+                except BaseException:
+                    self._logger.exception("run_promotion_failed", run_id=run_id)
         await self._refresh_queue_positions()
 
     async def _promote(self, run_id: str) -> None:
@@ -1005,6 +1034,14 @@ class RunService:
         )
 
     async def _refresh_queue_positions(self) -> None:
+        """Re-read every queued run's FIFO position — and heal the one state
+        a healthy queue can never contain: ``queued`` with no entry on the
+        kind it waits on. Such a run was granted its slots but never driven
+        (the only producer of that window is a failed save in
+        ``_release_and_promote``), so it would sit holding capacity forever
+        while the sweep exempts queued runs. Re-promote it; ``_promote``
+        re-walks its recorded pass under the run's own lock and is a no-op
+        for a terminal or already-launched run."""
         for active in await self._registry.list_active():
             if active.status != "queued":
                 continue
@@ -1012,6 +1049,9 @@ class RunService:
             waiting = pending.get("waitingOn") if isinstance(pending, dict) else None
             kind = waiting if isinstance(waiting, str) else RUN_SLOT
             position = await self._ceilings.position(active.run_id, kind)
+            if position is None:
+                await self._promote(active.run_id)
+                continue
             if position != active.queue_position:
                 active.queue_position = position
                 await self._save(active)
