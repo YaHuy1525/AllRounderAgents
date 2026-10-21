@@ -3318,6 +3318,28 @@ button[type="submit"]:hover:not(:disabled) { background: var(--primary); filter:
 .dependency-controls input[type="checkbox"] { width: auto; }
 .dependency-controls .exclude-reason { flex: 1 1 260px; }
 .dependency-controls .exclude-reason input { flex: 1; }
+.dependency-controls select:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--radius-sm);
+}
+.dependency-list > li[draggable="true"] { cursor: grab; }
+.dependency-group-card.drag-over { outline: 2px dashed var(--primary); outline-offset: 2px; }
+.dependency-move-status { color: var(--muted); font-size: 11.5px; font-weight: 600; min-height: 1em; }
+.ci-status-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+.ci-status-pending { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn-line); }
+.ci-status-success { color: var(--ok); background: var(--ok-soft); border: 1px solid var(--ok-line); }
+.ci-status-failure { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); }
+.ci-status-neutral { color: var(--muted); background: var(--fill); border: 1px solid var(--line); }
+.ci-status-none { color: var(--muted); background: transparent; border: 1px dashed var(--line); }
 .group-accept, .group-skip { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; }
 .group-accept input, .group-skip input { width: auto; }
 .package-toggle { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }

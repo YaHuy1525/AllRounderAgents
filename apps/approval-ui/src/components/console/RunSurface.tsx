@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import type { DragEvent } from "react";
 
 import type { CaseDocSnapFlag } from "@/lib/cases";
 import type { RunPill } from "@/lib/pills";
@@ -2995,6 +2996,55 @@ export function parseDependencyGroups(
   };
 }
 
+/**
+ * The one move rule behind drag, keyboard, and click: relocate one package
+ * from its group to another, appending it to the target group. A same-group
+ * request or an unknown package returns the *same array reference* so callers
+ * can detect the no-op and skip a state write — the semantics the component's
+ * early returns had before this extraction.
+ */
+export function movePackageBetween(
+  groups: DependencyGroupView[],
+  from: DependencyJump,
+  name: string,
+  to: DependencyJump,
+): DependencyGroupView[] {
+  if (from === to) return groups;
+  const moved = groups
+    .find((group) => group.id === from)
+    ?.packages.find((pkg) => pkg.name === name);
+  if (moved === undefined) return groups;
+  return groups.map((group) => {
+    if (group.id === from) {
+      return { ...group, packages: group.packages.filter((pkg) => pkg.name !== name) };
+    }
+    if (group.id === to) return { ...group, packages: [...group.packages, moved] };
+    return group;
+  });
+}
+
+/** Custom drag payload carrying the source group id alongside the name. */
+export const DEPENDENCY_DRAG_MIME = "text/dependency-group";
+
+export type DependencyDragSource = { name: string; from: DependencyJump };
+
+/**
+ * Validate a dropped payload against the live draft: the source group must
+ * exist and must actually contain the package, so a stray text/plain drop
+ * (or a payload racing an earlier move) can never fabricate a move.
+ */
+export function readDependencyDragSource(
+  name: string | null,
+  sourceId: string | null,
+  groups: DependencyGroupView[],
+): DependencyDragSource | null {
+  const from = dependencyJump(sourceId);
+  if (name === null || name === "" || from === null) return null;
+  const group = groups.find((item) => item.id === from);
+  if (group === undefined || !group.packages.some((pkg) => pkg.name === name)) return null;
+  return { name, from };
+}
+
 /** Step 2 — group cards; move a package between groups or exclude it with a reason. */
 export function DependencyGroupSurface({
   artifact,
@@ -3007,6 +3057,9 @@ export function DependencyGroupSurface({
   draft: DependencyGroupDraft | null;
   onChange: (draft: DependencyGroupDraft) => void;
 }) {
+  const [dragSource, setDragSource] = useState<DependencyDragSource | null>(null);
+  const [dragOverGroup, setDragOverGroup] = useState<DependencyJump | null>(null);
+  const [moveNotice, setMoveNotice] = useState("");
   const parsed = parseDependencyGroups(artifact);
 
   if (parsed === null) {
@@ -3037,21 +3090,57 @@ export function DependencyGroupSurface({
     });
   }
 
+  // The single commit path for all three interaction routes (drag, keyboard
+  // select, click-to-select): one pure move rule, plus a polite announcement
+  // so the result is perceivable without watching the cards.
   function movePackage(fromId: DependencyJump, name: string, toId: DependencyJump): void {
-    if (fromId === toId) return;
-    const moved = value.groups
-      .find((group) => group.id === fromId)
-      ?.packages.find((pkg) => pkg.name === name);
-    if (moved === undefined) return;
-    onChange({
-      groups: value.groups.map((group) => {
-        if (group.id === fromId) {
-          return { ...group, packages: group.packages.filter((pkg) => pkg.name !== name) };
-        }
-        if (group.id === toId) return { ...group, packages: [...group.packages, moved] };
-        return group;
-      }),
-    });
+    const next = movePackageBetween(value.groups, fromId, name, toId);
+    if (next === value.groups) return;
+    onChange({ groups: next });
+    setMoveNotice(`moved ${name} from ${fromId} to ${toId}`);
+  }
+
+  function beginDrag(
+    event: DragEvent<HTMLLIElement>,
+    fromId: DependencyJump,
+    name: string,
+  ): void {
+    if (!editable) return;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", name);
+    event.dataTransfer.setData(DEPENDENCY_DRAG_MIME, fromId);
+    setDragSource({ name, from: fromId });
+  }
+
+  function allowDrop(event: DragEvent<HTMLElement>, targetId: DependencyJump): void {
+    if (!editable || dragSource === null || dragSource.from === targetId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOverGroup(targetId);
+  }
+
+  function leaveDrop(targetId: DependencyJump): void {
+    setDragOverGroup((previous) => (previous === targetId ? null : previous));
+  }
+
+  function finishDrag(): void {
+    setDragSource(null);
+    setDragOverGroup(null);
+  }
+
+  function dropPackage(event: DragEvent<HTMLElement>, targetId: DependencyJump): void {
+    if (!editable) return;
+    event.preventDefault();
+    const source =
+      dragSource ??
+      readDependencyDragSource(
+        event.dataTransfer.getData("text/plain") || null,
+        event.dataTransfer.getData(DEPENDENCY_DRAG_MIME) || null,
+        value.groups,
+      );
+    finishDrag();
+    if (source === null || source.from === targetId) return;
+    movePackage(source.from, source.name, targetId);
   }
 
   return (
@@ -3084,8 +3173,22 @@ export function DependencyGroupSurface({
           </div>
         )}
       </div>
+      <p className="dependency-move-status" role="status" aria-live="polite">
+        {moveNotice}
+      </p>
       {value.groups.map((group) => (
-        <article key={group.id} className={`dependency-group-card group-${group.id}`}>
+        <article
+          key={group.id}
+          className={`dependency-group-card group-${group.id}${
+            dragOverGroup === group.id ? " drag-over" : ""
+          }`}
+          onDragOver={(event) => allowDrop(event, group.id)}
+          onDragLeave={(event) => {
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+            leaveDrop(group.id);
+          }}
+          onDrop={(event) => dropPackage(event, group.id)}
+        >
           <header className="file-card-head">
             <strong>{group.label}</strong>
             <span className="file-count-badge">
@@ -3098,7 +3201,13 @@ export function DependencyGroupSurface({
           ) : (
             <ul className="dependency-list">
               {group.packages.map((pkg) => (
-                <li key={pkg.name} className={pkg.excluded ? "excluded" : ""}>
+                <li
+                  key={pkg.name}
+                  className={pkg.excluded ? "excluded" : ""}
+                  draggable={editable}
+                  onDragStart={(event) => beginDrag(event, group.id, pkg.name)}
+                  onDragEnd={finishDrag}
+                >
                   <div className="dependency-row">
                     <strong>{pkg.name}</strong>
                     <span className="dependency-version-cell">{`${pkg.from} → ${pkg.to}`}</span>
@@ -3129,6 +3238,7 @@ export function DependencyGroupSurface({
                       <select
                         value={group.id}
                         disabled={!editable}
+                        aria-label={`Move ${pkg.name} from ${group.id} to another group`}
                         onChange={(event) =>
                           movePackage(
                             group.id,
@@ -3828,6 +3938,47 @@ export function parseDependencyReceipt(value: unknown): DependencyReceiptView | 
   };
 }
 
+/**
+ * CI states a lane artifact may record (mirrors the programming lane's
+ * `ciStatus` enum). The console never fetches CI itself — the status either
+ * rides in the artifact or the surface says so honestly.
+ */
+export type DependencyCiStatus = "pending" | "success" | "failure" | "neutral";
+
+const CI_STATUSES: readonly DependencyCiStatus[] = [
+  "pending",
+  "success",
+  "failure",
+  "neutral",
+];
+
+export function parseCiStatus(value: unknown): DependencyCiStatus | null {
+  return typeof value === "string" && (CI_STATUSES as readonly string[]).includes(value)
+    ? (value as DependencyCiStatus)
+    : null;
+}
+
+export const CI_STATUS_LABELS: Record<DependencyCiStatus, string> = {
+  pending: "Pending",
+  success: "Success",
+  failure: "Failure",
+  neutral: "Neutral",
+};
+
+export const CI_STATUS_NOT_RECORDED = "CI status not recorded for this run";
+
+/** The row's textContent: a labelled state, or the explicit degradation. */
+export function ciStatusLine(status: DependencyCiStatus | null): string {
+  return status === null ? CI_STATUS_NOT_RECORDED : `CI status: ${CI_STATUS_LABELS[status]}`;
+}
+
+export function CiStatusRow({ artifact }: { artifact: Record<string, unknown> | null }) {
+  const status = artifact === null ? null : parseCiStatus(artifact["ciStatus"]);
+  return (
+    <p className={`ci-status-row ci-status-${status ?? "none"}`}>{ciStatusLine(status)}</p>
+  );
+}
+
 /** Step 5 — PR preview list with CVE callouts; after the writes, the opened PRs. */
 export function DependencyMergeSurface({
   artifact,
@@ -3924,6 +4075,8 @@ export function DependencyMergeSurface({
           ))}
         </>
       )}
+
+      <CiStatusRow artifact={artifact} />
 
       <p className="follow-up-note">
         Opening the bump PRs is the side effect; CI runs on each branch and a human merges them.
