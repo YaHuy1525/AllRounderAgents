@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 
+import { riskBand } from "@/lib/approvalQueue";
 import { integrationAccent, integrationLabel, workflowProviderIndex } from "@/lib/integrations";
 import type { Approval } from "@/lib/models";
 import { DECIDE_HINT } from "@/lib/roles";
@@ -113,23 +114,6 @@ function decisionClass(decision: Approval["decision"]): string {
   return "approval-pending";
 }
 
-/**
- * Risk band labels for the queue's three anchors (policy/risk.yaml scores).
- * A null band means "no declared band" and renders nothing; a value outside
- * the anchors (only an operator-declared 0-100 number can reach here) shows
- * the number itself rather than a misleading label.
- */
-const RISK_BAND_LABELS: Readonly<Record<number, { label: string; className: string }>> = {
-  10: { label: "Low", className: "risk-low" },
-  55: { label: "Medium", className: "risk-medium" },
-  90: { label: "High", className: "risk-high" },
-};
-
-function riskBand(risk: number | null): { label: string; className: string } | null {
-  if (risk === null) return null;
-  return RISK_BAND_LABELS[risk] ?? { label: `Risk ${risk}`, className: "risk-medium" };
-}
-
 function decisionLabel(decision: Approval["decision"]): string {
   if (decision === null) return "Awaiting decision";
   return decision.charAt(0).toUpperCase() + decision.slice(1);
@@ -210,7 +194,7 @@ export function ApprovalsView({
                   {(() => {
                     const band = riskBand(approval.risk);
                     return band === null ? null : (
-                      <span className={`approval-risk ${band.className}`}>
+                      <span className={band.className}>
                         <IconShield />
                         {band.label}
                       </span>

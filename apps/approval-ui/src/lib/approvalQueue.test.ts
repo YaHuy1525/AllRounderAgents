@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { queueOrder } from "./approvalQueue";
+import { queueOrder, riskBand } from "./approvalQueue";
 import type { Approval } from "./models";
 
 /** Builds one approval; only risk and id matter for the queue rule. */
@@ -50,5 +50,27 @@ describe("approval queue order", () => {
     const input = [gate("low", 10), gate("high", 90)];
     queueOrder(input);
     expect(ids(input)).toEqual(["low", "high"]);
+  });
+});
+
+describe("approval risk chip", () => {
+  it("renders nothing for an unranked gate", () => {
+    expect(riskBand(null)).toBeNull();
+  });
+
+  it("colours only the three anchors 10/55/90", () => {
+    expect(riskBand(10)).toEqual({ label: "Low", className: "approval-risk risk-low" });
+    expect(riskBand(55)).toEqual({ label: "Medium", className: "approval-risk risk-medium" });
+    expect(riskBand(90)).toEqual({ label: "High", className: "approval-risk risk-high" });
+  });
+
+  it("keeps a non-anchor band neutral so colour cannot contradict its number", () => {
+    // An operator may declare any 0-100 band; only the anchors get a chip
+    // colour, so 100 shows the honest number in the plain pill.
+    expect(riskBand(100)).toEqual({ label: "Risk 100", className: "approval-risk" });
+    for (const band of [0, 11, 50, 89, 100]) {
+      expect(riskBand(band)?.className).toBe("approval-risk");
+      expect(riskBand(band)?.label).toBe(`Risk ${band}`);
+    }
   });
 });
