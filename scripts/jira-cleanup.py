@@ -17,7 +17,6 @@ import argparse
 import sys
 
 import httpx
-
 from allrounder_api.jira import HttpJiraTransport
 from allrounder_api.settings import Settings
 

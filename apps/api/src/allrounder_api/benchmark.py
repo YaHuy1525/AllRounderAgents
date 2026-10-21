@@ -131,7 +131,7 @@ def _blank_step(step_id: str, index: int, title: str) -> dict[str, Any]:
     }
 
 
-def _build_lane(workflow: str, runs: Sequence[WorkflowRun]) -> dict[str, object]:
+def _build_lane(workflow: str, runs: Sequence[WorkflowRun]) -> dict[str, Any]:
     terminal_runs = len(runs)
     passes = sum(1 for run in runs if run.status == "completed")
 
@@ -226,7 +226,7 @@ def build_benchmark(runs: Sequence[WorkflowRun]) -> dict[str, object]:
     total_receipts = sum(int(lane["gateReceipts"]) for lane in lanes)
     total_self_correction: dict[str, int] = {}
     for lane in lanes:
-        for key, value in lane["selfCorrection"].items():  # type: ignore[union-attr]
+        for key, value in lane["selfCorrection"].items():
             total_self_correction[key] = total_self_correction.get(key, 0) + int(value)
 
     return {

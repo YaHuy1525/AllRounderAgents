@@ -139,6 +139,13 @@ class JiraIssueReader(Protocol):
 
 
 class JiraTransport(Protocol):
+    """The write contract ``JiraTools`` and the queue rely on.
+
+    Issue deletion is deliberately absent: it is an operational capability of
+    the REST transport alone (``scripts/jira-cleanup.py`` calls it on the
+    concrete ``HttpJiraTransport``), and the MCP transport cannot express it.
+    """
+
     def add_comment(self, ticket_key: str, body: str) -> None: ...
 
     def transition(self, ticket_key: str, transition: str) -> None: ...
@@ -152,8 +159,6 @@ class JiraTransport(Protocol):
         labels: list[str],
         description: str,
     ) -> str: ...
-
-    def delete_issue(self, ticket_key: str, *, delete_subtasks: bool = False) -> None: ...
 
 
 class HttpJiraTransport:
