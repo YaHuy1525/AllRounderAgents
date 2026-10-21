@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     mastra_request_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     runs_max_concurrent: int = Field(default=5, ge=1, le=100)
     runs_max_concurrent_applies: int = Field(default=2, ge=1, le=20)
+    runs_max_concurrent_model_calls: int = Field(default=4, ge=1, le=20)
     runs_lock_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
     runs_receipt_ttl_seconds: int = Field(default=3_600, ge=60, le=86_400)
     runs_max_seconds: int = Field(default=1_800, ge=60, le=86_400)

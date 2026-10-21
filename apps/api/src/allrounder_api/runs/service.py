@@ -17,7 +17,10 @@ Driving model — restart/resume with a decision envelope:
   re-verified right before the run is driven — the executor never acts on an
   unverified token (defense in depth).
 * Ceiling slots are held only while a pass is in flight; queued runs are
-  promoted FIFO and always know their visible position.
+  promoted FIFO and always know their visible position. Every pass acquires
+  its kinds in the fixed global order ``run -> apply -> model`` and releases
+  in the strict reverse, so the three spec ceilings (concurrent runs,
+  patch-apply executors, model calls) can never hold-and-wait into deadlock.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import json
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import uuid4
 
 from ..approvals import ApprovalReceiptSigner, ReceiptError
@@ -36,7 +39,7 @@ from ..auth import Principal
 from ..logging import get_logger
 from ..repositories import ApprovalRecord, ApprovalRepository, CaseRepository
 from .archive import NullRunArchive, RunArchive
-from .ceilings import RUN_SLOT, ConcurrencyCeiling
+from .ceilings import RUN_SLOT, SLOT_ORDER, ConcurrencyCeiling
 from .definitions import side_effect_scope
 from .events import RunEventBus
 from .locks import TargetLockStore
@@ -44,9 +47,13 @@ from .mastra_client import MastraClientError, MastraRunClient, action_hash
 from .models import (
     DECISION_ACTIONS,
     MastraOutcome,
+    PillRefError,
     RunStep,
+    StepDefinition,
     WorkflowDefinition,
     WorkflowRun,
+    resolve_pill_text,
+    resolve_pill_value,
     run_snapshot,
     run_summary,
 )
@@ -188,6 +195,10 @@ class RunService:
         await self._publish(run, {"type": "run.created", "workflow": workflow})
         await self._case_event(run, "run_started", {"workflow": workflow})
         async with self._run_lock(run.run_id):
+            # Rule: every pass records what it is before asking for slots, so
+            # a promotion after any kind's queue re-drives this pass, never
+            # a restarted first step.
+            run.pending_pass = {"start": True}
             launched = await self._try_launch(run)
         if launched:
             await self._drive(run, start=True)
@@ -229,6 +240,23 @@ class RunService:
             if step.state != "awaiting_human":
                 raise RunConflictError("Step is not awaiting a human decision")
             definition = self._definition(run)
+            # Data pills (N3): swap ``{{ref}}`` tokens for the concrete values
+            # of earlier outputs before anything is hashed or recorded, so the
+            # receipt and the Mastra pass carry values, never tokens. A ref
+            # that no longer exists rejects the decision loudly.
+            if edits is not None:
+                try:
+                    edits = cast(
+                        "dict[str, object]",
+                        resolve_pill_value(edits, run, before_index=step.index),
+                    )
+                except PillRefError as error:
+                    raise RunConflictError(str(error)) from error
+            if guidance is not None:
+                try:
+                    guidance = resolve_pill_text(guidance, run, before_index=step.index)
+                except PillRefError as error:
+                    raise RunConflictError(str(error)) from error
             receipt: str | None = None
             replayed = False
             if action in ("proceed", "edit"):
@@ -279,6 +307,13 @@ class RunService:
             )
             if action == "back":
                 run.attempt += 1
+                run.pending_pass = {"start": True}
+            else:
+                run.pending_pass = {
+                    "start": False,
+                    "stepId": step_id,
+                    "decision": run.step(step_id).decision or {},
+                }
             launched = await self._try_launch(run)
         if launched:
             if action == "back":
@@ -515,17 +550,78 @@ class RunService:
             "effects": run.side_effects,
         }
 
+    def _pass_target(self, run: WorkflowRun) -> StepDefinition | None:
+        """The step the pending pass will actually compute (then suspend at).
+
+        Proceed/edit steps fast-forward from the reviewed artifact and never
+        re-run their model, so a pass is bounded by the one step it computes:
+        the first step without a decision, except a regenerate marker, which
+        recomputes its own step. A pass that decides the final step has no
+        target and needs no extra kind.
+        """
+        pending = run.pending_pass or {}
+        definition = self._definition(run)
+        decision = pending.get("decision")
+        action = decision.get("action") if isinstance(decision, dict) else None
+        step_id: object = pending.get("stepId")
+        if not pending.get("start", True) and action == "regenerate" and isinstance(step_id, str):
+            try:
+                return definition.step(step_id)
+            except KeyError:  # pragma: no cover - snapshot follows definition
+                return None
+        for step in run.steps:
+            if step.decision is None:
+                try:
+                    return definition.step(step.step_id)
+                except KeyError:  # pragma: no cover - snapshot follows definition
+                    return None
+        return None
+
+    def _pass_kinds(self, run: WorkflowRun) -> list[str]:
+        """Ceiling slots one drive pass needs: always ``run``, plus the kinds
+        declared by the step it computes (``StepDefinition.slots``). The
+        dependencies apply step is the only declarant of ``apply``; model-
+        bearing steps declare ``model``; pure steps add nothing.
+        """
+        target = self._pass_target(run)
+        needed = set(target.slots) if target is not None else set()
+        return [kind for kind in SLOT_ORDER if kind == RUN_SLOT or kind in needed]
+
     async def _try_launch(self, run: WorkflowRun) -> bool:
-        """Grab a ceiling slot; returns True when the run may drive now."""
-        position = await self._ceilings.acquire(run.run_id, RUN_SLOT)
-        if position is not None:
-            run.status = "queued"
-            run.queue_position = position
-            await self._save(run)
-            await self._publish(
-                run, {"type": "run.queued", "queuePosition": position}
-            )
-            return False
+        """Grab the ceiling slots the pending pass needs; True means drive now.
+
+        Kinds are acquired cumulatively in the fixed global order
+        ``run -> apply -> model`` (``SLOT_ORDER``) and a denial stops the
+        walk: the run keeps every earlier kind it was granted and queues on
+        the denying kind (per-kind FIFO is authoritative — an already
+        queued run keeps its place). Release is always the strict reverse;
+        one shared order for every holder is what prevents a hold-and-wait
+        deadlock across the three ceilings.
+        """
+        granted: list[str] = []
+        record = dict(run.pending_pass or {})
+        for kind in self._pass_kinds(run):
+            position = await self._ceilings.acquire(run.run_id, kind)
+            if position is not None:
+                record["slots"] = granted
+                record["waitingOn"] = kind
+                run.pending_pass = record
+                run.status = "queued"
+                run.queue_position = position
+                await self._save(run)
+                await self._publish(
+                    run,
+                    {
+                        "type": "run.queued",
+                        "queuePosition": position,
+                        "waitingOn": kind,
+                    },
+                )
+                return False
+            granted.append(kind)
+        record["slots"] = granted
+        record.pop("waitingOn", None)
+        run.pending_pass = record
         run.status = "running"
         run.queue_position = None
         await self._save(run)
@@ -625,13 +721,19 @@ class RunService:
                 if step.state != "done":
                     step.state = "done"
                     step.updated_at = self._clock()
+            # The engine reports the run's actual token spend in its final
+            # result; store it on the run so the durable archive and the
+            # benchmark carry cost per run, not per case.
+            run.cost_usd_micro = _cost_usd_micro_from_output(outcome.output)
             run.status = "completed"
             run.outcome = "completed"
             run.finished_at = self._clock()
             run.heartbeat_at = run.finished_at
             await self._save(run)
             await self._publish(run, {"type": "run.status", "status": "completed"})
-            await self._case_event(run, "run_completed", {})
+            await self._case_event(
+                run, "run_completed", {"costUsdMicro": run.cost_usd_micro}
+            )
             self._record_terminal(run)
             await self._archive_terminal(run)
             await self._release_resources(run)
@@ -712,31 +814,82 @@ class RunService:
             await self._save(run)
         await self._release_and_promote(run)
 
+    def _release_order(self, run: WorkflowRun) -> list[str]:
+        """Kinds to give back: the waiting queue first (a pure unqueue), then
+        the granted prefix in the strict reverse of ``SLOT_ORDER`` — release
+        order ``model -> apply -> run`` mirrors acquisition order ``run ->
+        apply -> model`` and holding one shared order is what prevents
+        deadlock. Records predating ``pending_pass`` could only ever have
+        held the run slot."""
+        pending = run.pending_pass
+        if not isinstance(pending, dict):
+            return [RUN_SLOT]
+        slots = pending.get("slots")
+        held = [str(kind) for kind in slots] if isinstance(slots, list) else []
+        rank = {kind: index for index, kind in enumerate(SLOT_ORDER)}
+        held.sort(key=lambda kind: rank.get(kind, len(rank)))
+        kinds = list(reversed(held))
+        waiting = pending.get("waitingOn")
+        if isinstance(waiting, str):
+            kinds.insert(0, waiting)
+        return kinds
+
     async def _release_and_promote(self, run: WorkflowRun) -> None:
-        promoted = await self._ceilings.release(run.run_id, RUN_SLOT)
-        if promoted is not None:
-            next_run: WorkflowRun | None
-            try:
-                next_run = await self._registry.get_internal(promoted)
-            except KeyError:
-                next_run = None
-            if next_run is not None and not next_run.terminal:
-                next_run.status = "running"
-                next_run.queue_position = None
-                await self._save(next_run)
-                await self._drive(next_run, start=True)
+        """Release every kind this run's pass held (or queued on), reverse
+        order, then re-drive each promoted run's recorded pass. This is the
+        single seam the suspend, completion, failure and cancel/timeout
+        paths share — no exit path may give back only part of the set."""
+        for kind in self._release_order(run):
+            promoted = await self._ceilings.release(run.run_id, kind)
+            if promoted is not None:
+                await self._promote(promoted)
+        if run.pending_pass is not None:
+            run.pending_pass = None
+            await self._save(run)
         await self._refresh_queue_positions()
+
+    async def _promote(self, run_id: str) -> None:
+        """A run that just received a slot on one kind finishes the ordered
+        acquisition (later kinds, or queues again) and re-drives its recorded
+        pass — a mid-flow promotion resumes the step it paused at, it never
+        restarts the run."""
+        try:
+            next_run = await self._registry.get_internal(run_id)
+        except KeyError:
+            return
+        if next_run.terminal:
+            return
+        if await self._try_launch(next_run):
+            await self._drive_recorded_pass(next_run)
+
+    async def _drive_recorded_pass(self, run: WorkflowRun) -> None:
+        pending = run.pending_pass or {}
+        step_id = pending.get("stepId")
+        decision = pending.get("decision")
+        if pending.get("start", True) or not isinstance(step_id, str):
+            await self._drive(run, start=True)
+            return
+        await self._drive(
+            run,
+            start=False,
+            step_id=step_id,
+            decision=decision if isinstance(decision, dict) else {},
+        )
 
     async def _refresh_queue_positions(self) -> None:
         for active in await self._registry.list_active():
             if active.status != "queued":
                 continue
-            position = await self._ceilings.position(active.run_id, RUN_SLOT)
+            pending = active.pending_pass
+            waiting = pending.get("waitingOn") if isinstance(pending, dict) else None
+            kind = waiting if isinstance(waiting, str) else RUN_SLOT
+            position = await self._ceilings.position(active.run_id, kind)
             if position != active.queue_position:
                 active.queue_position = position
                 await self._save(active)
                 await self._publish(
-                    active, {"type": "run.queued", "queuePosition": position}
+                    active,
+                    {"type": "run.queued", "queuePosition": position, "waitingOn": kind},
                 )
 
     async def sweep_expired(self, now: datetime | None = None) -> list[str]:
@@ -920,6 +1073,20 @@ class RunService:
         except ValueError:
             # Provenance is best-effort: a rejected event must not block the run.
             self._logger.warning("run_case_event_rejected", run_id=run.run_id, kind=kind)
+
+
+def _cost_usd_micro_from_output(output: dict[str, object] | None) -> int:
+    """The engine-reported run cost (micro-USD), defensively sanitized.
+
+    A missing, non-integer, or negative value collapses to 0 so a lane that
+    never instruments usage records zero rather than corrupting the archive.
+    """
+    if not isinstance(output, dict):
+        return 0
+    value = output.get("costUsdMicro")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
 
 
 def content_hash(value: dict[str, object]) -> str:

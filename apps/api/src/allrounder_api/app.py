@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from .approvals import ApprovalReceiptSigner
 from .auth import AuthenticationError, BearerVerifier, FakeBearerVerifier
+from .benchmark import CODING_LANES, build_benchmark, empty_benchmark
 from .board_chat import ChatCompleter
 from .coding_runs import CodingRunRepository, InMemoryCodingRunRepository
 from .context import RequestContext
@@ -31,10 +32,12 @@ from .rate_limit import InMemoryRateLimiter, RateLimiter
 from .repositories import (
     ApprovalRepository,
     CaseRepository,
+    ConnectorVaultRepository,
     FeedbackRepository,
     GithubAccountRepository,
     InMemoryApprovalRepository,
     InMemoryCaseRepository,
+    InMemoryConnectorVaultRepository,
     InMemoryFeedbackRepository,
     InMemoryGithubAccountRepository,
     InMemoryMspConnectionsRepository,
@@ -49,7 +52,7 @@ from .spawn import CrossDomainSpawner, SpawnPlan
 from .workflows import build_workflows_router
 
 if TYPE_CHECKING:
-    from .knowledge_api import KnowledgeRetriever
+    from .kb_api import KnowledgeConsole
 
 # Roles allowed to read the JSON metrics summary; the raw /metrics exposition
 # stays unauthenticated for the Prometheus scraper.
@@ -79,8 +82,9 @@ def create_app(
     runs_service: RunService | None = None,
     github_client: httpx.AsyncClient | None = None,
     github_accounts: GithubAccountRepository | None = None,
+    connector_vault: ConnectorVaultRepository | None = None,
     msp_connections: MspConnectionsRepository | None = None,
-    knowledge_retriever: KnowledgeRetriever | None = None,
+    knowledge_retriever: KnowledgeConsole | None = None,
     knowledge_service_token: str | None = None,
 ) -> FastAPI:
     config = settings or Settings()
@@ -136,10 +140,14 @@ def create_app(
 
     from .audit_pack import AuditPackBuilder
     from .chat_api import build_chat_router
+    from .connectors_api import build_connectors_router
+    from .doc_snap_api import build_doc_snap_router
     from .github_api import build_github_router
     from .intake_api import build_intake_router
     from .jira_board_api import build_jira_board_router
+    from .kb_api import build_kb_router
     from .msp_api import build_msp_router
+    from .pack_api import build_pack_router
     from .phase1_api import build_phase1_router
     from .phase2_api import build_phase2_router
     from .phase3_api import build_phase3_router
@@ -197,6 +205,15 @@ def create_app(
             client=github_client,
         )
     )
+    # Connector registry + vault (N2): Settings -> Connections. The catalog
+    # comes from tools.yaml; connecting only registers the tenant credential,
+    # it never grants a tool or opens a new execution path.
+    app.include_router(
+        build_connectors_router(
+            verifier=verifier,
+            vault=connector_vault or InMemoryConnectorVaultRepository(),
+        )
+    )
     app.include_router(
         build_chat_router(
             verifier=verifier,
@@ -213,6 +230,7 @@ def create_app(
         mastra_timeout_seconds=config.mastra_request_timeout_seconds,
         max_concurrent=config.runs_max_concurrent,
         max_concurrent_applies=config.runs_max_concurrent_applies,
+        max_concurrent_model_calls=config.runs_max_concurrent_model_calls,
         config=RunServiceConfig(
             lock_ttl_seconds=config.runs_lock_ttl_seconds,
             receipt_ttl_seconds=config.runs_receipt_ttl_seconds,
@@ -233,6 +251,8 @@ def create_app(
     app.include_router(build_runs_router(verifier=verifier, service=run_service))
     # Command-bar search (U1): read-only over the same registries the runs
     # router serves, plus approval gates and the optional knowledge store.
+    # The bar covers the support corpus plus the graduated HR policy
+    # partition; other partitions stay reachable through the KB page.
     app.include_router(
         build_search_router(
             verifier=verifier,
@@ -240,7 +260,13 @@ def create_app(
             approvals=approvals,
             cases=cases,
             knowledge=knowledge_retriever,
+            knowledge_domains=("support", "hr:policy"),
         )
+    )
+    # Knowledge base (U5): console reads plus the admin-only upload. Mounted
+    # always so the page can render a "not configured" state without a 404.
+    app.include_router(
+        build_kb_router(verifier=verifier, knowledge=knowledge_retriever)
     )
     app.include_router(
         build_intake_router(
@@ -259,6 +285,12 @@ def create_app(
             service_token=knowledge_service_token,
         )
     )
+    # Per-case audit pack (U6): the MSP pack pattern generalized to every
+    # lane — read-only over the same immutable trail, JSON or PDF.
+    app.include_router(build_pack_router(verifier=verifier, audit_packs=audit_packs))
+    # Doc-snap (U7): a snapped document lands as an editable draft on the case
+    # trail — extracted fields plus ABN/expiry/duplicate flags, never a post.
+    app.include_router(build_doc_snap_router(verifier=verifier, cases=cases))
     if knowledge_retriever is not None and knowledge_service_token:
         # Service-to-service retrieval for the Mastra host; mounted only when
         # both the retriever and the shared token are configured.
@@ -299,6 +331,29 @@ def create_app(
             return empty_summary()
         active = await run_service.list_active(identity.tenant_id)
         return metrics.summary(active_statuses=[run.status for run in active])
+
+    @app.get("/metrics/benchmark")
+    async def metrics_benchmark(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, object]:
+        # Same bearer-auth + view-role guard as /metrics/summary. The read is
+        # built on the durable archive, so it stays correct across restarts.
+        if authorization is None or not authorization.startswith("Bearer "):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+        try:
+            identity = await verifier.verify(authorization[7:])
+        except AuthenticationError as error:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials") from error
+        if identity.roles.isdisjoint(_METRICS_VIEW_ROLES):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Not authorized")
+        archived = await run_service.archive.scan_workflows(
+            identity.tenant_id, workflows=CODING_LANES
+        )
+        if not archived:
+            return empty_benchmark()
+        # Cost is now carried per run (the engine's actual token spend), so the
+        # read-model folds straight off the archived runs; no case join needed.
+        return build_benchmark(archived)
 
     @app.post("/webhooks/jira")
     async def jira_webhook(request: Request) -> dict[str, str | bool]:

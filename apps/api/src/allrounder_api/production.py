@@ -19,6 +19,7 @@ from .rate_limit import RedisRateLimiter
 from .repositories import (
     PostgresApprovalRepository,
     PostgresCaseRepository,
+    PostgresConnectorVaultRepository,
     PostgresFeedbackRepository,
     PostgresGithubAccountRepository,
     PostgresRepositories,
@@ -145,6 +146,7 @@ def create_production_app() -> FastAPI:
         coding_runs=PostgresCodingRunRepository(repositories),
         finance_runs=PostgresFinanceRunRepository(repositories),
         github_accounts=PostgresGithubAccountRepository(repositories),
+        connector_vault=PostgresConnectorVaultRepository(repositories),
         chat_completer=chat_completer,
         metrics=metrics,
         knowledge_retriever=knowledge_store,
@@ -166,6 +168,7 @@ def create_production_app() -> FastAPI:
             mastra_timeout_seconds=settings.mastra_request_timeout_seconds,
             max_concurrent=settings.runs_max_concurrent,
             max_concurrent_applies=settings.runs_max_concurrent_applies,
+            max_concurrent_model_calls=settings.runs_max_concurrent_model_calls,
             config=RunServiceConfig(
                 lock_ttl_seconds=settings.runs_lock_ttl_seconds,
                 receipt_ttl_seconds=settings.runs_receipt_ttl_seconds,

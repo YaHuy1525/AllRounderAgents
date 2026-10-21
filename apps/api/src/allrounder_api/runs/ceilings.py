@@ -16,6 +16,14 @@ from redis import Redis
 
 RUN_SLOT = "run"
 APPLY_SLOT = "apply"
+MODEL_SLOT = "model"
+
+# Fixed global order in which a drive pass acquires its ceiling slots:
+# ``run`` first, then ``apply``, then ``model``. Every holder follows this
+# one order and releases in the exact reverse (model -> apply -> run), so no
+# run can hold a later kind while waiting on an earlier one — that invariant
+# is what prevents a hold-and-wait deadlock across the three ceilings.
+SLOT_ORDER: tuple[str, ...] = (RUN_SLOT, APPLY_SLOT, MODEL_SLOT)
 
 _ACQUIRE_SCRIPT = """
 local slot_key = KEYS[1]
@@ -171,7 +179,9 @@ class RedisConcurrencyCeiling:
 
 __all__ = [
     "APPLY_SLOT",
+    "MODEL_SLOT",
     "RUN_SLOT",
+    "SLOT_ORDER",
     "ConcurrencyCeiling",
     "MemoryConcurrencyCeiling",
     "RedisConcurrencyCeiling",
