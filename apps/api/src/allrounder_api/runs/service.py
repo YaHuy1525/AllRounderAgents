@@ -375,6 +375,7 @@ class RunService:
                 approver=principal.subject,
                 scope=scope,
                 expires_at=expiry,
+                risk=self._gate_risk(run, step.step_id),
             )
         )
         await self._approvals.decide(approval_id, run.tenant_id, "approved", comment)
@@ -473,6 +474,27 @@ class RunService:
         if definition is None:  # pragma: no cover - registry consistency
             raise UnknownWorkflowError(run.workflow)
         return definition
+
+    def _gate_risk(self, run: WorkflowRun, step_id: str) -> int | None:
+        """Risk band stamped on a run-gate approval, from the step's declared
+        governance — never re-derived here.
+
+        A step that declares an explicit band (one of ``RISK_BANDS``,
+        validated at import time in ``StepDefinition.__post_init__``) uses
+        it verbatim. Otherwise the default rule applies: a side-effecting
+        gate is ``single_risk`` (55) and a pure one ``benign`` (10) — the
+        ``policy/risk.yaml`` scores the approval queue sorts on. A step with
+        no workflow definition is left unranked (None, sorts last) rather
+        than inventing a band; ``_definition`` would raise, so this reads
+        ``self._workflows`` directly to tolerate an unknown workflow.
+        """
+        definition = self._workflows.get(run.workflow)
+        if definition is None:
+            return None
+        step_def = definition.step(step_id)
+        if step_def.risk is not None:
+            return step_def.risk
+        return 55 if step_def.side_effecting else 10
 
     def _action_dict(
         self, run: WorkflowRun, step: RunStep, action: str, edits: dict[str, object] | None

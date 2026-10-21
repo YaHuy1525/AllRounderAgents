@@ -38,6 +38,12 @@ DECISION_ACTIONS = ("proceed", "edit", "regenerate", "back", "abort", "retry_loc
 # Step ids the Mastra workflows must use for the decision action bar.
 ACTION_BAR_ACTIONS = ("proceed", "edit", "regenerate", "back", "abort")
 
+# Risk bands a step may declare for its approval gate, reusing the exact
+# scores in policy/risk.yaml (``preflight.scores``): benign 10, single_risk
+# 55, irreversible_high_blast 90. The approval queue and the dispatcher
+# therefore speak one scale; the YAML is not loaded at approval time.
+RISK_BANDS = (10, 55, 90)
+
 
 @dataclass(frozen=True)
 class FieldDefinition:
@@ -80,21 +86,35 @@ class StepDefinition:
     # for pure computation. Declared here so the run service enforces the
     # three spec ceilings without inline conditionals in the drive loop.
     slots: tuple[str, ...] = ()
+    # Risk band stamped on the approval this step's gate creates, so the
+    # queue surfaces the riskiest gate first. ``None`` lets the service
+    # default apply (55 side-effecting, 10 pure); an explicit band must be
+    # one of ``RISK_BANDS``.
+    risk: int | None = None
 
     def __post_init__(self) -> None:
-        """Fail loudly on a slot kind the ceiling layer does not know.
+        """Fail loudly on governance values the platform does not know.
 
         ``_pass_kinds`` filters the declared kinds against ``SLOT_ORDER``, so
         an undeclared kind (a ``"modl"`` typo) would silently drop the
         requirement and un-cap the step instead of capping it — the exact
         failure mode slot discipline exists to prevent. Validation happens at
         import time for the shipped definitions, never at run time.
+
+        The same reasoning guards ``risk``: a typo'd band (``5`` for ``55``)
+        would land in range but silently un-rank the gate onto a bogus value,
+        so an explicit band must be one of the ``RISK_BANDS`` anchors.
         """
         unknown = [kind for kind in self.slots if kind not in SLOT_ORDER]
         if unknown:
             raise ValueError(
                 f"Step {self.id!r} declares unknown ceiling slot(s) {unknown!r}; "
                 f"valid kinds are {list(SLOT_ORDER)!r}"
+            )
+        if self.risk is not None and self.risk not in RISK_BANDS:
+            raise ValueError(
+                f"Step {self.id!r} declares risk band {self.risk!r}; "
+                f"valid bands are {list(RISK_BANDS)!r} (policy/risk.yaml scores)"
             )
 
 
