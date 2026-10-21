@@ -13,6 +13,8 @@ from psycopg.errors import ForeignKeyViolation
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from .logging import get_logger
+
 _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _SECRET_KEY = re.compile(r"(api[_-]?key|token|secret|password)", re.IGNORECASE)
 _SECRET_VALUE = re.compile(
@@ -686,6 +688,34 @@ class PostgresRepositories:
 
     async def open(self) -> None:
         await self.pool.open()
+        await self._check_approval_risk_column()
+
+    async def _check_approval_risk_column(self) -> None:
+        """Deploy gate for the risk-ordered approval queue (PR1 T4).
+
+        ``create_approval`` inserts ``risk``, so on a database that has not
+        applied the migration every approval write fails — not just the list
+        read. One query when the Postgres repositories open (never per
+        request, never on the in-memory path), logging a fatal-level message
+        that names the migration file. Loud, not blocking: an operator mid
+        rollout can still reach the health endpoint to run it.
+        """
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                "select 1 from information_schema.columns "
+                "where table_schema = 'public' and table_name = 'approvals' "
+                "and column_name = 'risk'"
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            get_logger().critical(
+                "approval_risk_column_missing",
+                detail=(
+                    "public.approvals has no 'risk' column: apply migration "
+                    "supabase/migrations/202610210016_approval_risk.sql before "
+                    "serving approvals (every approval create will fail without it)"
+                ),
+            )
 
     async def close(self) -> None:
         await self.pool.close()
