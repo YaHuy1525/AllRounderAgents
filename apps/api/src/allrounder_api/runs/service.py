@@ -708,7 +708,9 @@ class RunService:
         Releases the queue entry (if the walk was denied) plus the granted
         prefix in the strict reverse order, then keeps the slots flowing to the
         runs those releases promoted. Any secondary failure is logged, never
-        raised: the caller must still see the original error.
+        raised: the caller must still see the original error. A cancellation is
+        the one exception, and it travels only after every promoted run has
+        been driven, exactly as in ``_release_and_promote``.
         """
         if not granted and waiting_on is None:
             return
@@ -730,11 +732,18 @@ class RunService:
             # The cleared grant could not be recorded; the slots themselves are
             # back, which is what the guaranteed-release constraint asks for.
             self._logger.warning("run_ceiling_rollback_record_failed", run_id=run.run_id)
+        cancellation: asyncio.CancelledError | None = None
         for run_id in promoted:
             try:
                 await self._promote(run_id)
-            except BaseException:
+            except asyncio.CancelledError as error:
+                self._logger.warning("run_promotion_cancelled", run_id=run_id)
+                if cancellation is None:
+                    cancellation = error
+            except Exception:
                 self._logger.exception("run_promotion_failed", run_id=run_id)
+        if cancellation is not None:
+            raise cancellation
 
     async def _drive(
         self,
@@ -979,9 +988,18 @@ class RunService:
         only re-reads FIFO positions and reports a ``queued`` run with no
         queue entry, it never re-drives one (see that docstring for why the
         blind re-promote was removed).
+
+        Every promotion is attempted before a cancellation propagates: a
+        ``CancelledError`` that lands on one run's promote path is recorded,
+        the loop drives the remaining granted runs, and the caller then sees
+        the cancellation. A run stranded by that mid-loop cancellation is one
+        of the cases the PR2 holder-versus-waiter discriminator will repair,
+        because ``position()`` cannot tell a run that already holds a granted
+        slot from one still queued for it.
         """
         had_record = run.pending_pass is not None
         promoted = await self._release_slots(run)
+        cancellation: asyncio.CancelledError | None = None
         try:
             if had_record:
                 await self._save(run)
@@ -997,8 +1015,14 @@ class RunService:
             for run_id in promoted:
                 try:
                     await self._promote(run_id)
+                except asyncio.CancelledError as error:
+                    self._logger.warning("run_promotion_cancelled", run_id=run_id)
+                    if cancellation is None:
+                        cancellation = error
                 except Exception:
                     self._logger.exception("run_promotion_failed", run_id=run_id)
+            if cancellation is not None:
+                raise cancellation
         await self._refresh_queue_positions()
 
     async def _promote(self, run_id: str) -> None:
