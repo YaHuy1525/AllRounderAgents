@@ -19,6 +19,10 @@ apps/approval-ui/out/
 .mastra/dev.lock
 .mastra/mastra-packages.json
 
+# Embedded DuckDB observability store (dev metrics, see src/mastra/mastra.ts)
+mastra*.duckdb
+mastra*.duckdb.wal
+
 # Python
 __pycache__/
 *.py[cod]
@@ -56,3 +60,5 @@ supabase/.temp/
 evals/judge/.cache/
 evals/judge/reports/
 system_design
+# SDD scratch: ledgers, briefs, review packages stay local
+.superpowers/

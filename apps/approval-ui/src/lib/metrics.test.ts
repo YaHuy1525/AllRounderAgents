@@ -93,6 +93,7 @@ describe("decision history", () => {
     decision: null,
     comment: null,
     decidedAt: null,
+    risk: null,
     ...overrides,
   });
 

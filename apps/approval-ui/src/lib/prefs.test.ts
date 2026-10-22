@@ -5,6 +5,7 @@ import {
   emptyUiPrefs,
   loadPrefs,
   loadUiPrefs,
+  rememberRecentCommand,
   rememberRecentTicket,
   savePrefs,
   saveUiPrefs,
@@ -99,11 +100,19 @@ describe("local UI preferences", () => {
         autoRefreshSec: 9999,
         badge: "yes",
         confirmReject: false,
+        boardSort: "size",
         sidebarCollapsed: "sometimes",
         recentTickets: [
           { key: "eng-1", summary: "A" },
           { key: "bad key", summary: "B" },
           { key: "ENG-1", summary: "duplicate" },
+        ],
+        recentCommands: [
+          "  which tickets wait on me? ",
+          7,
+          "",
+          "WHICH TICKETS WAIT ON ME?",
+          "what's blocked?",
         ],
       }),
     );
@@ -112,7 +121,9 @@ describe("local UI preferences", () => {
       autoRefreshSec: 0,
       badge: true,
       confirmReject: false,
+      boardSort: "updated",
       recentTickets: [{ key: "ENG-1", summary: "A" }],
+      recentCommands: ["which tickets wait on me?", "what's blocked?"],
       sidebarCollapsed: false,
     });
   });
@@ -124,7 +135,9 @@ describe("local UI preferences", () => {
       autoRefreshSec: 60,
       badge: false,
       confirmReject: true,
+      boardSort: "priority",
       recentTickets: [],
+      recentCommands: ["what is overdue?"],
       sidebarCollapsed: true,
     });
     expect(loadUiPrefs(storage)).toEqual({
@@ -132,7 +145,9 @@ describe("local UI preferences", () => {
       autoRefreshSec: 60,
       badge: false,
       confirmReject: true,
+      boardSort: "priority",
       recentTickets: [],
+      recentCommands: ["what is overdue?"],
       sidebarCollapsed: true,
     });
   });
@@ -151,5 +166,24 @@ describe("local UI preferences", () => {
 
   it("refuses keys that are not ticket keys", () => {
     expect(rememberRecentTicket([], { key: "<script>", summary: "x" })).toEqual([]);
+  });
+
+  it("keeps recent commands deduplicated and capped", () => {
+    let recent: string[] = [];
+    for (let index = 1; index <= 8; index += 1) {
+      recent = rememberRecentCommand(recent, `query ${index}`);
+    }
+    expect(recent).toHaveLength(6);
+    expect(recent[0]).toBe("query 8");
+    const again = rememberRecentCommand(recent, "  QUERY 5  ");
+    expect(again).toHaveLength(6);
+    expect(again[0]).toBe("QUERY 5");
+    expect(again.filter((item) => item.toLowerCase() === "query 5")).toHaveLength(1);
+    expect(rememberRecentCommand(again, "   ")).toBe(again);
+  });
+
+  it("caps remembered commands at the storage limit", () => {
+    const [stored] = rememberRecentCommand([], "x".repeat(200));
+    expect(stored).toHaveLength(120);
   });
 });

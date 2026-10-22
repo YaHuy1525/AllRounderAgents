@@ -11,7 +11,7 @@ and logs, the same discipline the case-event trail follows.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -35,7 +35,7 @@ _SELECT_COLUMNS = (
 _FULL_COLUMNS = (
     "run_id, tenant_id, workflow, ticket_key, case_id, status, outcome, "
     "cancel_reason, attempt, steps, side_effects, started_at, heartbeat_at, "
-    "finished_at"
+    "finished_at, cost_usd_micro"
 )
 
 
@@ -62,6 +62,14 @@ class RunArchive(Protocol):
         since: str | None = None,
         until: str | None = None,
         limit: int = 500,
+    ) -> list[WorkflowRun]: ...
+
+    async def scan_workflows(
+        self,
+        tenant_id: str,
+        *,
+        workflows: Sequence[str],
+        limit: int = 1000,
     ) -> list[WorkflowRun]: ...
 
     async def open(self) -> None: ...
@@ -97,6 +105,15 @@ class NullRunArchive:
     ) -> list[WorkflowRun]:
         return []
 
+    async def scan_workflows(
+        self,
+        tenant_id: str,
+        *,
+        workflows: Sequence[str],
+        limit: int = 1000,
+    ) -> list[WorkflowRun]:
+        return []
+
     async def open(self) -> None:
         return None
 
@@ -126,6 +143,11 @@ def _archive_summary(record: Mapping[str, Any]) -> dict[str, object]:
         "ticketKey": str(record.get("ticket_key", "")),
         "status": str(record.get("status", "")),
         "queuePosition": None,
+        # Archived rows are terminal, so they never wait on or hold a
+        # ceiling; the keys match ``run_summary`` so merged list rows keep
+        # one shape.
+        "waitingOn": None,
+        "heldSlots": [],
         "currentStepId": None,
         "stepCount": len(steps),
         "stepsDone": done,
@@ -161,6 +183,7 @@ def _full_run(record: Mapping[str, Any]) -> WorkflowRun:
             "startedAt": record.get("started_at"),
             "heartbeatAt": record.get("heartbeat_at"),
             "finishedAt": finished,
+            "costUsdMicro": record.get("cost_usd_micro", 0),
         }
     )
 
@@ -194,6 +217,7 @@ class MemoryRunArchive:
             "finished_at": run.finished_at.isoformat() if run.finished_at else None,
             "steps": [step.to_dict() for step in run.steps],
             "side_effects": run.side_effects,
+            "cost_usd_micro": run.cost_usd_micro,
         }
 
     async def list_recent(
@@ -239,6 +263,22 @@ class MemoryRunArchive:
         if until is not None:
             rows = [row for row in rows if str(row["started_at"]) < until]
         rows.sort(key=lambda row: str(row["started_at"]))
+        return [_full_run(row) for row in rows[:limit]]
+
+    async def scan_workflows(
+        self,
+        tenant_id: str,
+        *,
+        workflows: Sequence[str],
+        limit: int = 1000,
+    ) -> list[WorkflowRun]:
+        wanted = set(workflows)
+        rows = [
+            record
+            for record in self._records.values()
+            if record["tenant_id"] == tenant_id and record["workflow"] in wanted
+        ]
+        rows.sort(key=lambda row: str(row["started_at"]), reverse=True)
         return [_full_run(row) for row in rows[:limit]]
 
     async def open(self) -> None:
@@ -287,9 +327,9 @@ class PostgresRunArchive:
                     insert into public.run_archive
                       (run_id, tenant_id, workflow, ticket_key, case_id, status,
                        outcome, cancel_reason, attempt, steps, side_effects,
-                       started_at, heartbeat_at, finished_at)
+                       started_at, heartbeat_at, finished_at, cost_usd_micro)
                     values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb,
-                            %s::jsonb, %s, %s, %s)
+                            %s::jsonb, %s, %s, %s, %s)
                     on conflict (run_id) do update
                     set status = excluded.status,
                         outcome = excluded.outcome,
@@ -298,7 +338,8 @@ class PostgresRunArchive:
                         steps = excluded.steps,
                         side_effects = excluded.side_effects,
                         heartbeat_at = excluded.heartbeat_at,
-                        finished_at = excluded.finished_at
+                        finished_at = excluded.finished_at,
+                        cost_usd_micro = excluded.cost_usd_micro
                     """,
                     (
                         run.run_id,
@@ -315,6 +356,7 @@ class PostgresRunArchive:
                         run.started_at,
                         run.heartbeat_at,
                         run.finished_at,
+                        run.cost_usd_micro,
                     ),
                 )
         except Exception:
@@ -389,6 +431,35 @@ class PostgresRunArchive:
                 "run_archive_pack_read_failed",
                 tenant_id=tenant_id,
                 case_id_prefix=case_id_prefix,
+            )
+            return []
+        return [_full_run(row) for row in rows]
+
+    async def scan_workflows(
+        self,
+        tenant_id: str,
+        *,
+        workflows: Sequence[str],
+        limit: int = 1000,
+    ) -> list[WorkflowRun]:
+        if not workflows:
+            return []
+        query = (
+            f"select {_FULL_COLUMNS} from public.run_archive "
+            "where tenant_id = %s and workflow = any(%s) "
+            "order by started_at desc limit %s"
+        )
+        try:
+            async with self._pool.connection() as connection:
+                cursor = await connection.execute(
+                    query, (tenant_id, list(workflows), limit)
+                )
+                rows = await cursor.fetchall()
+        except Exception:
+            self._logger.warning(
+                "run_archive_scan_failed",
+                tenant_id=tenant_id,
+                workflows=",".join(workflows),
             )
             return []
         return [_full_run(row) for row in rows]

@@ -26,6 +26,7 @@ RISK_FILE = "risk.yaml"
 TOOLS_FILE = "tools.yaml"
 SUPPORTED_VERSION = 1
 SCOPE_PATTERN = r"^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)?$"
+PROVIDER_PATTERN = r"^[a-z][a-z0-9-]*$"
 RUN_SIDE_EFFECT_SCOPE = "{workflow}:{step}"
 
 
@@ -98,9 +99,23 @@ class ToolPermission:
 
 
 @dataclass(frozen=True)
+class ConnectorPermission:
+    """One connectable provider (N2): the console connection home. Connecting
+    registers the tenant's credential under ``scope`` — it never grants a
+    tool, so the scope only documents which reviewed permission the connection
+    serves and ``approval_class`` its strongest action posture."""
+
+    provider: str
+    description: str
+    scope: str
+    approval_class: ApprovalClass
+
+
+@dataclass(frozen=True)
 class ToolMatrix:
     version: int
     tools: tuple[ToolPermission, ...]
+    connectors: tuple[ConnectorPermission, ...] = ()
 
     def get(self, name: str) -> ToolPermission:
         for tool in self.tools:
@@ -236,7 +251,38 @@ def load_tool_matrix(directory: Path | str | None = None) -> ToolMatrix:
                 idempotency_key=idempotency_key,
             )
         )
-    return ToolMatrix(version=version, tools=tuple(tools))
+    return ToolMatrix(version=version, tools=tuple(tools), connectors=_connectors(document))
+
+
+def _connectors(document: Mapping[str, object]) -> tuple[ConnectorPermission, ...]:
+    entries = _sequence(document.get("connectors"), "connectors")
+    if not entries:
+        raise PolicyError("tools.yaml must declare at least one connectable provider")
+    connectors: list[ConnectorPermission] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(entries):
+        where = f"connectors[{index}]"
+        entry = _mapping(raw, where)
+        provider = _text(entry.get("provider"), f"{where}.provider")
+        if re.fullmatch(PROVIDER_PATTERN, provider) is None:
+            raise PolicyError(
+                f"{where}.provider must match {PROVIDER_PATTERN} (got {provider!r})"
+            )
+        if provider in seen:
+            raise PolicyError(f"duplicate connector provider {provider!r}")
+        seen.add(provider)
+        scope = _text(entry.get("scope"), f"{where}.scope")
+        if re.fullmatch(SCOPE_PATTERN, scope) is None:
+            raise PolicyError(f"{where}.scope must match {SCOPE_PATTERN} (got {scope!r})")
+        connectors.append(
+            ConnectorPermission(
+                provider=provider,
+                description=_text(entry.get("description"), f"{where}.description"),
+                scope=scope,
+                approval_class=_approval_class(entry.get("class"), f"{where}.class"),
+            )
+        )
+    return tuple(connectors)
 
 
 @lru_cache(maxsize=1)
@@ -328,9 +374,11 @@ def _boolean(value: object, where: str) -> bool:
 
 __all__ = [
     "ApprovalClass",
+    "ConnectorPermission",
     "POLICY_DIR_ENV",
     "PolicyError",
     "PreflightPolicy",
+    "PROVIDER_PATTERN",
     "RUN_SIDE_EFFECT_SCOPE",
     "RiskPolicy",
     "SensitivePolicy",

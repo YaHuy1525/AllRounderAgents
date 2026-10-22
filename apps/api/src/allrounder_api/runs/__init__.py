@@ -11,6 +11,7 @@ from .api import build_runs_router
 from .archive import MemoryRunArchive, NullRunArchive, PostgresRunArchive, RunArchive
 from .ceilings import (
     APPLY_SLOT,
+    MODEL_SLOT,
     RUN_SLOT,
     ConcurrencyCeiling,
     MemoryConcurrencyCeiling,
@@ -46,10 +47,15 @@ from .models import (
     ACTION_BAR_ACTIONS,
     DECISION_ACTIONS,
     MastraOutcome,
+    PillRefError,
     RunStep,
     StepDefinition,
     WorkflowDefinition,
     WorkflowRun,
+    resolve_pill_text,
+    resolve_pill_value,
+    run_pills,
+    run_topology,
 )
 from .receipts import MemoryRunReceiptStore, RedisRunReceiptStore, RunReceiptStore
 from .registry import InMemoryRunRegistry, RedisRunRegistry, RunRegistry
@@ -73,6 +79,7 @@ __all__ = [
     "HR_HELP_WORKFLOW",
     "ISSUES_WORKFLOW",
     "LEAVE_WORKFLOW",
+    "MODEL_SLOT",
     "MSP_WORKFLOW",
     "OFFBOARDING_WORKFLOW",
     "ONBOARDING_WORKFLOW",
@@ -96,6 +103,7 @@ __all__ = [
     "MemoryRunReceiptStore",
     "MemoryTargetLockStore",
     "NullRunArchive",
+    "PillRefError",
     "PostgresRunArchive",
     "RedisConcurrencyCeiling",
     "RedisRunEventBus",
@@ -122,4 +130,8 @@ __all__ = [
     "build_redis_run_service",
     "build_runs_router",
     "content_hash",
+    "resolve_pill_text",
+    "resolve_pill_value",
+    "run_pills",
+    "run_topology",
 ]

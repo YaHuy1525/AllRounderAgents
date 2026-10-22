@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type {
+  ChangeManifestEntry,
   PatchFile,
   PreviewManifest,
   PullRequestReceipt,
@@ -25,9 +26,9 @@ export interface GitHubTransport {
 
 /**
  * Host-agnostic Git host operations. `RestGitHubBackend` speaks the GitHub
- * REST sequence verbatim; `McpGitHubBackend` (mcp.ts) maps the same
- * operations onto the GitHub MCP server. Reader/writer policy logic lives
- * above this seam, so the flow's deterministic gates are backend-agnostic.
+ * REST sequence verbatim; `McpClientGitHubBackend` (mcp.ts) maps the same
+ * operations onto the discovered GitHub MCP tools. Reader/writer policy logic
+ * lives above this seam, so the flow's deterministic gates are backend-agnostic.
  */
 export interface GitHubBackend {
   headSha(owner: string, repo: string, branch: string): Promise<string>;
@@ -60,6 +61,31 @@ export interface GitHubBackend {
     branch: string,
   ): Promise<Array<{ number: number; url: string; body: string; draft: boolean }>>;
   checkRuns(owner: string, repo: string, commitSha: string, pullNumber?: number): Promise<CheckStatus>;
+  /** Blob file paths present at `refSha`, for lane readers to pick candidate files. */
+  listFiles(owner: string, repo: string, refSha: string): Promise<string[]>;
+}
+
+/**
+ * Optional capability of sandbox-backed frontiers: commit whatever the actor
+ * left in the container's working tree and push the branch, instead of
+ * receiving whole-file bodies. `GitHubWriter.apply` prefers this over
+ * `commitFiles` when the backend exposes it, so non-sandbox backends and the
+ * existing fakes stay valid untouched.
+ */
+export interface WorkingTreeBackend {
+  commitWorkingTree(
+    owner: string,
+    repo: string,
+    branch: string,
+    message: string,
+    baseSha: string,
+  ): Promise<{ commitSha: string }>;
+}
+
+export function supportsWorkingTreeCommit(
+  backend: GitHubBackend,
+): backend is GitHubBackend & WorkingTreeBackend {
+  return typeof (backend as Partial<WorkingTreeBackend>).commitWorkingTree === "function";
 }
 
 export interface GitHubPolicy {
@@ -71,6 +97,11 @@ export interface GitHubPolicy {
   maxFiles: number;
   maxPatchBytes: number;
   timeoutMs: number;
+  /**
+   * Set when the lane runs on the sandbox backend: `maxPatchBytes` then bounds
+   * changed-file bytes (the manifest), not model-transported whole-file bodies.
+   */
+  sandboxMode?: boolean;
 }
 
 export class RepositoryPolicyError extends Error {
@@ -137,14 +168,6 @@ function isSafeBranchName(value: string): boolean {
   );
 }
 
-function bodyObject(response: GitHubResponse): Record<string, unknown> {
-  if (response.status < 200 || response.status >= 300 || typeof response.body !== "object"
-      || response.body === null || Array.isArray(response.body)) {
-    throw new Error(`GitHub request failed (${response.status})`);
-  }
-  return response.body as Record<string, unknown>;
-}
-
 export function aggregateCheckRuns(runs: unknown[]): CheckStatus {
   if (runs.some((run) => typeof run === "object" && run !== null
     && "conclusion" in run && run.conclusion === "failure")) return "failure";
@@ -160,19 +183,56 @@ export interface PatchFileManifestEntry {
   validators: string[];
 }
 
+/** True for entries already fingerprinted on disk (sandbox manifest form). */
+function isManifestEntry(
+  entry: PatchFile | ChangeManifestEntry,
+): entry is ChangeManifestEntry {
+  return (entry as Partial<ChangeManifestEntry>).sha256 !== undefined;
+}
+
+function toManifestEntries(
+  entries: ReadonlyArray<PatchFile | ChangeManifestEntry>,
+): PatchFileManifestEntry[] {
+  return entries.map((file) => isManifestEntry(file)
+    ? { path: file.path, sha256: file.sha256, bytes: file.bytes, validators: file.validators }
+    : {
+        path: file.path,
+        sha256: createHash("sha256").update(file.content).digest("hex"),
+        bytes: Buffer.byteLength(file.content),
+        validators: file.validators,
+      });
+}
+
 /**
  * Deterministic content fingerprint for a planned patch. Shared by the
  * approval gate (suspend payload) and the writer preflight so the receipt
- * always binds to the exact bytes that would be committed.
+ * always binds to the exact bytes that would be committed. Manifest entries
+ * (sandbox path) hash identically to the `PatchFile[]` carrying the same
+ * bytes, because the sha256/bytes are computed from the disk content.
  */
-export function computePatchHash(files: PatchFile[]): string {
-  const fileManifest = files.map<PatchFileManifestEntry>((file) => ({
-    path: file.path,
-    sha256: createHash("sha256").update(file.content).digest("hex"),
-    bytes: Buffer.byteLength(file.content),
-    validators: file.validators,
+export function computePatchHash(
+  files: ReadonlyArray<PatchFile | ChangeManifestEntry>,
+): string {
+  return createHash("sha256").update(JSON.stringify(toManifestEntries(files))).digest("hex");
+}
+
+/**
+ * Read the current bytes for manifest entries through the backend, producing
+ * the `PatchFile[]` shape deterministic validators still consume. On the
+ * sandbox path the working tree answers the read, so run state never carries
+ * content beyond a single validator round trip.
+ */
+export async function readContentForEntries(
+  backend: GitHubBackend,
+  owner: string,
+  repo: string,
+  sourceSha: string,
+  entries: readonly ChangeManifestEntry[],
+): Promise<PatchFile[]> {
+  return Promise.all(entries.map(async (entry) => {
+    const { content } = await backend.fileContent(owner, repo, entry.path, sourceSha);
+    return { path: entry.path, content, validators: entry.validators };
   }));
-  return createHash("sha256").update(JSON.stringify(fileManifest)).digest("hex");
 }
 
 export class GitHubSourceReader {
@@ -240,7 +300,7 @@ export class GitHubWriter {
     baseBranch: string,
     branch: string,
     sourceSha: string,
-    files: PatchFile[],
+    files: ReadonlyArray<PatchFile | ChangeManifestEntry>,
     evidence: PreviewManifest["evidence"],
     approvedDestructivePaths: string[],
   ): PreviewManifest {
@@ -249,7 +309,10 @@ export class GitHubWriter {
       throw new RepositoryPolicyError("path_denied", "Branch name is not a safe Git reference");
     }
     const uniquePaths = new Set(files.map((file) => file.path));
-    const bytes = files.reduce((total, file) => total + Buffer.byteLength(file.content), 0);
+    const bytes = files.reduce(
+      (total, file) => total + (isManifestEntry(file) ? file.bytes : Buffer.byteLength(file.content)),
+      0,
+    );
     if (files.length > this.policy.maxFiles || uniquePaths.size !== files.length
       || bytes > this.policy.maxPatchBytes) {
       throw new RepositoryPolicyError("limits_exceeded", "Patch limits exceeded");
@@ -260,12 +323,7 @@ export class GitHubWriter {
         throw new RepositoryPolicyError("approval_required", `Approval required: ${file.path}`);
       }
     }
-    const fileManifest = files.map<PatchFileManifestEntry>((file) => ({
-      path: file.path,
-      sha256: createHash("sha256").update(file.content).digest("hex"),
-      bytes: Buffer.byteLength(file.content),
-      validators: file.validators,
-    }));
+    const fileManifest = toManifestEntries(files);
     const patchHash = computePatchHash(files);
     return {
       repository: `${owner}/${repo}`,
@@ -281,7 +339,7 @@ export class GitHubWriter {
 
   async apply(
     manifest: PreviewManifest,
-    files: PatchFile[],
+    files: ReadonlyArray<PatchFile | ChangeManifestEntry>,
     title: string,
     body: string,
   ): Promise<PullRequestReceipt> {
@@ -298,14 +356,25 @@ export class GitHubWriter {
 
     const actualSha = await this.reader.sourceSha(owner, repo, manifest.baseBranch);
     if (actualSha !== manifest.sourceSha) throw new StaleSourceError();
-    const { commitSha } = await this.backend.commitFiles(
-      owner,
-      repo,
-      manifest.branch,
-      title,
-      manifest.sourceSha,
-      files,
-    );
+    // A sandbox backend commits the working tree it holds; the files argument
+    // (manifest fingerprints) would be meaningless to it. Non-sandbox
+    // backends keep receiving whole-file bodies, so fakes stay valid.
+    const { commitSha } = supportsWorkingTreeCommit(this.backend)
+      ? await this.backend.commitWorkingTree(
+          owner,
+          repo,
+          manifest.branch,
+          title,
+          manifest.sourceSha,
+        )
+      : await this.backend.commitFiles(
+          owner,
+          repo,
+          manifest.branch,
+          title,
+          manifest.sourceSha,
+          files as PatchFile[],
+        );
     const pull = await this.backend.openDraftPull(
       owner,
       repo,
@@ -363,276 +432,21 @@ export class GitHubWriter {
 }
 
 /**
- * REST backend: the exact GitHub API sequence the flow used before the MCP
- * migration, moved behind the `GitHubBackend` seam (blobs -> tree on the
- * base commit -> commit with the pinned parent -> branch ref -> draft PR).
+ * NOTE: the former `RestGitHubBackend` (the hand-written GitHub REST sequence)
+ * is retired. Every lane now runs on `McpClientGitHubBackend` (mcp.ts), the
+ * single `GitHubBackend` implementation, so there is no parallel REST backend to
+ * keep in sync. `FetchGitHubTransport` below survives only as the narrow seam
+ * for the two operations the hosted GitHub MCP server exposes no tool for
+ * (review commit-range `compare`, and any future raw read), not as a backend.
  */
-export class RestGitHubBackend implements GitHubBackend {
-  constructor(
-    private readonly transport: GitHubTransport,
-    private readonly policy: GitHubPolicy,
-  ) {}
-
-  async headSha(owner: string, repo: string, branch: string): Promise<string> {
-    const response = bodyObject(await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
-      undefined,
-      this.policy.timeoutMs,
-    ));
-    const object = response.object;
-    if (typeof object !== "object" || object === null || !("sha" in object)
-      || typeof object.sha !== "string") throw new Error("Malformed GitHub ref response");
-    return object.sha;
-  }
-
-  async branchHead(owner: string, repo: string, branch: string): Promise<string | undefined> {
-    const response = await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`,
-      undefined,
-      this.policy.timeoutMs,
-    );
-    if (response.status === 404) return undefined;
-    const parsed = bodyObject(response);
-    const object = parsed.object;
-    if (typeof object !== "object" || object === null || !("sha" in object)
-      || typeof object.sha !== "string") throw new Error("Malformed GitHub branch response");
-    return object.sha;
-  }
-
-  async fileContent(
-    owner: string,
-    repo: string,
-    path: string,
-    refSha: string,
-  ): Promise<{ content: string; sha: string }> {
-    const response = bodyObject(await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(refSha)}`,
-      undefined,
-      this.policy.timeoutMs,
-    ));
-    if (typeof response.content !== "string" || typeof response.sha !== "string") {
-      throw new Error("Malformed GitHub contents response");
-    }
-    return {
-      content: Buffer.from(response.content.replace(/\s/g, ""), "base64").toString("utf8"),
-      sha: response.sha,
-    };
-  }
-
-  async commitFiles(
-    owner: string,
-    repo: string,
-    branch: string,
-    message: string,
-    baseSha: string,
-    files: PatchFile[],
-  ): Promise<{ commitSha: string }> {
-    const commit = bodyObject(await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/git/commits/${baseSha}`,
-      undefined,
-      this.policy.timeoutMs,
-    ));
-    const tree = commit.tree;
-    if (typeof tree !== "object" || tree === null || !("sha" in tree)
-      || typeof tree.sha !== "string") throw new Error("Malformed GitHub commit response");
-
-    const treeEntries = [];
-    for (const file of files) {
-      const blob = bodyObject(await this.transport.request(
-        "POST",
-        `/repos/${owner}/${repo}/git/blobs`,
-        { content: file.content, encoding: "utf-8" },
-        this.policy.timeoutMs,
-      ));
-      if (typeof blob.sha !== "string") throw new Error("Malformed GitHub blob response");
-      treeEntries.push({ path: file.path, mode: "100644", type: "blob", sha: blob.sha });
-    }
-    const newTree = bodyObject(await this.transport.request(
-      "POST",
-      `/repos/${owner}/${repo}/git/trees`,
-      { base_tree: tree.sha, tree: treeEntries },
-      this.policy.timeoutMs,
-    ));
-    const createdCommit = bodyObject(await this.transport.request(
-      "POST",
-      `/repos/${owner}/${repo}/git/commits`,
-      { message, tree: newTree.sha, parents: [baseSha] },
-      this.policy.timeoutMs,
-    ));
-    if (typeof createdCommit.sha !== "string") throw new Error("Malformed commit response");
-    bodyObject(await this.transport.request(
-      "POST",
-      `/repos/${owner}/${repo}/git/refs`,
-      { ref: `refs/heads/${branch}`, sha: createdCommit.sha },
-      this.policy.timeoutMs,
-    ));
-    return { commitSha: createdCommit.sha };
-  }
-
-  async openDraftPull(
-    owner: string,
-    repo: string,
-    branch: string,
-    baseBranch: string,
-    title: string,
-    body: string,
-  ): Promise<{ number: number; url: string }> {
-    const pull = bodyObject(await this.transport.request(
-      "POST",
-      `/repos/${owner}/${repo}/pulls`,
-      { title, head: branch, base: baseBranch, body, draft: true },
-      this.policy.timeoutMs,
-    ));
-    if (typeof pull.html_url !== "string" || typeof pull.number !== "number") {
-      throw new Error("Malformed pull request response");
-    }
-    return { number: pull.number, url: pull.html_url };
-  }
-
-  async listOpenPulls(
-    owner: string,
-    repo: string,
-    branch: string,
-  ): Promise<Array<{ number: number; url: string; body: string; draft: boolean }>> {
-    const pulls = await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open`,
-      undefined,
-      this.policy.timeoutMs,
-    );
-    if (pulls.status < 200 || pulls.status >= 300 || !Array.isArray(pulls.body)) {
-      throw new Error(`GitHub request failed (${pulls.status})`);
-    }
-    return pulls.body.map((value) => {
-      if (typeof value !== "object" || value === null
-        || !("number" in value) || typeof value.number !== "number"
-        || !("html_url" in value) || typeof value.html_url !== "string"
-        || !("body" in value) || typeof value.body !== "string"
-        || !("draft" in value) || typeof value.draft !== "boolean") {
-        throw new Error("Malformed pull request list response");
-      }
-      return {
-        number: value.number,
-        url: value.html_url,
-        body: value.body,
-        draft: value.draft,
-      };
-    });
-  }
-
-  async checkRuns(
-    owner: string,
-    repo: string,
-    commitSha: string,
-    _pullNumber?: number,
-  ): Promise<CheckStatus> {
-    const response = bodyObject(await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/commits/${commitSha}/check-runs`,
-      undefined,
-      this.policy.timeoutMs,
-    ));
-    const runs = Array.isArray(response.check_runs) ? response.check_runs : [];
-    return aggregateCheckRuns(runs);
-  }
-}
 
 export class GitHubRepositoryTools {
   readonly reader: GitHubSourceReader;
   readonly writer: GitHubWriter;
 
-  constructor(transport: GitHubTransport, policy: GitHubPolicy, _tokenSeam?: string);
-  constructor(backend: GitHubBackend, policy: GitHubPolicy);
-  constructor(backendOrTransport: GitHubTransport | GitHubBackend, policy: GitHubPolicy) {
-    const backend = "headSha" in backendOrTransport
-      ? backendOrTransport
-      : new RestGitHubBackend(backendOrTransport, policy);
+  constructor(backend: GitHubBackend, policy: GitHubPolicy) {
     this.reader = new GitHubSourceReader(backend, policy);
     this.writer = new GitHubWriter(backend, policy, this.reader);
   }
 }
 
-export class FakeGitHubTransport implements GitHubTransport {
-  sourceSha: string;
-  checks: CheckStatus;
-  readonly treeSha: string;
-  readonly commitSha: string;
-  writeCalls = 0;
-  commitCreates = 0;
-  readonly pullRequests: Array<{ body: string; draft: boolean }> = [];
-  readonly logs: string[] = [];
-  private branchSha: string | undefined;
-
-  constructor(config: {
-    sourceSha: string;
-    treeSha: string;
-    commitSha: string;
-    checks: CheckStatus;
-  }) {
-    this.sourceSha = config.sourceSha;
-    this.treeSha = config.treeSha;
-    this.commitSha = config.commitSha;
-    this.checks = config.checks;
-  }
-
-  async request(method: "GET" | "POST", path: string, body?: unknown): Promise<GitHubResponse> {
-    this.logs.push(`${method} ${path}`);
-    if (method === "POST") this.writeCalls += 1;
-    if (path.endsWith("/git/ref/heads/main")) {
-      return { status: 200, body: { object: { sha: this.sourceSha } } };
-    }
-    if (path.includes("/git/ref/heads/")) {
-      return this.branchSha === undefined
-        ? { status: 404, body: {} }
-        : { status: 200, body: { object: { sha: this.branchSha } } };
-    }
-    if (/\/git\/commits\/[a-f0-9]+$/.test(path) && method === "GET") {
-      return { status: 200, body: { tree: { sha: this.treeSha } } };
-    }
-    if (path.endsWith("/git/blobs")) return { status: 201, body: { sha: "e".repeat(40) } };
-    if (path.endsWith("/git/trees")) return { status: 201, body: { sha: "f".repeat(40) } };
-    if (path.endsWith("/git/commits") && method === "POST") {
-      this.commitCreates += 1;
-      return { status: 201, body: { sha: this.commitSha } };
-    }
-    if (path.endsWith("/git/refs")) {
-      const value = body as { sha: string };
-      this.branchSha = value.sha;
-      return { status: 201, body: { ref: "created" } };
-    }
-    if (path.includes("/pulls?")) {
-      return {
-        status: 200,
-        body: this.pullRequests.map((pull, index) => ({
-          ...pull,
-          html_url: `https://github.example/acme/widget/pull/${index + 1}`,
-          number: index + 1,
-        })),
-      };
-    }
-    if (path.endsWith("/pulls")) {
-      const value = body as { body: string; draft: boolean };
-      this.pullRequests.push(value);
-      return {
-        status: 201,
-        body: { html_url: "https://github.example/acme/widget/pull/1", number: 1 },
-      };
-    }
-    if (path.endsWith("/check-runs")) {
-      const check = this.checks === "failure"
-        ? { status: "completed", conclusion: "failure" }
-        : this.checks === "pending"
-          ? { status: "in_progress", conclusion: null }
-          : { status: "completed", conclusion: "success" };
-      return { status: 200, body: { check_runs: [check] } };
-    }
-    if (path.includes("/contents/")) {
-      return { status: 200, body: { content: Buffer.from("fixture").toString("base64"), sha: "1".repeat(40) } };
-    }
-    return { status: 404, body: {} };
-  }
-}

@@ -4,7 +4,8 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY apps/approval-ui/package.json ./apps/approval-ui/package.json
-RUN npm ci --workspace @allrounder/approval-ui --include-workspace-root
+# Match the lockfile's resolution mode (.npmrc is not copied into the image).
+RUN npm ci --workspace @allrounder/approval-ui --include-workspace-root --legacy-peer-deps
 
 COPY apps/approval-ui ./apps/approval-ui
 

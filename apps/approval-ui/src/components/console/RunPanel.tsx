@@ -2,8 +2,21 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 
+import { adfToMarkdown } from "@/lib/adf";
 import { ApiError } from "@/lib/api";
 import type { JiraIssue } from "@/lib/board";
+import {
+  fileToSnapRequest,
+  listCaseDocSnaps,
+  snapCaseDocument,
+  type CaseDocSnap,
+} from "@/lib/cases";
+import {
+  decisionPillIssues,
+  getRunPills,
+  pillBrokenCopy,
+  type RunPill,
+} from "@/lib/pills";
 import { START_RUN_HINT } from "@/lib/roles";
 import {
   RUNNABLE_WORKFLOWS,
@@ -11,6 +24,7 @@ import {
   completeReceipt,
   decideRunStep,
   getRun,
+  getRunTopology,
   isValidRepository,
   latestRunId,
   listGithubAccounts,
@@ -29,6 +43,8 @@ import {
   type RunEvent,
   type RunStep,
   type RunSummary,
+  type RunTopology,
+  type RunTopologyField,
   type RunVisualState,
 } from "@/lib/runs";
 
@@ -39,6 +55,7 @@ import {
   AccessibilityViolationsSurface,
   AiReviewSurface,
   CompleteSurface,
+  DeclaredFieldsCard,
   DependencyApplySurface,
   DependencyGroupSurface,
   DependencyMergeSurface,
@@ -121,6 +138,7 @@ import {
   type VendorCreateDraft,
   type VendorVerifyDraft,
 } from "./RunSurface";
+import { Markdown } from "./Markdown";
 import {
   HrHelpApproveSurface,
   HrHelpDraftSurface,
@@ -179,6 +197,7 @@ import {
   IconStop,
   IconXCircle,
 } from "./icons";
+import { PillTextArea } from "./PillTextArea";
 
 const STATUS_COPY: Record<string, string> = {
   queued: "Queued",
@@ -357,6 +376,17 @@ function startErrorCopy(error: unknown): string {
     return `The run could not start (${error.status}).`;
   }
   return "The run could not reach the API — check the API logs and try again.";
+}
+
+function snapErrorCopy(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.status === 413) return "The document is too large to snap (2 MiB maximum).";
+    if (error.status === 422) return "The document could not be read as a snap.";
+    if (error.status === 404) return "No case record backs this ticket, so the snap cannot be saved.";
+    if (error.status === 403) return "Your account cannot snap documents (agent or approver required).";
+    return `The snap was rejected (${error.status}).`;
+  }
+  return "The snap could not reach the API — try again in a moment.";
 }
 
 function buildReviewEdits(draft: ReviewDraft): Record<string, unknown> {
@@ -686,6 +716,7 @@ export function RunPanel({
   onToggleDebug,
   onRunsChanged,
   onActiveRun,
+  caseId,
 }: {
   issue: JiraIssue;
   runs: RunSummary[];
@@ -693,6 +724,7 @@ export function RunPanel({
   onToggleDebug: () => void;
   onRunsChanged: () => void;
   onActiveRun: (run: RunDetail | null) => void;
+  caseId?: string;
 }) {
   const sortedRuns = useMemo(() => sortRunsNewestFirst(runs), [runs]);
   const [activeRunId, setActiveRunId] = useState<string | null>(() => latestRunId(runs));
@@ -761,6 +793,12 @@ export function RunPanel({
   const [securityReplayedStepId, setSecurityReplayedStepId] = useState<string | null>(null);
   const [hrHelpDraft, setHrHelpDraft] = useState<HrHelpDraftState | null>(null);
   const [followUpBusy, setFollowUpBusy] = useState(false);
+  const [topology, setTopology] = useState<RunTopology | null>(null);
+  const [pills, setPills] = useState<RunPill[] | null>(null);
+  const [declaredDraft, setDeclaredDraft] = useState<Record<string, string> | null>(null);
+  const [snapSaved, setSnapSaved] = useState<CaseDocSnap | null>(null);
+  const [snapBusy, setSnapBusy] = useState(false);
+  const [snapError, setSnapError] = useState<string | null>(null);
 
   const onRunsChangedRef = useRef(onRunsChanged);
   onRunsChangedRef.current = onRunsChanged;
@@ -786,8 +824,16 @@ export function RunPanel({
     () => async (): Promise<void> => {
       if (activeRunId === null) return;
       try {
-        const run = await getRun(activeRunId);
+        // The topology carries the lane-declared fields (U7); the pill catalog
+        // feeds the `@` pickers (N3). A miss is not fatal for either.
+        const [run, topo, catalog] = await Promise.all([
+          getRun(activeRunId),
+          getRunTopology(activeRunId).catch(() => null),
+          getRunPills(activeRunId).catch(() => null),
+        ]);
         setDetail(run);
+        setTopology(topo);
+        setPills(catalog?.pills ?? null);
         setDetailError(false);
         onActiveRunRef.current(run);
       } catch {
@@ -810,6 +856,8 @@ export function RunPanel({
     setVendorReturnNote(null);
     setOnboardingReturnNote(null);
     setSecurityReturnNote(null);
+    setTopology(null);
+    setPills(null);
     setDetail(null);
     void reload();
   }, [activeRunId, loadTick, reload]);
@@ -885,7 +933,30 @@ export function RunPanel({
     setSecurityApproveDraft(null);
     setSecurityReplayedStepId(null);
     setHrHelpDraft(null);
+    setDeclaredDraft(null);
+    setSnapError(null);
   }, [focusKey]);
+
+  // A snap draft is case-scoped: when the ticket's case changes, rehydrate the
+  // latest saved draft so the collect card opens with the values already shown.
+  useEffect(() => {
+    setDeclaredDraft(null);
+    setSnapSaved(null);
+    setSnapError(null);
+    if (caseId === undefined) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const drafts = await listCaseDocSnaps(caseId);
+        if (!cancelled) setSnapSaved(drafts[0] ?? null);
+      } catch {
+        // A case without a snap trail simply has no saved draft to show.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [caseId]);
 
   // Auto-focus the step that is awaiting the user (or the last step when done).
   useEffect(() => {
@@ -900,6 +971,15 @@ export function RunPanel({
 
   async function submitDecision(decision: RunDecision): Promise<void> {
     if (detail === null || activeStep === null) return;
+    // Data pills (N3): a decision referencing a ref the catalog no longer
+    // knows is rejected server-side; fail it here first, loudly.
+    if (pills !== null) {
+      const issues = decisionPillIssues(decision, pills);
+      if (issues.length > 0) {
+        setActionError(pillBrokenCopy(issues));
+        return;
+      }
+    }
     setBusy(true);
     setActionError(null);
     try {
@@ -1122,25 +1202,39 @@ export function RunPanel({
         if (implementation === null || featureImplementationDraft === null) {
           return { action: "proceed" };
         }
-        const files = implementation.files.map((file) => ({
-          ...file,
-          content: featureImplementationDraft.files[file.path] ?? file.content,
-        }));
+        // Kept files carry their edited bytes, dropped files leave the plan
+        // entirely, and the recorded validators ride along so the flow can
+        // re-check the merged bytes before anything is applied.
+        const keptFiles = implementation.files
+          .filter((file) => featureImplementationDraft.included?.[file.path] ?? file.included)
+          .map((file) => ({
+            ...file,
+            content: featureImplementationDraft.files[file.path] ?? file.content,
+            included: true,
+          }));
         const dirty =
           featureImplementationDraft.summary !== implementation.summary ||
-          files.some((file, index) => file.content !== implementation.files[index]?.content);
+          keptFiles.length !== implementation.files.length ||
+          implementation.files.some(
+            (file) =>
+              (featureImplementationDraft.included?.[file.path] ?? file.included) !== file.included ||
+              (featureImplementationDraft.files[file.path] ?? file.content) !== file.content,
+          );
         if (!dirty) return { action: "proceed" };
         return {
           action: "edit",
-          edits: { summary: featureImplementationDraft.summary, files },
+          edits: { summary: featureImplementationDraft.summary, files: keptFiles },
         };
       }
       const implementation = parseIssueImplementation(artifact);
       if (implementation === null || implementationDraft === null) return { action: "proceed" };
-      const files = implementation.files.map((file) => ({
-        ...file,
-        content: implementationDraft.files[file.path] ?? file.content,
-      }));
+      const keptFiles = implementation.files
+        .filter((file) => implementationDraft.included?.[file.path] ?? file.included)
+        .map((file) => ({
+          ...file,
+          content: implementationDraft.files[file.path] ?? file.content,
+          included: true,
+        }));
       const regressionTest =
         implementation.regressionTest === null
           ? null
@@ -1150,14 +1244,19 @@ export function RunPanel({
             };
       const dirty =
         implementationDraft.summary !== implementation.summary ||
-        files.some((file, index) => file.content !== implementation.files[index]?.content) ||
+        keptFiles.length !== implementation.files.length ||
+        implementation.files.some(
+          (file) =>
+            (implementationDraft.included?.[file.path] ?? file.included) !== file.included ||
+            (implementationDraft.files[file.path] ?? file.content) !== file.content,
+        ) ||
         (implementation.regressionTest !== null &&
           regressionTest !== null &&
           regressionTest.content !== implementation.regressionTest.content);
       if (!dirty) return { action: "proceed" };
       return {
         action: "edit",
-        edits: { summary: implementationDraft.summary, files, regressionTest },
+        edits: { summary: implementationDraft.summary, files: keptFiles, regressionTest },
       };
     }
     if (activeStep.stepId === "crawl") {
@@ -1222,11 +1321,13 @@ export function RunPanel({
           collect.returnedNote ??
           ""
         ).slice(0, 500);
+        const customFields = declaredEditValues("collect", artifact);
         const dirty =
           (onboardingCollectDraft !== null &&
             JSON.stringify(onboardingCollectDraft.documents) !==
               JSON.stringify(collect.documents)) ||
-          returnedNote !== (collect.returnedNote ?? "");
+          returnedNote !== (collect.returnedNote ?? "") ||
+          customFields !== null;
         if (!dirty) return { action: "proceed" };
         return {
           action: "edit",
@@ -1234,6 +1335,7 @@ export function RunPanel({
             documents,
             totals: onboardingDocumentTotals(documents),
             returnedNote: returnedNote === "" ? null : returnedNote,
+            ...(customFields === null ? {} : { customFields }),
           },
         };
       }
@@ -1246,10 +1348,12 @@ export function RunPanel({
         collect.returnedNote ??
         ""
       ).slice(0, 500);
+      const customFields = declaredEditValues("collect", artifact);
       const dirty =
         (vendorCollectDraft !== null &&
           JSON.stringify(vendorCollectDraft.documents) !== JSON.stringify(collect.documents)) ||
-        returnedNote !== (collect.returnedNote ?? "");
+        returnedNote !== (collect.returnedNote ?? "") ||
+        customFields !== null;
       if (!dirty) return { action: "proceed" };
       return {
         action: "edit",
@@ -1257,6 +1361,7 @@ export function RunPanel({
           documents,
           totals: vendorDocumentTotals(documents),
           returnedNote: returnedNote === "" ? null : returnedNote,
+          ...(customFields === null ? {} : { customFields }),
         },
       };
     }
@@ -1425,6 +1530,136 @@ export function RunPanel({
       return { action: "edit", edits: { answer: hrHelpDraft.answer.slice(0, 4_000) } };
     }
     return { action: "proceed" };
+  }
+
+  /** Lane-declared fields of one step, straight from the run topology (U7). */
+  function declaredFieldsFor(stepId: string): RunTopologyField[] {
+    return topology?.steps.find((item) => item.stepId === stepId)?.fields ?? [];
+  }
+
+  /** The `customFields` a past edit already applied to the step's artifact. */
+  function appliedDeclaredFields(artifact: Record<string, unknown> | null): Record<string, string> {
+    const raw = artifact === null ? null : artifact["customFields"];
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const values: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === "string") values[key] = value;
+    }
+    return values;
+  }
+
+  /**
+   * Effective declared values, lowest precedence first: the latest snap's
+   * extraction (mapped through each field's snapKey), the values a past edit
+   * applied to the artifact, and the in-progress draft.
+   */
+  function declaredValues(
+    stepId: string,
+    artifact: Record<string, unknown> | null,
+  ): Record<string, string> {
+    const values: Record<string, string> = {};
+    if (snapSaved !== null) {
+      for (const field of declaredFieldsFor(stepId)) {
+        if (field.snapKey === "") continue;
+        const extracted = snapSaved.fields[field.snapKey] ?? "";
+        if (extracted !== "") values[field.id] = extracted;
+      }
+    }
+    return {
+      ...values,
+      ...appliedDeclaredFields(artifact),
+      ...(declaredDraft ?? {}),
+    };
+  }
+
+  /** The declared fields' edit payload for Proceed, or null when nothing changed. */
+  function declaredEditValues(
+    stepId: string,
+    artifact: Record<string, unknown> | null,
+  ): Record<string, string> | null {
+    const fields = declaredFieldsFor(stepId);
+    if (fields.length === 0) return null;
+    const values = declaredValues(stepId, artifact);
+    const applied = appliedDeclaredFields(artifact);
+    const next: Record<string, string> = {};
+    const current: Record<string, string> = {};
+    for (const field of fields) {
+      const value = (values[field.id] ?? "").trim().slice(0, field.maxLength);
+      if (value !== "") next[field.id] = value;
+      const existing = (applied[field.id] ?? "").trim();
+      if (existing !== "") current[field.id] = existing;
+    }
+    if (Object.keys(next).length === 0 && Object.keys(current).length === 0) return null;
+    if (JSON.stringify(next) === JSON.stringify(current)) return null;
+    return next;
+  }
+
+  /** Proceed stays blocked while a required declared field has no value. */
+  function declaredRequiredMissing(
+    stepId: string,
+    artifact: Record<string, unknown> | null,
+  ): boolean {
+    const required = declaredFieldsFor(stepId).filter((field) => field.required);
+    if (required.length === 0) return false;
+    const values = declaredValues(stepId, artifact);
+    return required.some((field) => (values[field.id] ?? "").trim() === "");
+  }
+
+  /** Snap a document into the case trail; its extracted fields seed the draft. */
+  async function snapDocument(file: File, fields: RunTopologyField[]): Promise<void> {
+    if (caseId === undefined) {
+      setSnapError("This run is not attached to a case, so there is nowhere to save the draft.");
+      return;
+    }
+    setSnapBusy(true);
+    setSnapError(null);
+    try {
+      const request = await fileToSnapRequest(file);
+      const draft = await snapCaseDocument(caseId, request);
+      if (draft === null) {
+        setSnapError("The snap was saved but the draft could not be read — reload to see it.");
+        return;
+      }
+      setSnapSaved(draft);
+      setDeclaredDraft((previous) => {
+        const merged: Record<string, string> = { ...(previous ?? {}) };
+        for (const field of fields) {
+          if (field.snapKey === "") continue;
+          const extracted = draft.fields[field.snapKey] ?? "";
+          if (extracted !== "") merged[field.id] = extracted;
+        }
+        return merged;
+      });
+    } catch (error) {
+      setSnapError(snapErrorCopy(error));
+    } finally {
+      setSnapBusy(false);
+    }
+  }
+
+  /** The lane-fields card shown under a collect surface (U7). */
+  function declaredFieldsCard(step: RunStep, interactive: boolean): ReactNode {
+    const fields = declaredFieldsFor(step.stepId);
+    if (fields.length === 0) return null;
+    return (
+      <DeclaredFieldsCard
+        fields={fields}
+        values={declaredValues(step.stepId, step.artifact)}
+        flags={snapSaved?.flags ?? []}
+        editable={interactive}
+        snapBusy={snapBusy}
+        snapNote={
+          snapSaved === null
+            ? null
+            : `Snapped ${snapSaved.source.filename} · ${snapSaved.extractor} · ${snapSaved.flags.length} check(s)`
+        }
+        snapError={snapError}
+        onChange={(fieldId, value) =>
+          setDeclaredDraft((previous) => ({ ...(previous ?? {}), [fieldId]: value }))
+        }
+        onSnap={(file) => void snapDocument(file, fields)}
+      />
+    );
   }
 
   async function startFollowUp(): Promise<void> {
@@ -1735,12 +1970,14 @@ export function RunPanel({
                   ? "What should change in this step?"
                   : "What should the reviewer change?"}
               </span>
-              <textarea
+              <PillTextArea
                 rows={2}
                 maxLength={2000}
                 value={guidance}
                 placeholder="Optional guidance for the regeneration"
-                onChange={(event) => setGuidance(event.target.value)}
+                onChange={setGuidance}
+                pills={pills ?? undefined}
+                fieldLabel="Guidance for the regeneration"
               />
             </label>
             <div className="run-actions">
@@ -1962,6 +2199,7 @@ export function RunPanel({
               editing={hrHelp && interactive && editActive}
               draft={hrHelp ? hrHelpDraft : null}
               onChange={hrHelp ? setHrHelpDraft : undefined}
+              pills={pills ?? undefined}
             />
             {decisionLine(step)}
             {interactive &&
@@ -1998,6 +2236,7 @@ export function RunPanel({
               editing={interactive && editActive}
               draft={analysisDraft}
               onChange={setAnalysisDraft}
+              pills={pills ?? undefined}
             />
             {decisionLine(step)}
             {interactive && actionBar(step, false)}
@@ -2032,6 +2271,7 @@ export function RunPanel({
               editable={interactive}
               draft={scopeDesignDraft}
               onChange={setScopeDesignDraft}
+              pills={pills ?? undefined}
             />
             {decisionLine(step)}
             {interactive && actionBar(step, areas.length > 0 && enabledCount === 0)}
@@ -2214,9 +2454,14 @@ export function RunPanel({
                 returnNote={onboardingReturnNote}
                 onChange={setOnboardingCollectDraft}
               />
+              {declaredFieldsCard(step, interactive)}
               {decisionLine(step)}
               {interactive &&
-                actionBar(step, onboardingCollectBlocked(artifact, onboardingCollectDraft))}
+                actionBar(
+                  step,
+                  onboardingCollectBlocked(artifact, onboardingCollectDraft) ||
+                    declaredRequiredMissing(step.stepId, artifact),
+                )}
             </>
           );
         }
@@ -2229,8 +2474,14 @@ export function RunPanel({
               returnNote={vendorReturnNote}
               onChange={setVendorCollectDraft}
             />
+            {declaredFieldsCard(step, interactive)}
             {decisionLine(step)}
-            {interactive && actionBar(step, vendorCollectBlocked(artifact, vendorCollectDraft))}
+            {interactive &&
+              actionBar(
+                step,
+                vendorCollectBlocked(artifact, vendorCollectDraft) ||
+                  declaredRequiredMissing(step.stepId, artifact),
+              )}
           </>
         );
       case "verify":
@@ -2501,6 +2752,7 @@ export function RunPanel({
               editable={interactive}
               draft={optionsDraft}
               onChange={setOptionsDraft}
+              pills={pills ?? undefined}
             />
             {decisionLine(step)}
             {interactive && actionBar(step, false)}
@@ -2514,6 +2766,7 @@ export function RunPanel({
               editing={interactive && editActive}
               draft={reviewDraft}
               onChange={setReviewDraft}
+              pills={pills ?? undefined}
             />
             {decisionLine(step)}
             {interactive && actionBar(step, false)}
@@ -2555,6 +2808,7 @@ export function RunPanel({
                 editing
                 draft={reviewDraft}
                 onChange={setReviewDraft}
+                pills={pills ?? undefined}
               />
             )}
             {decisionLine(step)}
@@ -2806,14 +3060,27 @@ export function StartRunCard({
   initialWorkflow,
   workflowOptions,
   canStart = true,
+  disabledHint,
+  description,
 }: {
   issue: JiraIssue;
   caseId: string | null;
-  onStarted: () => void;
+  /**
+   * Called after the API accepted the start. Describe-started runs use the
+   * returned run to open its tab; ticket callers ignore the argument.
+   */
+  onStarted: (started?: RunDetail) => void;
   initialWorkflow?: string;
   workflowOptions?: ReadonlyArray<{ id: string; label: string }>;
   /** False disables the launcher; the server stays source of truth. */
   canStart?: boolean;
+  /** Replaces the role hint while disabled when the caller gates otherwise. */
+  disabledHint?: string;
+  /**
+   * Describe-mode intake: overrides the ticket summary as the run's working
+   * description (issues and features inputs carry this text).
+   */
+  description?: string;
 }) {
   const options =
     workflowOptions !== undefined && workflowOptions.length > 0
@@ -2884,6 +3151,12 @@ export function StartRunCard({
     !hrHelpFlow &&
     !securityFlow;
   const accountsSettled = accounts !== null || accountsFailed;
+
+  // Full ticket body from Jira (ADF → markdown via mdast-util-from-adf). It
+  // feeds the intake text so agents work from the written spec, not just the
+  // header, and renders as a collapsible brief above the launcher.
+  const ticketBody = useMemo(() => adfToMarkdown(issue.description_adf), [issue.description_adf]);
+  const ticketBrief = ticketBody === "" ? issue.summary : `${issue.summary}\n\n${ticketBody}`;
 
   useEffect(() => {
     if (!accountsSettled) return undefined;
@@ -2975,13 +3248,13 @@ export function StartRunCard({
       setError(null);
       try {
         const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
-        await startRun({
+        const started = await startRun({
           workflow,
           ticketKey: issue.key,
           caseId: activeCaseId,
           input: { vendorName: name, taxId, requestor, country },
         });
-        onStarted();
+        onStarted(started);
       } catch (submitError) {
         setError(startErrorCopy(submitError));
       } finally {
@@ -3007,13 +3280,13 @@ export function StartRunCard({
       setError(null);
       try {
         const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
-        await startRun({
+        const started = await startRun({
           workflow,
           ticketKey: issue.key,
           caseId: activeCaseId,
           input: { employeeId, leaveType, startDate: leaveStart, endDate: leaveEnd },
         });
-        onStarted();
+        onStarted(started);
       } catch (submitError) {
         setError(startErrorCopy(submitError));
       } finally {
@@ -3055,7 +3328,7 @@ export function StartRunCard({
       setError(null);
       try {
         const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
-        await startRun({
+        const started = await startRun({
           workflow,
           ticketKey: issue.key,
           caseId: activeCaseId,
@@ -3069,7 +3342,7 @@ export function StartRunCard({
             accessTier: hireAccessTier,
           },
         });
-        onStarted();
+        onStarted(started);
       } catch (submitError) {
         setError(startErrorCopy(submitError));
       } finally {
@@ -3096,13 +3369,13 @@ export function StartRunCard({
       setError(null);
       try {
         const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
-        await startRun({
+        const started = await startRun({
           workflow,
           ticketKey: issue.key,
           caseId: activeCaseId,
           input: { employeeId, lastDay: offboardLastDay, reason: reason.slice(0, 500) },
         });
-        onStarted();
+        onStarted(started);
       } catch (submitError) {
         setError(startErrorCopy(submitError));
       } finally {
@@ -3120,13 +3393,13 @@ export function StartRunCard({
       setError(null);
       try {
         const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
-        await startRun({
+        const started = await startRun({
           workflow,
           ticketKey: issue.key,
           caseId: activeCaseId,
           input: { requisitionId },
         });
-        onStarted();
+        onStarted(started);
       } catch (submitError) {
         setError(startErrorCopy(submitError));
       } finally {
@@ -3148,13 +3421,13 @@ export function StartRunCard({
       setError(null);
       try {
         const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
-        await startRun({
+        const started = await startRun({
           workflow,
           ticketKey: issue.key,
           caseId: activeCaseId,
           input: { question },
         });
-        onStarted();
+        onStarted(started);
       } catch (submitError) {
         setError(startErrorCopy(submitError));
       } finally {
@@ -3186,7 +3459,7 @@ export function StartRunCard({
       setError(null);
       try {
         const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
-        await startRun({
+        const started = await startRun({
           workflow,
           ticketKey: issue.key,
           caseId: activeCaseId,
@@ -3198,7 +3471,7 @@ export function StartRunCard({
             indicators,
           },
         });
-        onStarted();
+        onStarted(started);
       } catch (submitError) {
         setError(startErrorCopy(submitError));
       } finally {
@@ -3222,11 +3495,15 @@ export function StartRunCard({
       setError("The pull request number must be a positive whole number.");
       return;
     }
+    const intakeSummary =
+      description !== undefined && description.trim() !== ""
+        ? description.trim()
+        : ticketBrief;
     setBusy(true);
     setError(null);
     try {
       const activeCaseId = caseId ?? (await openCase(issue.key)).caseId;
-      await startRun({
+      const started = await startRun({
         workflow,
         ticketKey: issue.key,
         caseId: activeCaseId,
@@ -3239,15 +3516,17 @@ export function StartRunCard({
             : repositoryOptional
               ? {
                   ticketKey: issue.key,
-                  ticketSummary: issue.summary,
-                  candidates: [{ key: issue.key, summary: issue.summary, status: issue.status }],
+                  ticketSummary: intakeSummary.slice(0, 2000),
+                  candidates: [
+                    { key: issue.key, summary: intakeSummary.slice(0, 500), status: issue.status },
+                  ],
                   ...(repo === "" ? {} : { repository: repo }),
                 }
               : parsedNumber === null
                 ? { repository: repo }
                 : { repository: repo, prNumber: parsedNumber },
       });
-      onStarted();
+      onStarted(started);
     } catch (submitError) {
       setError(startErrorCopy(submitError));
     } finally {
@@ -3268,6 +3547,12 @@ export function StartRunCard({
           </p>
         </div>
       </header>
+      {ticketBody !== "" && (
+        <details className="ticket-brief" open>
+          <summary>Ticket description</summary>
+          <Markdown text={ticketBody} />
+        </details>
+      )}
       {caseId === null && (
         <p className="step-summary">
           Starting the run will open (or reuse) this ticket's case record automatically.
@@ -3805,7 +4090,7 @@ export function StartRunCard({
       {!canStart && (
         <p className="role-hint" role="note">
           <IconLock />
-          {START_RUN_HINT}
+          {disabledHint ?? START_RUN_HINT}
         </p>
       )}
       <div className="run-actions">
@@ -3813,7 +4098,7 @@ export function StartRunCard({
           type="submit"
           className="approve"
           disabled={busy || !canStart}
-          title={canStart ? undefined : START_RUN_HINT}
+          title={canStart ? undefined : (disabledHint ?? START_RUN_HINT)}
         >
           {busy ? (
             <>

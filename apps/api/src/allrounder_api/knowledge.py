@@ -88,6 +88,32 @@ class RetrievalResult:
 
 
 @dataclass(frozen=True)
+class DomainSummary:
+    """One knowledge partition's document roll-up (console KB page, U5)."""
+
+    domain: str
+    documents: int
+    stale: int
+    canonical: int
+    updated_at: datetime | None
+
+
+@dataclass(frozen=True)
+class DocumentSummary:
+    """One versioned document row; versions are separate rows by design."""
+
+    source_id: str
+    title: str
+    source_version: str
+    source_uri: str
+    stale: bool
+    stale_after: datetime
+    canonical: bool
+    chunks: int
+    created_at: datetime | None
+
+
+@dataclass(frozen=True)
 class _Chunk:
     document: KnowledgeDocument
     ordinal: int
@@ -480,6 +506,9 @@ class InMemoryKnowledgeStore:
         self._tuning = tuning or RetrievalTuning()
         self._tenant_overrides: Mapping[str, Mapping[str, int]] = tenant_overrides or {}
         self._chunks: list[_Chunk] = []
+        # Ingest times keyed (tenant, source, version) so the catalog reads
+        # can order versions the way Postgres orders `created_at`.
+        self._ingested_at: dict[tuple[str, str, str], datetime] = {}
 
     async def ingest(
         self, document: KnowledgeDocument, *, chunk_size: int = 800, overlap: int = 100
@@ -494,6 +523,9 @@ class InMemoryKnowledgeStore:
                 and chunk.document.source_version == document.source_version
             )
         ]
+        self._ingested_at[
+            (document.tenant_id, document.source_id, document.source_version)
+        ] = datetime.now(UTC)
         self._chunks.extend(
             _Chunk(
                 document,
@@ -511,7 +543,7 @@ class InMemoryKnowledgeStore:
 
     async def retrieve(
         self, tenant_id: str, domain: str, query: str, k: int, *,
-        now: datetime | None = None,
+        now: datetime | None = None, canonical: bool = False,
     ) -> RetrievalResult:
         if k < 1:
             raise ValueError("k must be positive")
@@ -524,6 +556,7 @@ class InMemoryKnowledgeStore:
                 and chunk.document.domain == domain
                 and chunk.embedding_model == self._embeddings.model
                 and chunk.embedding_dimensions == self._embeddings.dimensions
+                and (not canonical or chunk.document.metadata.get("canonical") is True)
             )
         ]
         if not scoped:
@@ -575,6 +608,81 @@ class InMemoryKnowledgeStore:
     @staticmethod
     def _cosine(left: list[float], right: list[float]) -> float:
         return sum(a * b for a, b in zip(left, right, strict=True))
+
+    def _documents_by_domain(
+        self, tenant_id: str
+    ) -> dict[str, list[KnowledgeDocument]]:
+        """Latest chunk per (source, version) grouped by domain, version rows kept."""
+
+        grouped: dict[str, dict[tuple[str, str], KnowledgeDocument]] = {}
+        for chunk in self._chunks:
+            document = chunk.document
+            if document.tenant_id != tenant_id:
+                continue
+            grouped.setdefault(document.domain, {}).setdefault(
+                (document.source_id, document.source_version), document
+            )
+        return {domain: list(docs.values()) for domain, docs in grouped.items()}
+
+    async def list_domains(
+        self, tenant_id: str, *, now: datetime | None = None
+    ) -> list[DomainSummary]:
+        at = now or datetime.now(UTC)
+        summaries: list[DomainSummary] = []
+        for domain, documents in sorted(self._documents_by_domain(tenant_id).items()):
+            stamps = [
+                self._ingested_at.get((tenant_id, item.source_id, item.source_version))
+                for item in documents
+            ]
+            present = [stamp for stamp in stamps if stamp is not None]
+            summaries.append(
+                DomainSummary(
+                    domain=domain,
+                    documents=len(documents),
+                    stale=sum(1 for item in documents if item.stale_after <= at),
+                    canonical=sum(
+                        1 for item in documents if item.metadata.get("canonical") is True
+                    ),
+                    updated_at=max(present) if present else None,
+                )
+            )
+        return summaries
+
+    async def list_documents(
+        self, tenant_id: str, domain: str, *, now: datetime | None = None
+    ) -> list[DocumentSummary]:
+        at = now or datetime.now(UTC)
+        counts: dict[tuple[str, str], int] = {}
+        for chunk in self._chunks:
+            document = chunk.document
+            if document.tenant_id != tenant_id or document.domain != domain:
+                continue
+            key = (document.source_id, document.source_version)
+            counts[key] = counts.get(key, 0) + 1
+        summaries = [
+            DocumentSummary(
+                source_id=document.source_id,
+                title=document.title,
+                source_version=document.source_version,
+                source_uri=str(
+                    document.metadata.get("source_uri", f"kb://{document.source_id}")
+                ),
+                stale=document.stale_after <= at,
+                stale_after=document.stale_after,
+                canonical=document.metadata.get("canonical") is True,
+                chunks=counts.get(
+                    (document.source_id, document.source_version), 0
+                ),
+                created_at=self._ingested_at.get(
+                    (tenant_id, document.source_id, document.source_version)
+                ),
+            )
+            for document in self._documents_by_domain(tenant_id).get(domain, [])
+        ]
+        floor = datetime.min.replace(tzinfo=UTC)
+        summaries.sort(key=lambda item: item.created_at or floor, reverse=True)
+        summaries.sort(key=lambda item: item.source_id)
+        return summaries
 
 
 class PostgresKnowledgeStore:
@@ -660,7 +768,7 @@ class PostgresKnowledgeStore:
 
     async def retrieve(
         self, tenant_id: str, domain: str, query: str, k: int, *,
-        now: datetime | None = None,
+        now: datetime | None = None, canonical: bool = False,
     ) -> RetrievalResult:
         if k < 1:
             raise ValueError("k must be positive")
@@ -679,12 +787,14 @@ class PostgresKnowledgeStore:
                 join public.kb_documents d on d.id = c.document_id
                 where d.tenant_id = %s and d.domain = %s
                   and c.embedding_model = %s and c.embedding_dimensions = %s
+                  and (%s = false or d.metadata @> '{"canonical": true}'::jsonb)
                 order by c.embedding <=> %s::extensions.vector
                 limit %s
                 """,
                 (
                     at, tenant_id, domain,
-                    self._embeddings.model, self._embeddings.dimensions, encoded, limit,
+                    self._embeddings.model, self._embeddings.dimensions,
+                    canonical, encoded, limit,
                 ),
             )
             dense_rows = await dense_cursor.fetchall()
@@ -698,13 +808,15 @@ class PostgresKnowledgeStore:
                 join public.kb_documents d on d.id = c.document_id
                 where d.tenant_id = %s and d.domain = %s
                   and c.embedding_model = %s and c.embedding_dimensions = %s
+                  and (%s = false or d.metadata @> '{"canonical": true}'::jsonb)
                   and c.content_tsv @@ websearch_to_tsquery('simple', %s)
                 order by rank desc, d.source_id, c.span_start
                 limit %s
                 """,
                 (
                     at, query, tenant_id, domain,
-                    self._embeddings.model, self._embeddings.dimensions, query, limit,
+                    self._embeddings.model, self._embeddings.dimensions,
+                    canonical, query, limit,
                 ),
             )
             lexical_rows = await lexical_cursor.fetchall()
@@ -737,6 +849,74 @@ class PostgresKnowledgeStore:
             rerank_model=rerank_model,
             rerank_degraded=rerank_degraded,
         )
+
+    async def list_domains(
+        self, tenant_id: str, *, now: datetime | None = None
+    ) -> list[DomainSummary]:
+        at = now or datetime.now(UTC)
+        async with self._pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select domain,
+                       count(*) as documents,
+                       count(*) filter (where stale_after <= %s) as stale,
+                       count(*) filter (
+                           where metadata @> '{"canonical": true}'::jsonb
+                       ) as canonical,
+                       max(created_at) as updated_at
+                from public.kb_documents
+                where tenant_id = %s
+                group by domain
+                order by domain
+                """,
+                (at, tenant_id),
+            )
+            rows = await cursor.fetchall()
+        return [
+            DomainSummary(
+                domain=str(row["domain"]),
+                documents=int(row["documents"]),
+                stale=int(row["stale"]),
+                canonical=int(row["canonical"]),
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
+    async def list_documents(
+        self, tenant_id: str, domain: str, *, now: datetime | None = None
+    ) -> list[DocumentSummary]:
+        at = now or datetime.now(UTC)
+        async with self._pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select d.source_id, d.title, d.source_version, d.source_uri,
+                       d.stale_after <= %s as stale, d.stale_after,
+                       d.metadata @> '{"canonical": true}'::jsonb as canonical,
+                       d.created_at, count(c.id) as chunks
+                from public.kb_documents d
+                left join public.kb_chunks c on c.document_id = d.id
+                where d.tenant_id = %s and d.domain = %s
+                group by d.id
+                order by d.source_id, d.created_at desc
+                """,
+                (at, tenant_id, domain),
+            )
+            rows = await cursor.fetchall()
+        return [
+            DocumentSummary(
+                source_id=str(row["source_id"]),
+                title=str(row["title"]),
+                source_version=str(row["source_version"]),
+                source_uri=str(row["source_uri"]),
+                stale=bool(row["stale"]),
+                stale_after=row["stale_after"],
+                canonical=bool(row["canonical"]),
+                chunks=int(row["chunks"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
 
 
 def _encode_vector(vector: list[float], dimensions: int) -> str:

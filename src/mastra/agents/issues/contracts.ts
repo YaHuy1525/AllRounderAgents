@@ -264,6 +264,9 @@ export const ImplementationFileSchema = z
     diff: z.string().max(500_000),
     content: z.string().max(200_000),
     validators: z.array(ValidatorNameSchema).min(1).max(4),
+    /** Plan editing: a reviewer can drop a file from the patch by flipping
+     * this to false. Absent means included, so recorded artifacts stay valid. */
+    included: z.boolean().optional(),
   })
   .strict();
 

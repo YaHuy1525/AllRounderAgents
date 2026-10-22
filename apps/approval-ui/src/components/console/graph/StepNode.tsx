@@ -17,6 +17,8 @@ export type StepNodeData = {
   active: boolean;
   /** True when the run recorded a side effect for this step. */
   effect?: boolean;
+  /** True when the step carries a signed decision receipt. */
+  receipt?: boolean;
 };
 
 export type StepFlowNode = Node<StepNodeData, "stepNode">;
@@ -44,6 +46,13 @@ export function StepNode({ data, selected }: NodeProps<StepFlowNode>) {
         <span className="graph-step-index" aria-hidden="true">
           {data.index + 1}
         </span>
+        {data.receipt === true && (
+          <span
+            className="graph-step-receipt-dot"
+            title="Signed decision receipt recorded"
+            aria-label="Signed decision receipt recorded"
+          />
+        )}
         <span className="graph-step-state">
           <span className="graph-step-dot" aria-hidden="true" />
           {STATE_COPY[data.state]}

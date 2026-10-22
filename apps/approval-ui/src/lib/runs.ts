@@ -64,6 +64,15 @@ export type RunSummary = {
   ticketKey: string;
   status: RunStatus;
   queuePosition: number | null;
+  /**
+   * Which ceiling a ``queued`` run waits on ("run" | "apply" | "model"),
+   * sourced server-side from the run's recorded pass; null when the run
+   * carries no pass record. Names the actual queue so the console can say
+   * more than "waiting for a run slot".
+   */
+  waitingOn: string | null;
+  /** Ceiling slots the recorded pass has already been granted. */
+  heldSlots: string[];
   currentStepId: string | null;
   stepCount: number;
   stepsDone: number;
@@ -173,6 +182,9 @@ export const RUNNABLE_WORKFLOWS: ReadonlyArray<{
 
 /** Keyword signals that pull in their workflow even when the Jira type is generic. */
 const KEYWORD_WORKFLOW_RULES: ReadonlyArray<{ id: string; tokens: readonly string[] }> = [
+  // The SCRUM project has no Bug issue type, so the type fallback below can
+  // never reach the issues lane from the board — summary/label keywords must.
+  { id: "issues", tokens: ["fix:", "bug"] },
   { id: "onboarding", tokens: ["new hire", "new-hire", "onboarding", "new starter", "new employee"] },
   { id: "offboarding", tokens: ["offboard", "off-board", "termination", "resignation", "departure", "last day"] },
   { id: "screening", tokens: ["screen", "candidate", "recruit", "interview", "requisition"] },
@@ -238,6 +250,17 @@ export function workflowsForTicket(ticket: {
 /** Console label for a workflow id (falls back to the raw id). */
 export function workflowLabel(id: string): string {
   return RUNNABLE_WORKFLOWS.find((item) => item.id === id)?.label ?? id;
+}
+
+/**
+ * Synthetic key for describe-started runs. The server accepts any key
+ * matching the ticket pattern when opening a case (no Jira lookup), and
+ * TASK- keys are local-only: they never appear on the board.
+ */
+export function syntheticTaskKey(): string {
+  const lead = 1 + Math.floor(Math.random() * 9);
+  const rest = String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0");
+  return `TASK-${lead}${rest}`;
 }
 
 const REPOSITORY_PATTERN = /^[\w.-]+\/[\w.-]+$/;
@@ -327,6 +350,11 @@ export function completeReceipt(run: RunDetail): Record<string, unknown> | null 
 
 function asString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+/** Ceiling kind names: keep the strings, drop anything not a string. */
+function asStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function asNumber(value: unknown): number | null {
@@ -437,6 +465,8 @@ export function parseRunSnapshot(value: unknown): RunDetail | null {
     ticketKey,
     status: record.status,
     queuePosition: asNumber(record.queuePosition),
+    waitingOn: asString(record.waitingOn),
+    heldSlots: asStringList(record.heldSlots),
     currentStepId: asString(record.currentStepId),
     stepCount,
     stepsDone,
@@ -450,6 +480,207 @@ export function parseRunSnapshot(value: unknown): RunDetail | null {
     outcome: asString(record.outcome),
     cancelReason: asString(record.cancelReason),
     sideEffects: asEffectMap(record.sideEffects),
+    steps,
+  };
+}
+
+/**
+ * One lane-declared custom input on a topology step (U7): the lane owner
+ * configures these in ``definitions.py`` and the step surface renders them.
+ * ``snapKey`` names the canonical doc-snap extraction key (``abn``,
+ * ``expiry``, ``invoiceNumber``, ``total``) that auto-fills the field when
+ * a snapped document carries it.
+ */
+export type RunTopologyField = {
+  id: string;
+  label: string;
+  kind: "text" | "date" | "number";
+  required: boolean;
+  maxLength: number;
+  placeholder: string;
+  help: string;
+  snapKey: string;
+};
+
+/**
+ * One step row of the N1 topology payload (`GET /runs/{id}/topology`): the
+ * live state from `run_snapshot()` enriched with the static satellites and
+ * lineage flags the five lenses render.
+ */
+export type RunTopologyStep = {
+  stepId: string;
+  index: number;
+  title: string;
+  state: RunStepState;
+  sideEffecting: boolean;
+  integrations: string[];
+  fields: RunTopologyField[];
+  receipt: string | null;
+  actionHash: string | null;
+  hasArtifact: boolean;
+  hasDecision: boolean;
+  regenerations: number;
+  updatedAt: string;
+};
+
+/** One signed-receipt row of the topology's receipt trail. */
+export type RunTopologyReceipt = {
+  stepId: string;
+  receipt: string | null;
+  actionHash: string | null;
+  effectRecorded: boolean;
+};
+
+export type RunTopologyLock = {
+  target: string | null;
+  lockedBy: string | null;
+};
+
+/**
+ * Read model behind the view switcher: one payload so the graph, header,
+ * data, and timeline lenses never disagree on step state.
+ */
+export type RunTopology = {
+  runId: string;
+  workflow: string;
+  status: RunStatus;
+  attempt: number;
+  currentStepId: string | null;
+  stepCount: number;
+  stepsDone: number;
+  startedAt: string;
+  finishedAt: string | null;
+  lock: RunTopologyLock | null;
+  receipts: { signed: number; items: RunTopologyReceipt[] };
+  steps: RunTopologyStep[];
+};
+
+function parseRunTopologyField(value: unknown): RunTopologyField | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const id = asString(record.id);
+  const label = asString(record.label);
+  if (id === null || id === "" || label === null || label === "") return null;
+  const maxLength = asNumber(record.maxLength);
+  return {
+    id,
+    label,
+    kind: record.kind === "date" || record.kind === "number" ? record.kind : "text",
+    required: record.required === true,
+    // Clamp to the same 4000-char cap every surface input enforces.
+    maxLength: Math.min(Math.max(maxLength ?? 4_000, 1), 4_000),
+    placeholder: asString(record.placeholder) ?? "",
+    help: asString(record.help) ?? "",
+    snapKey: asString(record.snapKey) ?? "",
+  };
+}
+
+function parseRunTopologyStep(value: unknown): RunTopologyStep | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const stepId = asString(record.stepId);
+  const index = asNumber(record.index);
+  const title = asString(record.title);
+  if (stepId === null || index === null || title === null || !isRunStepState(record.state)) {
+    return null;
+  }
+  const rawIntegrations = record.integrations;
+  const integrations = Array.isArray(rawIntegrations)
+    ? rawIntegrations.filter((item): item is string => typeof item === "string")
+    : [];
+  // Declared fields are strict when present and default to none when absent
+  // (payloads predating U7 keep parsing).
+  const rawFields = record.fields;
+  const fields: RunTopologyField[] = [];
+  if (rawFields !== undefined) {
+    if (!Array.isArray(rawFields)) return null;
+    for (const item of rawFields) {
+      const field = parseRunTopologyField(item);
+      if (field === null) return null;
+      fields.push(field);
+    }
+  }
+  return {
+    stepId,
+    index,
+    title,
+    state: record.state,
+    sideEffecting: record.sideEffecting === true,
+    integrations,
+    fields,
+    receipt: asString(record.receipt),
+    actionHash: asString(record.actionHash),
+    hasArtifact: record.hasArtifact === true,
+    hasDecision: record.hasDecision === true,
+    regenerations: asNumber(record.regenerations) ?? 0,
+    updatedAt: asString(record.updatedAt) ?? "",
+  };
+}
+
+/**
+ * Validate one N1 topology payload with the same discipline as
+ * ``parseRunSnapshot``: anything malformed returns null so the caller keeps
+ * its catalog-derived frame instead of rendering half a graph.
+ */
+export function parseRunTopology(value: unknown): RunTopology | null {
+  const record = asRecord(value);
+  if (record === null) return null;
+  const runId = asString(record.runId);
+  const workflow = asString(record.workflow);
+  const startedAt = asString(record.startedAt);
+  const attempt = asNumber(record.attempt);
+  const stepCount = asNumber(record.stepCount);
+  const stepsDone = asNumber(record.stepsDone);
+  if (
+    runId === null ||
+    workflow === null ||
+    startedAt === null ||
+    attempt === null ||
+    stepCount === null ||
+    stepsDone === null ||
+    !isRunStatus(record.status) ||
+    !Array.isArray(record.steps)
+  ) {
+    return null;
+  }
+  const steps: RunTopologyStep[] = [];
+  for (const item of record.steps) {
+    const step = parseRunTopologyStep(item);
+    if (step === null) return null;
+    steps.push(step);
+  }
+  const receiptsRecord = asRecord(record.receipts);
+  const rawItems =
+    receiptsRecord !== null && Array.isArray(receiptsRecord.items) ? receiptsRecord.items : null;
+  if (rawItems === null) return null;
+  const items: RunTopologyReceipt[] = [];
+  for (const item of rawItems) {
+    const entry = asRecord(item);
+    const stepId = entry === null ? null : asString(entry.stepId);
+    if (entry === null || stepId === null) return null;
+    items.push({
+      stepId,
+      receipt: asString(entry.receipt),
+      actionHash: asString(entry.actionHash),
+      effectRecorded: entry.effectRecorded === true,
+    });
+  }
+  const lockRecord = asRecord(record.lock);
+  return {
+    runId,
+    workflow,
+    status: record.status,
+    attempt,
+    currentStepId: asString(record.currentStepId),
+    stepCount,
+    stepsDone,
+    startedAt,
+    finishedAt: asString(record.finishedAt),
+    lock:
+      lockRecord === null
+        ? null
+        : { target: asString(lockRecord.target), lockedBy: asString(lockRecord.lockedBy) },
+    receipts: { signed: asNumber(receiptsRecord?.signed) ?? 0, items },
     steps,
   };
 }
@@ -490,8 +721,12 @@ export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
     }
     case "run.queued": {
       const position = asNumber(event.queuePosition);
+      const waiting = asString(event.waitingOn);
       next.status = "queued";
       next.queuePosition = position;
+      // The server names the ceiling this run waits on; a missing key
+      // (pre-fix producer) keeps the previous value rather than guessing.
+      if (waiting !== null) next.waitingOn = waiting;
       break;
     }
     case "run.status": {
@@ -501,7 +736,11 @@ export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
       if (reason !== null) next.cancelReason = reason;
       const error = asString(event.error);
       if (error !== null) next.outcome = error;
-      if (isRunTerminal(next.status)) next.queuePosition = null;
+      if (isRunTerminal(next.status)) {
+        next.queuePosition = null;
+        next.waitingOn = null;
+        next.heldSlots = [];
+      }
       break;
     }
     case "run.locked": {
@@ -533,6 +772,10 @@ export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
       const suspendedIndex = run.steps.find((item) => item.stepId === stepId)?.index ?? -1;
       next.status = blocked ? "blocked" : "awaiting_human";
       next.queuePosition = null;
+      // The suspended pass has released its ceiling grants (and their queue
+      // entry), so the run waits on nothing until a decision launches a pass.
+      next.waitingOn = null;
+      next.heldSlots = [];
       next.currentStepId = stepId;
       const target = asString(event.target);
       if (target !== null) {
@@ -561,8 +804,14 @@ export function applyRunEvent(run: RunDetail, event: RunEvent): RunDetail {
       const stepId = asString(event.stepId);
       const action = asString(event.action);
       if (stepId === null || action === null) break;
+      // The decision event carries the freshly signed receipt; handing it to
+      // the step keeps the graph dots and the lineage chips live under SSE
+      // without waiting for a refetch.
+      const receipt = asString(event.receipt);
       next.steps = withStep(next, stepId, (step) => {
-        if (action === "proceed" || action === "edit") return { ...step, state: "done" };
+        if (action === "proceed" || action === "edit") {
+          return { ...step, state: "done", receipt: receipt ?? step.receipt };
+        }
         if (action === "regenerate") return { ...step, regenerations: step.regenerations + 1 };
         return step;
       });
@@ -882,6 +1131,16 @@ export async function listRuns(ticketKey: string): Promise<RunSummary[]> {
 
 export async function getRun(runId: string): Promise<RunDetail> {
   return api<RunDetail>(`/runs/${encodeURIComponent(runId)}`);
+}
+
+/**
+ * N1 topology for one run. Returns null instead of throwing on a malformed
+ * payload — the graph lens keeps its catalog frame when the overlay cannot
+ * be trusted.
+ */
+export async function getRunTopology(runId: string): Promise<RunTopology | null> {
+  const payload = await api<unknown>(`/runs/${encodeURIComponent(runId)}/topology`);
+  return parseRunTopology(payload);
 }
 
 export async function decideRunStep(

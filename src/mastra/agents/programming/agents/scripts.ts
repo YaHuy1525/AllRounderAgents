@@ -76,3 +76,32 @@ export const programmingValidatorScenarios: AgentScenario[] = [
     },
   },
 ];
+
+export const programmingCriticScenarios: AgentScenario[] = [
+  {
+    name: "on-spec patch clears the gate",
+    input: {
+      acceptanceCriteria: ["Login returns 400 (not 500) when email is missing"],
+      rca: "login() dereferences email without a guard at src/auth/login.ts:41",
+      patchFiles: ["src/auth/login.ts"],
+    },
+    expectedOutput: {
+      passed: true,
+      critique: "The patch guards email at the cited line, satisfying the acceptance criterion.",
+      checkedCriteria: ["Login returns 400 (not 500) when email is missing"],
+    },
+  },
+  {
+    name: "off-spec patch is blocked",
+    input: {
+      acceptanceCriteria: ["Login returns 400 when email is missing"],
+      rca: "login() dereferences email without a guard at src/auth/login.ts:41",
+      patchFiles: ["src/auth/logout.ts"],
+    },
+    expectedOutput: {
+      passed: false,
+      critique: "The patch edits logout.ts, not the cited login.ts:41; the missing-email guard is never added, so the acceptance criterion is unmet.",
+      checkedCriteria: ["Login returns 400 when email is missing"],
+    },
+  },
+];

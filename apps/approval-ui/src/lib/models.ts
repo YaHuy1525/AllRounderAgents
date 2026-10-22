@@ -9,6 +9,8 @@ export type Approval = {
   decision: "approved" | "rejected" | "expired" | null;
   comment: string | null;
   decidedAt: string | null;
+  /** Declared risk band 0-100 (anchors 10/55/90); null means no declared band. */
+  risk: number | null;
 };
 
 export type SessionInfo = {

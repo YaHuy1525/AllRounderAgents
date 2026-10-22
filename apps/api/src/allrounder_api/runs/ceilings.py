@@ -16,6 +16,14 @@ from redis import Redis
 
 RUN_SLOT = "run"
 APPLY_SLOT = "apply"
+MODEL_SLOT = "model"
+
+# Fixed global order in which a drive pass acquires its ceiling slots:
+# ``run`` first, then ``apply``, then ``model``. Every holder follows this
+# one order and releases in the exact reverse (model -> apply -> run), so no
+# run can hold a later kind while waiting on an earlier one — that invariant
+# is what prevents a hold-and-wait deadlock across the three ceilings.
+SLOT_ORDER: tuple[str, ...] = (RUN_SLOT, APPLY_SLOT, MODEL_SLOT)
 
 _ACQUIRE_SCRIPT = """
 local slot_key = KEYS[1]
@@ -36,13 +44,22 @@ local rank = redis.call('ZRANK', queue_key, run_id)
 return rank + 1
 """
 
+# Release hands the freed slot to the queue head — and only then. A release
+# that freed nothing (the run held no slot on this kind) must not promote, or
+# the head gets a slot nobody gave back and ``active_count`` exceeds the cap;
+# an unqueue (the run was waiting, never granted) frees nothing either, so it
+# returns early as well. ``MemoryConcurrencyCeiling`` enforces the same rule
+# with its ``was_active`` check, keeping both back-ends in parity.
 _RELEASE_SCRIPT = """
 local slot_key = KEYS[1]
 local queue_key = KEYS[2]
 local run_id = ARGV[1]
-redis.call('ZREM', slot_key, run_id)
-local removed = redis.call('ZREM', queue_key, run_id)
-if removed == 1 then
+local freed = redis.call('ZREM', slot_key, run_id)
+local unqueued = redis.call('ZREM', queue_key, run_id)
+if unqueued == 1 then
+  return ''
+end
+if freed ~= 1 then
   return ''
 end
 local next_items = redis.call('ZRANGE', queue_key, 0, 0)
@@ -171,7 +188,9 @@ class RedisConcurrencyCeiling:
 
 __all__ = [
     "APPLY_SLOT",
+    "MODEL_SLOT",
     "RUN_SLOT",
+    "SLOT_ORDER",
     "ConcurrencyCeiling",
     "MemoryConcurrencyCeiling",
     "RedisConcurrencyCeiling",

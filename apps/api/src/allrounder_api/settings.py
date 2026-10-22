@@ -1,7 +1,9 @@
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .logging import get_logger
 
 
 class Settings(BaseSettings):
@@ -77,10 +79,27 @@ class Settings(BaseSettings):
     mastra_request_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     runs_max_concurrent: int = Field(default=5, ge=1, le=100)
     runs_max_concurrent_applies: int = Field(default=2, ge=1, le=20)
+    runs_max_concurrent_model_calls: int = Field(default=4, ge=1, le=20)
     runs_lock_ttl_seconds: int = Field(default=900, ge=30, le=86_400)
-    runs_receipt_ttl_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    # Signed approval-token expiry (``RunServiceConfig.receipt_ttl_seconds``):
+    # a receipt is a single-use human decision and must lapse.
+    runs_approval_token_ttl_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    # Idempotency-record life for the Redis run receipt store: the record is
+    # the effect-once guard and must outlive the run it protects, so its
+    # default is the store's own 24 hours, not the token's one hour.
+    runs_receipt_record_ttl_seconds: int = Field(default=86_400, ge=3_600, le=2_592_000)
+    # Deprecated pre-split name of the token TTL. Kept as an alias so an
+    # existing deployment keeps its exact current behavior; the validator
+    # below maps it onto the token setting and warns. Never read elsewhere.
+    runs_receipt_ttl_seconds: int | None = Field(default=None, ge=60, le=86_400)
+    # Sweep budget for a running run measured from its last serving-plane
+    # progress event (``heartbeat_at``), never from start time: a run
+    # advancing through steps is not reaped for total elapsed time, and a
+    # queued run waiting on a ceiling FIFO queue is exempt.
     runs_max_seconds: int = Field(default=1_800, ge=60, le=86_400)
-    runs_sweep_interval_seconds: int = Field(default=0, ge=0, le=86_400)
+    # The liveness sweep runs by default; ``0`` stays legal so an operator
+    # can still disable it.
+    runs_sweep_interval_seconds: int = Field(default=60, ge=0, le=86_400)
     runs_registry_ttl_seconds: int = Field(default=604_800, ge=3_600, le=2_592_000)
     runs_max_regenerations_per_step: int = Field(default=1, ge=0, le=10)
     # Optional override for the governance policy directory (risk.yaml +
@@ -98,4 +117,46 @@ class Settings(BaseSettings):
     judge_chat_model: str = ""
     judge_chat_api_key: SecretStr = SecretStr("")
     judge_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+
+    @model_validator(mode="after")
+    def _check_run_time_relationships(self) -> "Settings":
+        """Fail at startup on run-time settings that contradict each other.
+
+        Three relationships, each computed against a reaper that now runs by
+        default:
+
+        * the deprecated ``RUNS_RECEIPT_TTL_SECONDS`` still means the token
+          TTL (its historical meaning), so it is mapped onto
+          ``runs_approval_token_ttl_seconds`` and a startup warning tells the
+          operator about ``RUNS_RECEIPT_RECORD_TTL_SECONDS``;
+        * ``runs_max_seconds`` may not be shorter than the in-flight Mastra
+          pass timeout it can reap — a healthy pass inside its own timeout
+          must never be reaped for being alive;
+        * ``runs_sweep_interval_seconds`` may not exceed ``runs_max_seconds``,
+          or a stalled run would keep its slots for several budgets before
+          the first sweep looks at it (``0`` disables the sweep and stays
+          legal).
+        """
+        if self.runs_receipt_ttl_seconds is not None:
+            if "runs_approval_token_ttl_seconds" not in self.model_fields_set:
+                self.runs_approval_token_ttl_seconds = self.runs_receipt_ttl_seconds
+            get_logger().warning(
+                "deprecated_setting",
+                setting="RUNS_RECEIPT_TTL_SECONDS",
+                detail=(
+                    "RUNS_RECEIPT_TTL_SECONDS now only sets the approval-token TTL; "
+                    "the idempotency-record life is RUNS_RECEIPT_RECORD_TTL_SECONDS"
+                ),
+            )
+        if self.runs_max_seconds < self.mastra_request_timeout_seconds:
+            raise ValueError(
+                "RUNS_MAX_SECONDS must not be shorter than MASTRA_REQUEST_TIMEOUT_SECONDS: "
+                "the sweeper would reap passes that are still inside their own timeout"
+            )
+        if self.runs_sweep_interval_seconds > self.runs_max_seconds:
+            raise ValueError(
+                "RUNS_SWEEP_INTERVAL_SECONDS must be <= RUNS_MAX_SECONDS "
+                "(0 keeps the sweeper disabled)"
+            )
+        return self
 

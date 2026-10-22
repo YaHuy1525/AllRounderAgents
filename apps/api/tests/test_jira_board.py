@@ -107,6 +107,7 @@ def test_board_project_validation_blocks_jql_injection() -> None:
 def test_http_jira_reader_normalizes_search_results() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.params["jql"].startswith('project = "ENG"')
+        assert "description" in request.url.params["fields"]
         return httpx.Response(
             200,
             json={
@@ -121,6 +122,16 @@ def test_http_jira_reader_normalizes_search_results() -> None:
                             "assignee": {"displayName": "Taylor"},
                             "labels": ["agent", "ui"],
                             "updated": "2026-09-07T01:00:00Z",
+                            "description": {
+                                "type": "doc",
+                                "version": 1,
+                                "content": [
+                                    {
+                                        "type": "paragraph",
+                                        "content": [{"type": "text", "text": "Full body."}],
+                                    }
+                                ],
+                            },
                         },
                     },
                     {"malformed": True},
@@ -146,6 +157,63 @@ def test_http_jira_reader_normalizes_search_results() -> None:
     assert issues[0].issue_type == "Bug"
     assert issues[0].assignee == "Taylor"
     assert issues[0].browse_url.endswith("/browse/ENG-9")
+    assert issues[0].description_adf["version"] == 1
+
+
+def test_board_plain_text_description_is_coerced_to_adf() -> None:
+    # The agile board endpoint serializes descriptions as plain text even
+    # when Jira stores ADF, so the parser must normalize text into one
+    # paragraph per line for the console's mdast conversion.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/rest/agile/1.0/board/7"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": 7,
+                    "name": "ENG board",
+                    "type": "kanban",
+                    "location": {"projectKey": "ENG"},
+                },
+            )
+        assert request.url.path.endswith("/rest/agile/1.0/board/7/issue")
+        assert "description" in request.url.params["fields"]
+        return httpx.Response(
+            200,
+            json={
+                "issues": [
+                    {
+                        "key": "ENG-10",
+                        "fields": {
+                            "summary": "Text body ticket",
+                            "status": {"name": "To Do"},
+                            "description": "First line.\n\nSecond line.\n",
+                        },
+                    }
+                ]
+            },
+        )
+
+    with httpx.Client(
+        base_url="https://example.atlassian.net",
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        reader = HttpJiraTransport(
+            "https://ignored.example",
+            "user@example.com",
+            "token",
+            client=client,
+        )
+        issues = reader.search_board_issues(7, 10)
+        reader.close()
+
+    assert issues[0].description_adf == {
+        "version": 1,
+        "type": "doc",
+        "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "First line."}]},
+            {"type": "paragraph", "content": [{"type": "text", "text": "Second line."}]},
+        ],
+    }
 
 
 def test_http_jira_reader_parses_agile_boards() -> None:

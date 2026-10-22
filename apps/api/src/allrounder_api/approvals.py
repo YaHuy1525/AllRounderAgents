@@ -70,7 +70,7 @@ class ApprovalReceiptSigner:
     def validate(
         self, token: str, *, approval_id: str, case_id: str,
         action: dict[str, object], scope: str, now: datetime | None = None,
-        run_id: str | None = None,
+        run_id: str | None = None, require_run_id: bool = False,
     ) -> ApprovalReceiptClaims:
         try:
             encoded_payload, encoded_signature = token.split(".", 1)
@@ -83,13 +83,26 @@ class ApprovalReceiptSigner:
             claims = ApprovalReceiptClaims(**raw)
         except (ValueError, TypeError, KeyError, json.JSONDecodeError) as error:
             raise ReceiptError("Invalid receipt") from error
+        # Run-driven lanes pass ``require_run_id=True``: the token must carry a
+        # non-empty run binding that matches the caller's run. A failed binding
+        # raises the same generic "Invalid receipt" as every other check, so a
+        # missing run binding is never distinguishable from a bad signature.
+        run_binding = claims.run_id or ""
+        caller_run = run_id or ""
+        run_binding_ok = (
+            bool(run_binding)
+            and bool(caller_run)
+            and hmac.compare_digest(run_binding, caller_run)
+            if require_run_id
+            else run_id is None or hmac.compare_digest(run_binding, caller_run)
+        )
         checks = (
             hmac.compare_digest(claims.approval_id, approval_id),
             hmac.compare_digest(claims.case_id, case_id),
             hmac.compare_digest(claims.action_hash, action_hash(action)),
             hmac.compare_digest(claims.scope, scope),
             hmac.compare_digest(claims.decision, "approved"),
-            run_id is None or hmac.compare_digest(claims.run_id or "", run_id),
+            run_binding_ok,
         )
         if not all(checks):
             raise ReceiptError("Invalid receipt")

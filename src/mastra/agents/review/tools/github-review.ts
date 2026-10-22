@@ -3,6 +3,10 @@ import {
   type GitHubPolicy,
   type GitHubTransport,
 } from "../../programming/tools/github.js";
+import type {
+  ReviewBackend,
+  ReviewSubmission,
+} from "../../programming/tools/mcp.js";
 import {
   PullRequestCandidateSchema,
   type PullRequestCandidate,
@@ -48,7 +52,7 @@ export interface ReviewWriter {
   postReview(request: PostReviewRequest): Promise<PostedReview>;
 }
 
-const REVIEW_EVENT_BY_VERDICT: Record<ReviewVerdict, string> = {
+const REVIEW_EVENT_BY_VERDICT: Record<ReviewVerdict, ReviewSubmission["event"]> = {
   approve: "APPROVE",
   comment: "COMMENT",
   request_changes: "REQUEST_CHANGES",
@@ -105,13 +109,6 @@ function bodyObject(response: { status: number; body: unknown }): Record<string,
   return response.body as Record<string, unknown>;
 }
 
-function bodyArray(response: { status: number; body: unknown }): unknown[] {
-  if (response.status < 200 || response.status >= 300 || !Array.isArray(response.body)) {
-    throw new Error(`GitHub request failed (${response.status})${failureDetail(response)}`);
-  }
-  return response.body;
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -151,50 +148,34 @@ function toFile(raw: unknown): ReviewFile {
 }
 
 /**
- * GitHub REST surface for the review workflow. Reads only pull-request
- * metadata/diffs; the writer posts one review per `complete` step. Every call
- * is scoped by the same repository allowlist the coding lane uses.
+ * Read surface for the review workflow. Candidates, a single pull request and
+ * its changed files run through the shared GitHub MCP backend (`list_pull_requests`
+ * / `pull_request_read`); the commit-range `compare` diff has no MCP tool, so it
+ * stays the one residual REST read on the injected transport. Every call is
+ * scoped by the same repository allowlist the coding lane uses.
  */
 export class GitHubReviewReader implements ReviewReader {
   constructor(
+    private readonly backend: ReviewBackend,
     private readonly transport: GitHubTransport,
     private readonly policy: GitHubPolicy,
   ) {}
 
   async listCandidates(repository: string, limit: number): Promise<PullRequestCandidate[]> {
     const { owner, repo } = assertRepository(this.policy, repository);
-    const perPage = Math.max(1, Math.min(50, limit));
-    const response = await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${perPage}`,
-      undefined,
-      this.policy.timeoutMs,
-    );
-    return bodyArray(response)
-      .slice(0, limit)
-      .map((item) => toCandidate(item, repository));
+    const raw = await this.backend.listPullRequests(owner, repo, limit);
+    return raw.slice(0, limit).map((item) => toCandidate(item, repository));
   }
 
   async pull(repository: string, number: number): Promise<PullRequestCandidate> {
     const { owner, repo } = assertRepository(this.policy, repository);
-    const response = await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/pulls/${number}`,
-      undefined,
-      this.policy.timeoutMs,
-    );
-    return toCandidate(bodyObject(response), repository);
+    return toCandidate(await this.backend.getPullRequest(owner, repo, number), repository);
   }
 
   async pullFiles(repository: string, number: number): Promise<ReviewFile[]> {
     const { owner, repo } = assertRepository(this.policy, repository);
-    const response = await this.transport.request(
-      "GET",
-      `/repos/${owner}/${repo}/pulls/${number}/files?per_page=100`,
-      undefined,
-      this.policy.timeoutMs,
-    );
-    return bodyArray(response).map((item) => toFile(item));
+    const raw = await this.backend.getPullRequestFiles(owner, repo, number);
+    return raw.map((item) => toFile(item));
   }
 
   async compare(repository: string, base: string, head: string): Promise<ReviewFile[]> {
@@ -222,20 +203,13 @@ export class GitHubReviewWriter implements ReviewWriter {
   private loginLookup: Promise<string | undefined> | undefined;
 
   constructor(
-    private readonly transport: GitHubTransport,
+    private readonly backend: ReviewBackend,
     private readonly policy: GitHubPolicy,
   ) {}
 
   /** The token's login, fetched once; undefined when the lookup fails. */
   private async authenticatedLogin(): Promise<string | undefined> {
-    this.loginLookup ??= this.transport
-      .request("GET", "/user", undefined, this.policy.timeoutMs)
-      .then((response) => {
-        if (response.status < 200 || response.status >= 300) return undefined;
-        const login = asString(asRecord(response.body).login);
-        return login === "" ? undefined : login;
-      })
-      .catch(() => undefined);
+    this.loginLookup ??= this.backend.authenticatedLogin();
     return this.loginLookup;
   }
 
@@ -248,41 +222,34 @@ export class GitHubReviewWriter implements ReviewWriter {
         : await this.authenticatedLogin();
     const selfAuthored =
       login !== undefined && request.author?.toLowerCase() === login.toLowerCase();
-    const response = await this.transport.request(
-      "POST",
-      `/repos/${owner}/${repo}/pulls/${request.number}/reviews`,
-      {
-        commit_id: request.commitSha,
-        event: selfAuthored ? "COMMENT" : event,
-        body: selfAuthored ? `${request.body}${SELF_REVIEW_NOTE}` : request.body,
-        ...(request.comments.length === 0
-          ? {}
-          : {
-              comments: request.comments.map((comment) => ({
-                path: comment.path,
-                line: comment.line,
-                side: "RIGHT",
-                body: comment.body,
-              })),
-            }),
-      },
-      this.policy.timeoutMs,
-    );
-    const body = bodyObject(response);
-    return {
-      reviewId: String(body.id ?? ""),
-      url: asString(body.html_url),
-    };
+    return this.backend.submitReview({
+      owner,
+      repo,
+      pullNumber: request.number,
+      commitId: request.commitSha,
+      event: selfAuthored ? "COMMENT" : event,
+      body: selfAuthored ? `${request.body}${SELF_REVIEW_NOTE}` : request.body,
+      comments: request.comments.map((comment) => ({
+        path: comment.path,
+        line: comment.line,
+        body: comment.body,
+      })),
+    });
   }
 }
 
-/** Bundle injected into the review flow (mirrors `GitHubRepositoryTools`). */
+/**
+ * Bundle injected into the review flow (mirrors `GitHubRepositoryTools`). Reads
+ * and review posting run through the shared MCP `backend`; `transport` is kept
+ * only for the commit-range `compare` diff, which the hosted GitHub MCP server
+ * exposes no tool for.
+ */
 export class GitHubReviewTools {
   readonly reader: GitHubReviewReader;
   readonly writer: GitHubReviewWriter;
 
-  constructor(transport: GitHubTransport, policy: GitHubPolicy) {
-    this.reader = new GitHubReviewReader(transport, policy);
-    this.writer = new GitHubReviewWriter(transport, policy);
+  constructor(backend: ReviewBackend, transport: GitHubTransport, policy: GitHubPolicy) {
+    this.reader = new GitHubReviewReader(backend, transport, policy);
+    this.writer = new GitHubReviewWriter(backend, policy);
   }
 }

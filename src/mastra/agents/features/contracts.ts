@@ -82,6 +82,19 @@ export const AcceptanceCriterionSchema = z
 export type AcceptanceCriterion = z.infer<typeof AcceptanceCriterionSchema>;
 
 /**
+ * Structured output of the acceptance-criteria drafter. It runs only on the
+ * fallback path, when a ticket arrives with no structured `acceptanceCriteria`
+ * and the whole description would otherwise collapse into one giant criterion.
+ */
+export const FeatureCriteriaOutputSchema = z
+  .object({
+    criteria: z.array(z.string().min(1).max(1_000)).min(1).max(25),
+  })
+  .strict();
+
+export type FeatureCriteriaOutput = z.infer<typeof FeatureCriteriaOutputSchema>;
+
+/**
  * Run input supplied by the API (`POST /runs` input payload). `candidates`
  * are the feature tickets the runner offers (typically the open features
  * loaded in the console); `acceptanceCriteria` are the must-serve criteria
@@ -294,6 +307,9 @@ export const FeatureFileSchema = z
     diff: z.string().max(500_000),
     content: z.string().max(200_000),
     validators: z.array(ValidatorNameSchema).min(1).max(4),
+    // Plan editing: a reviewer can drop a file from the patch by flipping
+    // this to false. Absent means included, so recorded artifacts stay valid.
+    included: z.boolean().optional(),
   })
   .strict();
 

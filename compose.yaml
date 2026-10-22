@@ -31,6 +31,11 @@ services:
       # from .env. Without the pair, drafts carry no retrieval and every bill
       # escalates as vendor_unverified.
       KNOWLEDGE_API_URL: "http://api:8000"
+      # Native Mastra observability on, so the bundled Studio (served at :4111)
+      # shows agent traces (steps, per-generation tokens/latency/cost). Traces
+      # persist when DATABASE_URL in .env points at Postgres; otherwise they
+      # live in the in-memory store for the process lifetime.
+      MASTRA_OBSERVABILITY: "true"
     ports:
       - "4111:4111"
     healthcheck:
@@ -41,6 +46,28 @@ services:
       timeout: 5s
       retries: 6
       start_period: 60s
+    restart: unless-stopped
+
+  # Mastra Studio control panel (agent/workflow lists, chat Playground, evals,
+  # and the observability Logs/Traces view). Opt-in via the `studio` profile so
+  # it does not start with the plain stack and double-connect the same Postgres.
+  # Served from host 4112 to avoid clashing with the production mastra on 4111.
+  #   docker compose --profile studio up mastra-studio   ->   http://localhost:4112
+  mastra-studio:
+    profiles: ["studio"]
+    image: allrounder-mastra-studio:local
+    build:
+      context: .
+      dockerfile: Dockerfile.mastra-studio
+    env_file:
+      - .env
+    environment:
+      PORT: "4111"
+      MASTRA_HOST: "0.0.0.0"
+      MASTRA_OBSERVABILITY: "true"
+      KNOWLEDGE_API_URL: "http://api:8000"
+    ports:
+      - "4112:4111"
     restart: unless-stopped
 
   api:

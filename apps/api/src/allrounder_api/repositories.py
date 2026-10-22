@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -12,6 +12,8 @@ from psycopg import AsyncConnection
 from psycopg.errors import ForeignKeyViolation
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+from .logging import get_logger
 
 _EMAIL = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 _SECRET_KEY = re.compile(r"(api[_-]?key|token|secret|password)", re.IGNORECASE)
@@ -156,6 +158,10 @@ class ApprovalRecord:
     decision: str | None = None
     comment: str | None = None
     decided_at: datetime | None = None
+    # Declared risk band on the 0-100 governance scale (policy/risk.yaml
+    # anchors: benign 10, single_risk 55, irreversible_high_blast 90).
+    # None means "no declared band" and sorts last in the approval queue.
+    risk: int | None = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +234,18 @@ class MspVendorRecord:
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+@dataclass
+class ConnectorVaultRecord:
+    """One tenant connection in the N2 connector vault. ``secret_ref`` holds
+    the stored credential material, write-only from the browser: list
+    endpoints return a last-four hint, never the secret."""
+
+    tenant_id: str
+    provider: str
+    secret_ref: str
+    connected_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
 class CaseRepository(Protocol):
     async def create(self, case: CaseRecord) -> CaseRecord: ...
     async def append_event(
@@ -235,6 +253,9 @@ class CaseRepository(Protocol):
     ) -> None: ...
     async def get(self, case_id: str, tenant_id: str) -> CaseRecord: ...
     async def get_by_ticket(self, ticket_key: str, tenant_id: str) -> CaseRecord: ...
+    async def costs_for_cases(
+        self, tenant_id: str, case_ids: Sequence[str]
+    ) -> dict[str, int]: ...
 
 
 class ApprovalRepository(Protocol):
@@ -294,6 +315,13 @@ class MspConnectionsRepository(Protocol):
     ) -> MspVendorRecord | None: ...
 
 
+class ConnectorVaultRepository(Protocol):
+    async def list(self, tenant_id: str) -> list[ConnectorVaultRecord]: ...
+    async def get(self, tenant_id: str, provider: str) -> ConnectorVaultRecord: ...
+    async def connect(self, record: ConnectorVaultRecord) -> ConnectorVaultRecord: ...
+    async def disconnect(self, tenant_id: str, provider: str) -> None: ...
+
+
 class InMemoryCaseRepository:
     def __init__(self) -> None:
         self._cases: dict[str, CaseRecord] = {}
@@ -338,6 +366,16 @@ class InMemoryCaseRepository:
                 return deepcopy(case)
         raise KeyError("Case not found")
 
+    async def costs_for_cases(
+        self, tenant_id: str, case_ids: Sequence[str]
+    ) -> dict[str, int]:
+        costs: dict[str, int] = {}
+        for case_id in case_ids:
+            case = self._cases.get(case_id)
+            if case is not None and case.tenant_id == tenant_id:
+                costs[case_id] = int(case.cost_usd_micro)
+        return costs
+
 
 class InMemoryApprovalRepository:
     def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
@@ -358,9 +396,27 @@ class InMemoryApprovalRepository:
         return deepcopy(safe)
 
     async def list(self, tenant_id: str) -> list[ApprovalRecord]:
+        # Same queue rule as the Postgres read: riskiest gate first, declared
+        # bands (policy/risk.yaml anchors 10/55/90) above unranked ones. Dict
+        # order is creation order and ``sorted`` is stable, so age breaks
+        # ties within a band oldest-first and an all-null set keeps pure
+        # insertion order — nothing silent re-ranks.
+        def queue_key(approval: ApprovalRecord) -> tuple[bool, int]:
+            """Unranked receipts last, then the highest declared band first."""
+            if approval.risk is None:
+                return (True, 0)
+            return (False, -approval.risk)
+
         return [
-            deepcopy(value) for value in self._approvals.values()
-            if value.tenant_id == tenant_id
+            deepcopy(value)
+            for value in sorted(
+                (
+                    approval
+                    for approval in self._approvals.values()
+                    if approval.tenant_id == tenant_id
+                ),
+                key=queue_key,
+            )
         ]
 
     async def get(self, approval_id: str, tenant_id: str) -> ApprovalRecord:
@@ -585,6 +641,40 @@ class InMemoryMspConnectionsRepository:
         return None
 
 
+class InMemoryConnectorVaultRepository:
+    def __init__(self) -> None:
+        self._refs: dict[tuple[str, str], ConnectorVaultRecord] = {}
+
+    async def list(self, tenant_id: str) -> list[ConnectorVaultRecord]:
+        rows = [
+            deepcopy(item)
+            for (owner, _), item in self._refs.items()
+            if owner == tenant_id
+        ]
+        rows.sort(key=lambda item: item.provider)
+        return rows
+
+    async def get(self, tenant_id: str, provider: str) -> ConnectorVaultRecord:
+        record = self._refs.get((tenant_id, provider))
+        if record is None:
+            raise KeyError("Connector is not connected")
+        return deepcopy(record)
+
+    async def connect(self, record: ConnectorVaultRecord) -> ConnectorVaultRecord:
+        safe = deepcopy(record)
+        existing = self._refs.get((record.tenant_id, record.provider))
+        # Rotating the secret keeps the original connected_at, mirroring the
+        # msp_connections upsert that preserves created_at.
+        safe.connected_at = existing.connected_at if existing is not None else datetime.now(UTC)
+        self._refs[(safe.tenant_id, safe.provider)] = safe
+        return deepcopy(safe)
+
+    async def disconnect(self, tenant_id: str, provider: str) -> None:
+        if (tenant_id, provider) not in self._refs:
+            raise KeyError("Connector is not connected")
+        del self._refs[(tenant_id, provider)]
+
+
 class PostgresRepositories:
     """Parameterized async repositories over the Supabase direct Postgres URL."""
 
@@ -597,7 +687,52 @@ class PostgresRepositories:
         )
 
     async def open(self) -> None:
+        """Open the pool, then run the migration deploy gate.
+
+        The check is contained the way ``PostgresRunArchive.open`` contains its
+        own connection: this pool is built with ``min_size=0, open=False``, so
+        before the check existed ``open()`` never touched the database, and an
+        unreachable one degraded per request instead of blocking boot. A check
+        that cannot run logs ``approval_risk_column_check_failed`` with the
+        exception info and startup finishes; a check that runs and finds no
+        column logs ``approval_risk_column_missing`` at critical. Neither
+        outcome blocks startup, because an operator mid rollout has to be able
+        to reach the health endpoint to apply the migration.
+        """
         await self.pool.open()
+        try:
+            await self._check_approval_risk_column()
+        except Exception:
+            get_logger().exception("approval_risk_column_check_failed")
+
+    async def _check_approval_risk_column(self) -> None:
+        """Deploy gate for the risk-ordered approval queue (PR1 T4).
+
+        ``create_approval`` inserts ``risk``, so on a database that has not
+        applied the migration every approval write fails — not just the list
+        read. One query when the Postgres repositories open (never per
+        request, never on the in-memory path), logging a fatal-level message
+        that names the migration file. Loud, not blocking: an operator mid
+        rollout can still reach the health endpoint to run it, and
+        ``open`` contains any error this query raises so a dead database
+        cannot turn that message into a boot failure.
+        """
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                "select 1 from information_schema.columns "
+                "where table_schema = 'public' and table_name = 'approvals' "
+                "and column_name = 'risk'"
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            get_logger().critical(
+                "approval_risk_column_missing",
+                detail=(
+                    "public.approvals has no 'risk' column: apply migration "
+                    "supabase/migrations/202610210016_approval_risk.sql before "
+                    "serving approvals (every approval create will fail without it)"
+                ),
+            )
 
     async def close(self) -> None:
         await self.pool.close()
@@ -660,8 +795,8 @@ class PostgresRepositories:
                 """
                 insert into public.approvals
                   (id, case_id, tenant_id, payload, action, evidence,
-                   approver, scope, expires_at)
-                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s)
+                   approver, scope, expires_at, risk)
+                values (%s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s, %s, %s, %s)
                 """,
                 (
                     approval.id, approval.case_id, approval.tenant_id,
@@ -670,6 +805,9 @@ class PostgresRepositories:
                     ),
                     json.dumps(redact(approval.action)), json.dumps(redact(approval.evidence)),
                     approval.approver, approval.scope, approval.expires_at,
+                    # Declared risk band (0-100) or NULL for "no band"; a plain
+                    # integer, so it needs no redaction like action/evidence.
+                    approval.risk,
                 ),
             )
         return approval
@@ -864,6 +1002,73 @@ class PostgresRepositories:
                 (account_id, tenant_id),
             )
         return await self.get_github_account(account_id, tenant_id)
+
+    async def list_connector_vault_refs(self, tenant_id: str) -> list[ConnectorVaultRecord]:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, provider, secret_ref, connected_at
+                from public.connector_vault_refs
+                where tenant_id = %s
+                order by provider
+                """,
+                (tenant_id,),
+            )
+            rows = await cursor.fetchall()
+        return [_connector_vault_from_row(row) for row in rows]
+
+    async def get_connector_vault_ref(
+        self, tenant_id: str, provider: str
+    ) -> ConnectorVaultRecord:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select tenant_id, provider, secret_ref, connected_at
+                from public.connector_vault_refs
+                where tenant_id = %s and provider = %s
+                """,
+                (tenant_id, provider),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("Connector is not connected")
+        return _connector_vault_from_row(row)
+
+    async def connect_connector_vault_ref(
+        self, record: ConnectorVaultRecord
+    ) -> ConnectorVaultRecord:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                insert into public.connector_vault_refs
+                  (tenant_id, provider, secret_ref, connected_at)
+                values (%s, %s, %s, %s)
+                on conflict (tenant_id, provider) do update
+                set secret_ref = excluded.secret_ref
+                returning connected_at
+                """,
+                (record.tenant_id, record.provider, record.secret_ref, record.connected_at),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Connector upsert returned no connection")
+        stored = deepcopy(record)
+        stored.connected_at = row["connected_at"]
+        return stored
+
+    async def disconnect_connector_vault_ref(self, tenant_id: str, provider: str) -> None:
+        async with self.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                delete from public.connector_vault_refs
+                where tenant_id = %s and provider = %s
+                returning provider
+                """,
+                (tenant_id, provider),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("Connector is not connected")
 
     async def get_msp_connection(self, tenant_id: str) -> MspConnectionRecord:
         async with self.pool.connection() as connection:
@@ -1107,6 +1312,29 @@ class PostgresCaseRepository:
             (ticket_key, tenant_id),
         )
 
+    async def costs_for_cases(
+        self, tenant_id: str, case_ids: Sequence[str]
+    ) -> dict[str, int]:
+        """Bulk ``cost_usd_micro`` read for the benchmark, keyed by case id.
+
+        Missing ids are simply absent from the map (the read-model treats an
+        absent id as zero cost). ``any(%s)`` keeps one round trip regardless of
+        how many cases the scan touched.
+        """
+        if not case_ids:
+            return {}
+        async with self._database.pool.connection() as connection:
+            cursor = await connection.execute(
+                """
+                select c.id, c.cost_usd_micro
+                from public.cases c
+                where c.tenant_id = %s and c.id = any(%s)
+                """,
+                (tenant_id, list(case_ids)),
+            )
+            rows = await cursor.fetchall()
+        return {str(row["id"]): int(row["cost_usd_micro"]) for row in rows}
+
     async def _fetch_case(
         self,
         statement: str,
@@ -1160,10 +1388,21 @@ class PostgresApprovalRepository:
                 (tenant_id,),
             )
             await cursor.fetchall()
+            # Bound the window first, then order it. ``limit 200`` has to pick
+            # the newest 200 receipts of the tenant — nothing deletes, purges
+            # or expires rows out of ``public.approvals``, so ordering before
+            # the limit would make the console's window the 200 OLDEST
+            # approvals and a freshly opened gate would never appear once a
+            # tenant passes the cap. The queue rule (riskiest first, unranked
+            # last, oldest first within a band) then ranks exactly the set the
+            # console can show.
             cursor = await connection.execute(
                 """
-                select * from public.approvals where tenant_id = %s
-                order by created_at desc limit 200
+                select * from (
+                    select * from public.approvals where tenant_id = %s
+                    order by created_at desc limit 200
+                ) q
+                order by risk desc nulls last, created_at asc
                 """,
                 (tenant_id,),
             )
@@ -1291,6 +1530,23 @@ class PostgresMspConnectionsRepository:
         await self._database.delete_msp_client(tenant_id, client_ref)
 
 
+class PostgresConnectorVaultRepository:
+    def __init__(self, database: PostgresRepositories) -> None:
+        self._database = database
+
+    async def list(self, tenant_id: str) -> list[ConnectorVaultRecord]:
+        return await self._database.list_connector_vault_refs(tenant_id)
+
+    async def get(self, tenant_id: str, provider: str) -> ConnectorVaultRecord:
+        return await self._database.get_connector_vault_ref(tenant_id, provider)
+
+    async def connect(self, record: ConnectorVaultRecord) -> ConnectorVaultRecord:
+        return await self._database.connect_connector_vault_ref(record)
+
+    async def disconnect(self, tenant_id: str, provider: str) -> None:
+        await self._database.disconnect_connector_vault_ref(tenant_id, provider)
+
+
 def _msp_connection_from_row(row: dict[str, Any]) -> MspConnectionRecord:
     return MspConnectionRecord(
         tenant_id=str(row["tenant_id"]),
@@ -1335,7 +1591,18 @@ def _github_account_from_row(row: dict[str, Any]) -> GithubAccountRecord:
     )
 
 
+def _connector_vault_from_row(row: dict[str, Any]) -> ConnectorVaultRecord:
+    return ConnectorVaultRecord(
+        tenant_id=str(row["tenant_id"]), provider=str(row["provider"]),
+        secret_ref=str(row["secret_ref"]), connected_at=row["connected_at"],
+    )
+
+
 def _approval_from_row(row: dict[str, Any]) -> ApprovalRecord:
+    # A missing key (un-migrated database) or an unexpected type degrades to
+    # "no declared band" rather than crashing reads of the new column.
+    raw_risk = row.get("risk")
+    risk: int | None = raw_risk if raw_risk is None or isinstance(raw_risk, int) else None
     return ApprovalRecord(
         id=str(row["id"]), case_id=str(row["case_id"]), tenant_id=str(row["tenant_id"]),
         action=dict(row["action"]),
@@ -1345,4 +1612,5 @@ def _approval_from_row(row: dict[str, Any]) -> ApprovalRecord:
         decision=str(row["decision"]) if row["decision"] is not None else None,
         comment=str(row["comment"]) if row["comment"] is not None else None,
         decided_at=row["decided_at"],
+        risk=risk,
     )

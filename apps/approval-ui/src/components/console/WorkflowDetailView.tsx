@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
 import { ApiError } from "@/lib/api";
+import { connectedProviders, listConnectors, resolveStepProviders } from "@/lib/connectors";
 import { integrationAccent, integrationLabel } from "@/lib/integrations";
 import { START_RUN_HINT } from "@/lib/roles";
 import { RUNNABLE_WORKFLOWS } from "@/lib/runs";
@@ -62,6 +63,9 @@ export function WorkflowDetailView({
   const [state, setState] = useState<DetailState>({ phase: "loading" });
   const [tick, setTick] = useState(0);
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
+  // N2 connectors: provider ids connected for this tenant; a failure falls
+  // back to no overlay, keeping the glyphs each definition declares.
+  const [connected, setConnected] = useState<string[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,7 +88,38 @@ export function WorkflowDetailView({
   // Switching to another workflow tab resets the step selection.
   useEffect(() => setSelectedStepId(null), [workflowId]);
 
+  // N2 overlay: one catalog fetch; the swap below is display-only, so a
+  // connected provider can never grant an execution path.
+  useEffect(() => {
+    let cancelled = false;
+    listConnectors()
+      .then((items) => {
+        if (!cancelled) setConnected(connectedProviders(items));
+      })
+      .catch(() => {
+        if (!cancelled) setConnected([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const definition = state.phase === "ready" ? state.definition : null;
+
+  // The connector overlay applied once: the graph satellites, the step list,
+  // and the selected-step chips all render the swapped provider ids — a
+  // connected Gmail badges the steps its `email` channel serves.
+  const resolved = useMemo(() => {
+    if (definition === null) return null;
+    return {
+      ...definition,
+      steps: definition.steps.map((step) => ({
+        ...step,
+        integrations: resolveStepProviders(step.integrations, connected),
+      })),
+    };
+  }, [connected, definition]);
+
   const copy = useMemo(() => {
     if (definition === null) return null;
     const entry = RUNNABLE_WORKFLOWS.find((item) => item.id === definition.id);
@@ -95,11 +130,11 @@ export function WorkflowDetailView({
   }, [definition]);
 
   const selected = useMemo(() => {
-    if (definition === null || selectedStepId === null) return null;
-    const index = definition.steps.findIndex((step) => step.id === selectedStepId);
-    const step = index === -1 ? null : definition.steps[index];
+    if (resolved === null || selectedStepId === null) return null;
+    const index = resolved.steps.findIndex((step) => step.id === selectedStepId);
+    const step = index === -1 ? null : resolved.steps[index];
     return step === null || step === undefined ? null : { step, index };
-  }, [definition, selectedStepId]);
+  }, [resolved, selectedStepId]);
 
   return (
     <section
@@ -164,7 +199,7 @@ export function WorkflowDetailView({
         </>
       )}
 
-      {state.phase === "ready" && definition !== null && copy !== null && (
+      {state.phase === "ready" && definition !== null && copy !== null && resolved !== null && (
         <>
           <div className="panel-heading workflow-detail-heading">
             <div>
@@ -195,7 +230,7 @@ export function WorkflowDetailView({
 
           <div className="workflow-detail-grid">
             <GraphCanvas
-              workflow={definition}
+              workflow={resolved}
               activeStepId={selectedStepId}
               onStepSelect={setSelectedStepId}
             />
@@ -208,7 +243,7 @@ export function WorkflowDetailView({
               ) : (
                 <article className="workflow-step-panel">
                   <p className="eyebrow">
-                    {`Step ${selected.index + 1} of ${definition.steps.length}`}
+                    {`Step ${selected.index + 1} of ${resolved.steps.length}`}
                   </p>
                   <h3>{selected.step.title}</h3>
                   <p className="workflow-step-effect">
@@ -245,7 +280,7 @@ export function WorkflowDetailView({
               )}
 
               <ol className="workflow-step-list">
-                {definition.steps.map((step, index) => (
+                {resolved.steps.map((step, index) => (
                   <li key={step.id}>
                     <button
                       type="button"

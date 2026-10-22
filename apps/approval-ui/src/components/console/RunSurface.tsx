@@ -1,8 +1,14 @@
 "use client";
 
 import { useId, useState } from "react";
+import type { DragEvent } from "react";
+
+import type { CaseDocSnapFlag } from "@/lib/cases";
+import type { RunPill } from "@/lib/pills";
+import type { RunTopologyField } from "@/lib/runs";
 
 import { Markdown } from "./Markdown";
+import { PillTextArea } from "./PillTextArea";
 
 /**
  * The review lane's per-step surfaces. Every surface renders server content
@@ -304,11 +310,13 @@ export function ReviewOptionsSurface({
   editable,
   draft,
   onChange,
+  pills,
 }: {
   artifact: Record<string, unknown>;
   editable: boolean;
   draft: OptionsDraft | null;
   onChange: (draft: OptionsDraft) => void;
+  pills?: readonly RunPill[];
 }) {
   const guidanceId = useId();
   const baseline: OptionsDraft = {
@@ -367,14 +375,16 @@ export function ReviewOptionsSurface({
 
       <label className="guidance-field" htmlFor={guidanceId}>
         <span>Custom guidance</span>
-        <textarea
+        <PillTextArea
           id={guidanceId}
           rows={3}
           maxLength={4000}
           placeholder="Anything the reviewer should focus on (optional)"
           value={value.guidance}
+          onChange={(guidance) => onChange({ categories: value.categories, guidance })}
           disabled={!editable}
-          onChange={(event) => onChange({ categories: value.categories, guidance: event.target.value })}
+          pills={pills}
+          fieldLabel="Custom guidance"
         />
       </label>
     </div>
@@ -387,11 +397,13 @@ export function AiReviewSurface({
   editing,
   draft,
   onChange,
+  pills,
 }: {
   artifact: Record<string, unknown>;
   editing: boolean;
   draft: ReviewDraft | null;
   onChange: (draft: ReviewDraft) => void;
+  pills?: readonly RunPill[];
 }) {
   const summaryId = useId();
   const strengthsId = useId();
@@ -431,29 +443,35 @@ export function AiReviewSurface({
         </label>
         <label className="field-row" htmlFor={summaryId}>
           <span>Summary</span>
-          <textarea
+          <PillTextArea
             id={summaryId}
             rows={3}
             value={value.summary}
-            onChange={(event) => onChange({ ...value, summary: event.target.value })}
+            onChange={(summary) => onChange({ ...value, summary })}
+            pills={pills}
+            fieldLabel="Review summary"
           />
         </label>
         <label className="field-row" htmlFor={strengthsId}>
           <span>{`Strengths (one per line)`}</span>
-          <textarea
+          <PillTextArea
             id={strengthsId}
             rows={3}
             value={value.strengthsText}
-            onChange={(event) => onChange({ ...value, strengthsText: event.target.value })}
+            onChange={(strengthsText) => onChange({ ...value, strengthsText })}
+            pills={pills}
+            fieldLabel="Strengths"
           />
         </label>
         <label className="field-row" htmlFor={improvementsId}>
           <span>{`Suggested improvements (one per line)`}</span>
-          <textarea
+          <PillTextArea
             id={improvementsId}
             rows={3}
             value={value.improvementsText}
-            onChange={(event) => onChange({ ...value, improvementsText: event.target.value })}
+            onChange={(improvementsText) => onChange({ ...value, improvementsText })}
+            pills={pills}
+            fieldLabel="Suggested improvements"
           />
         </label>
         <div className="review-comments editor">
@@ -723,6 +741,8 @@ export type IssuePatchFileView = {
   diff: string;
   content: string;
   validators: string[];
+  /** Reviewer keep/drop flag recorded by an edit decision (absent means kept). */
+  included: boolean;
 };
 
 export type IssueRegressionPatchView = {
@@ -758,6 +778,8 @@ export type IssueImplementationDraft = {
   summary: string;
   /** Edited file contents keyed by path; untouched files stay as recorded. */
   files: Record<string, string>;
+  /** Keep/drop per path, seeded from the plan. Absent defaults to kept. */
+  included?: Record<string, boolean>;
   regressionTest: string | null;
 };
 
@@ -926,6 +948,7 @@ export function parseIssueImplementation(
         diff: asString(record["diff"]) ?? "",
         content: asString(record["content"]) ?? "",
         validators: asStringArray(record["validators"]),
+        included: record["included"] !== false,
       });
     }
   }
@@ -1275,11 +1298,13 @@ export function IssueAnalysisSurface({
   editing,
   draft,
   onChange,
+  pills,
 }: {
   artifact: Record<string, unknown>;
   editing: boolean;
   draft: IssueAnalysisDraft | null;
   onChange: (draft: IssueAnalysisDraft) => void;
+  pills?: readonly RunPill[];
 }) {
   const summaryId = useId();
   const [detailsOpen, setDetailsOpen] = useState<Record<string, boolean>>({});
@@ -1306,11 +1331,13 @@ export function IssueAnalysisSurface({
       <div className="analysis-editor">
         <label className="field-row" htmlFor={summaryId}>
           <span>Analysis summary</span>
-          <textarea
+          <PillTextArea
             id={summaryId}
             rows={3}
             value={value.summary}
-            onChange={(event) => onChange({ summary: event.target.value, affectedFiles: value.affectedFiles })}
+            onChange={(summary) => onChange({ summary, affectedFiles: value.affectedFiles })}
+            pills={pills}
+            fieldLabel="Analysis summary"
           />
         </label>
         <div className="affected-files">
@@ -1481,10 +1508,17 @@ export function IssueImplementationSurface({
     const value: IssueImplementationDraft = draft ?? {
       summary: parsed.summary,
       files: Object.fromEntries(parsed.files.map((file) => [file.path, file.content])),
+      included: Object.fromEntries(parsed.files.map((file) => [file.path, file.included])),
       regressionTest: parsed.regressionTest?.content ?? null,
     };
+    const keptCount = parsed.files.filter(
+      (file) => (value.included?.[file.path] ?? file.included) !== false,
+    ).length;
     function updateFile(path: string, content: string): void {
       onChange({ ...value, files: { ...value.files, [path]: content } });
+    }
+    function updateIncluded(path: string, included: boolean): void {
+      onChange({ ...value, included: { ...(value.included ?? {}), [path]: included } });
     }
     return (
       <div className="implementation-editor">
@@ -1497,20 +1531,36 @@ export function IssueImplementationSurface({
             onChange={(event) => onChange({ ...value, summary: event.target.value })}
           />
         </label>
-        {parsed.files.map((file) => (
-          <article key={file.path} className="file-card editing">
-            <header className="file-card-head">
-              <strong className="file-path">{file.path}</strong>
-              <span className={`file-status status-${file.status}`}>{file.status}</span>
-            </header>
-            <textarea
-              rows={8}
-              className="content-editor"
-              value={value.files[file.path] ?? file.content}
-              onChange={(event) => updateFile(file.path, event.target.value)}
-            />
-          </article>
-        ))}
+        <p className="edit-plan-hint">
+          Uncheck a file to drop it from the patch. Edited bytes run the validators
+          again when the plan applies.
+        </p>
+        {parsed.files.map((file) => {
+          const kept = (value.included?.[file.path] ?? file.included) !== false;
+          return (
+            <article key={file.path} className={`file-card editing${kept ? "" : " dropped"}`}>
+              <header className="file-card-head">
+                <label className="file-keep">
+                  <input
+                    type="checkbox"
+                    checked={kept}
+                    disabled={kept && keptCount === 1}
+                    onChange={(event) => updateIncluded(file.path, event.target.checked)}
+                  />
+                  <span>Keep in patch</span>
+                </label>
+                <strong className="file-path">{file.path}</strong>
+                <span className={`file-status status-${file.status}`}>{file.status}</span>
+              </header>
+              <textarea
+                rows={8}
+                className="content-editor"
+                value={value.files[file.path] ?? file.content}
+                onChange={(event) => updateFile(file.path, event.target.value)}
+              />
+            </article>
+          );
+        })}
         {parsed.regressionTest !== null && (
           <article className="file-card editing">
             <header className="file-card-head">
@@ -1724,6 +1774,8 @@ export type FeaturePatchFileView = {
   diff: string;
   content: string;
   validators: string[];
+  /** Reviewer keep/drop flag recorded by an edit decision (absent means kept). */
+  included: boolean;
 };
 
 export type FeatureCriterionCoverageView = {
@@ -1750,6 +1802,8 @@ export type FeatureImplementationDraft = {
   summary: string;
   /** Edited file contents keyed by path; untouched files stay as recorded. */
   files: Record<string, string>;
+  /** Keep/drop per path, seeded from the plan. Absent defaults to kept. */
+  included?: Record<string, boolean>;
 };
 
 export type FeatureCompletionShape = {
@@ -1880,6 +1934,7 @@ export function parseFeaturePatchFiles(value: unknown): FeaturePatchFileView[] {
       diff: asString(record["diff"]) ?? "",
       content: asString(record["content"]) ?? "",
       validators: asStringArray(record["validators"]),
+      included: record["included"] !== false,
     });
   }
   return files;
@@ -2197,11 +2252,13 @@ export function ScopeDesignSurface({
   editable,
   draft,
   onChange,
+  pills,
 }: {
   artifact: Record<string, unknown>;
   editable: boolean;
   draft: ScopeDesignDraft | null;
   onChange: (draft: ScopeDesignDraft) => void;
+  pills?: readonly RunPill[];
 }) {
   const summaryId = useId();
   const guidanceId = useId();
@@ -2288,14 +2345,16 @@ export function ScopeDesignSurface({
 
       <label className="guidance-field" htmlFor={guidanceId}>
         <span>Custom guidance</span>
-        <textarea
+        <PillTextArea
           id={guidanceId}
           rows={3}
           maxLength={4000}
           placeholder="Anything the implementation should account for (optional)"
           value={value.guidance}
+          onChange={(guidance) => onChange({ ...value, guidance })}
           disabled={!editable}
-          onChange={(event) => onChange({ ...value, guidance: event.target.value })}
+          pills={pills}
+          fieldLabel="Custom guidance"
         />
       </label>
     </div>
@@ -2326,7 +2385,14 @@ export function FeatureImplementationSurface({
     const value: FeatureImplementationDraft = draft ?? {
       summary: parsed.summary,
       files: Object.fromEntries(parsed.files.map((file) => [file.path, file.content])),
+      included: Object.fromEntries(parsed.files.map((file) => [file.path, file.included])),
     };
+    const keptCount = parsed.files.filter(
+      (file) => (value.included?.[file.path] ?? file.included) !== false,
+    ).length;
+    function updateIncluded(path: string, included: boolean): void {
+      onChange({ ...value, included: { ...(value.included ?? {}), [path]: included } });
+    }
     return (
       <div className="implementation-editor">
         <label className="field-row" htmlFor={summaryId}>
@@ -2338,24 +2404,40 @@ export function FeatureImplementationSurface({
             onChange={(event) => onChange({ ...value, summary: event.target.value })}
           />
         </label>
-        {parsed.files.map((file) => (
-          <article key={file.path} className="file-card editing">
-            <header className="file-card-head">
-              <strong className="file-path">{file.path}</strong>
-              <span className={`file-status status-${file.status}`}>
-                {file.status === "added" ? "new file" : file.status}
-              </span>
-            </header>
-            <textarea
-              rows={8}
-              className="content-editor"
-              value={value.files[file.path] ?? file.content}
-              onChange={(event) =>
-                onChange({ ...value, files: { ...value.files, [file.path]: event.target.value } })
-              }
-            />
-          </article>
-        ))}
+        <p className="edit-plan-hint">
+          Uncheck a file to drop it from the plan. Edited bytes run the validators
+          again when the plan applies.
+        </p>
+        {parsed.files.map((file) => {
+          const kept = (value.included?.[file.path] ?? file.included) !== false;
+          return (
+            <article key={file.path} className={`file-card editing${kept ? "" : " dropped"}`}>
+              <header className="file-card-head">
+                <label className="file-keep">
+                  <input
+                    type="checkbox"
+                    checked={kept}
+                    disabled={kept && keptCount === 1}
+                    onChange={(event) => updateIncluded(file.path, event.target.checked)}
+                  />
+                  <span>Keep in plan</span>
+                </label>
+                <strong className="file-path">{file.path}</strong>
+                <span className={`file-status status-${file.status}`}>
+                  {file.status === "added" ? "new file" : file.status}
+                </span>
+              </header>
+              <textarea
+                rows={8}
+                className="content-editor"
+                value={value.files[file.path] ?? file.content}
+                onChange={(event) =>
+                  onChange({ ...value, files: { ...value.files, [file.path]: event.target.value } })
+                }
+              />
+            </article>
+          );
+        })}
       </div>
     );
   }
@@ -2914,6 +2996,63 @@ export function parseDependencyGroups(
   };
 }
 
+/**
+ * The one move rule behind drag, keyboard, and click: relocate one package
+ * from its group to another, appending it to the target group. A same-group
+ * request, an unknown package, or a target that already lists that name all
+ * return the *same array reference* so callers can detect the no-op and skip
+ * a state write — the semantics the component's early returns had before this
+ * extraction. The duplicate-name guard matters because an artifact that ever
+ * listed a package twice could otherwise land it twice in the target (and a
+ * package present in two groups would duplicate the target group's React
+ * keys and counts; the append is exactly what must not happen then).
+ */
+export function movePackageBetween(
+  groups: DependencyGroupView[],
+  from: DependencyJump,
+  name: string,
+  to: DependencyJump,
+): DependencyGroupView[] {
+  if (from === to) return groups;
+  const moved = groups
+    .find((group) => group.id === from)
+    ?.packages.find((pkg) => pkg.name === name);
+  if (moved === undefined) return groups;
+  const target = groups.find((group) => group.id === to);
+  if (target !== undefined && target.packages.some((pkg) => pkg.name === name)) {
+    return groups;
+  }
+  return groups.map((group) => {
+    if (group.id === from) {
+      return { ...group, packages: group.packages.filter((pkg) => pkg.name !== name) };
+    }
+    if (group.id === to) return { ...group, packages: [...group.packages, moved] };
+    return group;
+  });
+}
+
+/** Custom drag payload carrying the source group id alongside the name. */
+export const DEPENDENCY_DRAG_MIME = "text/dependency-group";
+
+export type DependencyDragSource = { name: string; from: DependencyJump };
+
+/**
+ * Validate a dropped payload against the live draft: the source group must
+ * exist and must actually contain the package, so a stray text/plain drop
+ * (or a payload racing an earlier move) can never fabricate a move.
+ */
+export function readDependencyDragSource(
+  name: string | null,
+  sourceId: string | null,
+  groups: DependencyGroupView[],
+): DependencyDragSource | null {
+  const from = dependencyJump(sourceId);
+  if (name === null || name === "" || from === null) return null;
+  const group = groups.find((item) => item.id === from);
+  if (group === undefined || !group.packages.some((pkg) => pkg.name === name)) return null;
+  return { name, from };
+}
+
 /** Step 2 — group cards; move a package between groups or exclude it with a reason. */
 export function DependencyGroupSurface({
   artifact,
@@ -2926,6 +3065,9 @@ export function DependencyGroupSurface({
   draft: DependencyGroupDraft | null;
   onChange: (draft: DependencyGroupDraft) => void;
 }) {
+  const [dragSource, setDragSource] = useState<DependencyDragSource | null>(null);
+  const [dragOverGroup, setDragOverGroup] = useState<DependencyJump | null>(null);
+  const [moveNotice, setMoveNotice] = useState("");
   const parsed = parseDependencyGroups(artifact);
 
   if (parsed === null) {
@@ -2956,21 +3098,57 @@ export function DependencyGroupSurface({
     });
   }
 
+  // The single commit path for all three interaction routes (drag, keyboard
+  // select, click-to-select): one pure move rule, plus a polite announcement
+  // so the result is perceivable without watching the cards.
   function movePackage(fromId: DependencyJump, name: string, toId: DependencyJump): void {
-    if (fromId === toId) return;
-    const moved = value.groups
-      .find((group) => group.id === fromId)
-      ?.packages.find((pkg) => pkg.name === name);
-    if (moved === undefined) return;
-    onChange({
-      groups: value.groups.map((group) => {
-        if (group.id === fromId) {
-          return { ...group, packages: group.packages.filter((pkg) => pkg.name !== name) };
-        }
-        if (group.id === toId) return { ...group, packages: [...group.packages, moved] };
-        return group;
-      }),
-    });
+    const next = movePackageBetween(value.groups, fromId, name, toId);
+    if (next === value.groups) return;
+    onChange({ groups: next });
+    setMoveNotice(`moved ${name} from ${fromId} to ${toId}`);
+  }
+
+  function beginDrag(
+    event: DragEvent<HTMLLIElement>,
+    fromId: DependencyJump,
+    name: string,
+  ): void {
+    if (!editable) return;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", name);
+    event.dataTransfer.setData(DEPENDENCY_DRAG_MIME, fromId);
+    setDragSource({ name, from: fromId });
+  }
+
+  function allowDrop(event: DragEvent<HTMLElement>, targetId: DependencyJump): void {
+    if (!editable || dragSource === null || dragSource.from === targetId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setDragOverGroup(targetId);
+  }
+
+  function leaveDrop(targetId: DependencyJump): void {
+    setDragOverGroup((previous) => (previous === targetId ? null : previous));
+  }
+
+  function finishDrag(): void {
+    setDragSource(null);
+    setDragOverGroup(null);
+  }
+
+  function dropPackage(event: DragEvent<HTMLElement>, targetId: DependencyJump): void {
+    if (!editable) return;
+    event.preventDefault();
+    const source =
+      dragSource ??
+      readDependencyDragSource(
+        event.dataTransfer.getData("text/plain") || null,
+        event.dataTransfer.getData(DEPENDENCY_DRAG_MIME) || null,
+        value.groups,
+      );
+    finishDrag();
+    if (source === null || source.from === targetId) return;
+    movePackage(source.from, source.name, targetId);
   }
 
   return (
@@ -3003,8 +3181,22 @@ export function DependencyGroupSurface({
           </div>
         )}
       </div>
+      <p className="dependency-move-status" role="status" aria-live="polite">
+        {moveNotice}
+      </p>
       {value.groups.map((group) => (
-        <article key={group.id} className={`dependency-group-card group-${group.id}`}>
+        <article
+          key={group.id}
+          className={`dependency-group-card group-${group.id}${
+            dragOverGroup === group.id ? " drag-over" : ""
+          }`}
+          onDragOver={(event) => allowDrop(event, group.id)}
+          onDragLeave={(event) => {
+            if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+            leaveDrop(group.id);
+          }}
+          onDrop={(event) => dropPackage(event, group.id)}
+        >
           <header className="file-card-head">
             <strong>{group.label}</strong>
             <span className="file-count-badge">
@@ -3017,7 +3209,13 @@ export function DependencyGroupSurface({
           ) : (
             <ul className="dependency-list">
               {group.packages.map((pkg) => (
-                <li key={pkg.name} className={pkg.excluded ? "excluded" : ""}>
+                <li
+                  key={pkg.name}
+                  className={pkg.excluded ? "excluded" : ""}
+                  draggable={editable}
+                  onDragStart={(event) => beginDrag(event, group.id, pkg.name)}
+                  onDragEnd={finishDrag}
+                >
                   <div className="dependency-row">
                     <strong>{pkg.name}</strong>
                     <span className="dependency-version-cell">{`${pkg.from} → ${pkg.to}`}</span>
@@ -3048,6 +3246,7 @@ export function DependencyGroupSurface({
                       <select
                         value={group.id}
                         disabled={!editable}
+                        aria-label={`Move ${pkg.name} from ${group.id} to another group`}
                         onChange={(event) =>
                           movePackage(
                             group.id,
@@ -3747,6 +3946,56 @@ export function parseDependencyReceipt(value: unknown): DependencyReceiptView | 
   };
 }
 
+/**
+ * CI states a lane artifact may record (mirrors the programming lane's
+ * `ciStatus` enum). The console never fetches CI itself — the status either
+ * rides in the artifact or the surface says so honestly.
+ */
+export type DependencyCiStatus = "pending" | "success" | "failure" | "neutral";
+
+const CI_STATUSES: readonly DependencyCiStatus[] = [
+  "pending",
+  "success",
+  "failure",
+  "neutral",
+];
+
+export function parseCiStatus(value: unknown): DependencyCiStatus | null {
+  return typeof value === "string" && (CI_STATUSES as readonly string[]).includes(value)
+    ? (value as DependencyCiStatus)
+    : null;
+}
+
+export const CI_STATUS_LABELS: Record<DependencyCiStatus, string> = {
+  pending: "Pending",
+  success: "Success",
+  failure: "Failure",
+  neutral: "Neutral",
+};
+
+export const CI_STATUS_NOT_RECORDED = "CI status not recorded for this run";
+
+/** The row's textContent: a labelled state, or the explicit degradation. */
+export function ciStatusLine(status: DependencyCiStatus | null): string {
+  return status === null ? CI_STATUS_NOT_RECORDED : `CI status: ${CI_STATUS_LABELS[status]}`;
+}
+
+/**
+ * Renders one artifact-level CI line. The key it reads is the artifact's
+ * top-level ``ciStatus`` — note that no current producer writes it there:
+ * the programming lane records ``validation.ciStatus`` per PR, not on the
+ * lane artifact, so this row renders the honest "not recorded" degradation
+ * today. PR2/PR3 must not read ``artifact.ciStatus`` as an established
+ * contract; wiring CI into the artifact shape is a separate cross-plane
+ * change.
+ */
+export function CiStatusRow({ artifact }: { artifact: Record<string, unknown> | null }) {
+  const status = artifact === null ? null : parseCiStatus(artifact["ciStatus"]);
+  return (
+    <p className={`ci-status-row ci-status-${status ?? "none"}`}>{ciStatusLine(status)}</p>
+  );
+}
+
 /** Step 5 — PR preview list with CVE callouts; after the writes, the opened PRs. */
 export function DependencyMergeSurface({
   artifact,
@@ -3843,6 +4092,8 @@ export function DependencyMergeSurface({
           ))}
         </>
       )}
+
+      <CiStatusRow artifact={artifact} />
 
       <p className="follow-up-note">
         Opening the bump PRs is the side effect; CI runs on each branch and a human merges them.
@@ -7021,6 +7272,119 @@ export function SecurityContainSurface({
             <li>{`Evidence: ${receipt.evidenceRef}`}</li>
           </ul>
         </article>
+      )}
+    </div>
+  );
+}
+
+const FLAG_SEVERITY_LABELS: Record<CaseDocSnapFlag["severity"], string> = {
+  ok: "OK",
+  warning: "Check",
+  error: "Fix",
+};
+
+/**
+ * U7 — the lane-declared custom fields of one step, rendered from the
+ * topology payload (the lane owner declares them in ``definitions.py``; no
+ * lane-specific code lives here). Snapping a document fills the fields
+ * whose ``snapKey`` the extraction carries and shows the auto-check flags
+ * (ABN checksum, expiry window, duplicate). Values still only become a
+ * change through the normal Proceed/Edit decision and its receipt gate —
+ * snapping posts nothing.
+ */
+export function DeclaredFieldsCard({
+  fields,
+  values,
+  flags,
+  editable,
+  snapBusy,
+  snapNote,
+  snapError,
+  onChange,
+  onSnap,
+}: {
+  fields: RunTopologyField[];
+  values: Record<string, string>;
+  flags: CaseDocSnapFlag[];
+  editable: boolean;
+  snapBusy: boolean;
+  snapNote: string | null;
+  snapError: string | null;
+  onChange: (fieldId: string, value: string) => void;
+  onSnap: (file: File) => void;
+}) {
+  if (fields.length === 0) return null;
+  const flagFor = (field: RunTopologyField): CaseDocSnapFlag | null =>
+    field.snapKey === ""
+      ? null
+      : (flags.find((flag) => flag.field === field.snapKey) ?? null);
+  return (
+    <div className="declared-fields">
+      <div className="declared-fields-head">
+        <h4>Lane fields</h4>
+        {editable && (
+          <label className={`declared-snap${snapBusy ? " busy" : ""}`}>
+            {snapBusy ? <span className="spinner" aria-hidden="true" /> : null}
+            <span>{snapBusy ? "Reading…" : "Snap document"}</span>
+            <input
+              type="file"
+              className="sr-only"
+              accept=".txt,.md,.csv,.json,.log,.xml,.pdf,text/*,image/*,application/pdf"
+              disabled={snapBusy}
+              aria-label="Snap a document to fill the declared fields"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                if (file !== null) onSnap(file);
+                event.target.value = "";
+              }}
+            />
+          </label>
+        )}
+      </div>
+      {snapNote !== null && <p className="declared-fields-note">{snapNote}</p>}
+      <ul className="declared-fields-list">
+        {fields.map((field) => {
+          const flag = flagFor(field);
+          return (
+            <li
+              key={field.id}
+              className={`declared-field${flag !== null ? ` flag-${flag.severity}` : ""}`}
+            >
+              <label>
+                <span className="declared-field-label">
+                  {field.label}
+                  {field.required && <span className="line-pill">required</span>}
+                </span>
+                <input
+                  type={
+                    field.kind === "date" ? "date" : field.kind === "number" ? "number" : "text"
+                  }
+                  maxLength={field.maxLength}
+                  value={values[field.id] ?? ""}
+                  readOnly={!editable}
+                  placeholder={field.placeholder}
+                  onChange={(event) => onChange(field.id, event.target.value)}
+                />
+              </label>
+              {field.help !== "" && <p className="declared-field-help">{field.help}</p>}
+            </li>
+          );
+        })}
+      </ul>
+      {flags.length > 0 && (
+        <ul className="declared-flags">
+          {flags.map((flag, index) => (
+            <li key={`${flag.code}-${String(index)}`} className={`declared-flag severity-${flag.severity}`}>
+              <strong>{FLAG_SEVERITY_LABELS[flag.severity]}</strong>
+              <span>{flag.message}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {snapError !== null && (
+        <p className="run-action-error" role="alert">
+          {snapError}
+        </p>
       )}
     </div>
   );

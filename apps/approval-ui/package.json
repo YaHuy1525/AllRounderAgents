@@ -13,6 +13,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
     "@xyflow/react": "^12.11.6",
+    "mdast-util-from-adf": "^2.3.0",
+    "mdast-util-to-markdown": "^2.2.0",
     "next": "^15.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

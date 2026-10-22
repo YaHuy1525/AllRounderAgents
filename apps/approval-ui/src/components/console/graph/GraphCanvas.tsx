@@ -39,6 +39,8 @@ export type GraphCanvasProps = {
   states?: Readonly<Record<string, RunVisualState>>;
   /** Run overlay: step id → true when the run recorded a side effect for it. */
   effects?: Readonly<Record<string, boolean>>;
+  /** Run overlay: step id → true when the step carries a signed receipt. */
+  receipts?: Readonly<Record<string, boolean>>;
   /** Step id to mark as the live/selected node. */
   activeStepId?: string | null;
   /** Animate the flow edges — used while a run is executing. */
@@ -57,6 +59,7 @@ export default function GraphCanvas({
   workflow,
   states,
   effects,
+  receipts,
   activeStepId,
   animated = false,
   onStepSelect,
@@ -86,6 +89,7 @@ export default function GraphCanvas({
             state: node.state,
             active: node.stepId === activeStepId,
             effect: effects?.[node.stepId] === true,
+            receipt: receipts?.[node.stepId] === true,
           };
           return {
             id: node.id,
@@ -115,7 +119,7 @@ export default function GraphCanvas({
           selectable: false,
         };
       }),
-    [graph.nodes, activeStepId, stepTitles, effects],
+    [graph.nodes, activeStepId, stepTitles, effects, receipts],
   );
 
   const computedEdges = useMemo<Edge[]>(

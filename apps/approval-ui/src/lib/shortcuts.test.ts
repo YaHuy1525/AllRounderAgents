@@ -17,8 +17,11 @@ describe("console shortcut resolver", () => {
     expect(resolveShortcut("b", true, { modifier: true })).toEqual({ kind: "clear" });
   });
 
-  it("opens a new tab on +", () => {
+  it("opens a new tab on + and the command bar on /", () => {
     expect(resolveShortcut("+", false)).toEqual({ kind: "action", action: "new-tab" });
+    expect(resolveShortcut("/", false)).toEqual({ kind: "action", action: "command" });
+    expect(resolveShortcut("/", false, { modifier: true })).toEqual({ kind: "clear" });
+    expect(resolveShortcut("/", true)).toEqual({ kind: "clear" });
     expect(resolveShortcut("a", false)).toEqual({ kind: "clear" });
   });
 });

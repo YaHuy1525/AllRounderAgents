@@ -1,13 +1,27 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import type { JiraIssue } from "@/lib/board";
+import type { CaseEvent } from "@/lib/cases";
+import { connectedProviders, listConnectors, resolveStepProviders } from "@/lib/connectors";
 import { integrationAccent, integrationLabel } from "@/lib/integrations";
+import {
+  LOG_FILTERS,
+  filterRunEvents,
+  mergeTimeline,
+  receiptFlags,
+  runSpendLine,
+  stepLineage,
+  type LogFilterId,
+  type TimelineEntryKind,
+  type TimelineRun,
+} from "@/lib/runViews";
 import {
   RUNNABLE_WORKFLOWS,
   getRun,
+  getRunTopology,
   isRunTerminal,
   mergeRunEvents,
   runVisualState,
@@ -17,6 +31,7 @@ import {
   type RunStatus,
   type RunStep,
   type RunSummary,
+  type RunTopology,
   type RunVisualState,
 } from "@/lib/runs";
 import { listWorkflows, type WorkflowDefinition } from "@/lib/workflows";
@@ -29,7 +44,9 @@ import {
   IconClock,
   IconClose,
   IconCode,
+  IconExternalLink,
   IconFileText,
+  IconList,
   IconLock,
   IconPlay,
   IconRefresh,
@@ -38,16 +55,21 @@ import {
 } from "./icons";
 
 /**
- * The run inspector wraps the run surface in four lenses:
+ * The run inspector wraps the run surface in five lenses:
  *
  * - Graph: the workflow graph with the live run overlay (node states, the
- *   active pulse, executed-path edges, recorded-effect chips, lock/queue
- *   badges) and a step drawer reusing the single-step display pattern.
+ *   active pulse, executed-path edges, recorded-effect chips, receipt dots,
+ *   lock/queue badges) and a step drawer reusing the single-step display
+ *   pattern. The frame's satellites come from the N1 topology, with the
+ *   catalog as fallback.
  * - Form: the existing RunPanel rail experience, unchanged (kept mounted so
  *   its stream, drafts, and the History selector survive lens switches).
- * - Data: the full-run JSON, the side-effects ledger, and a steps table.
- * - Timeline: the sequence-ordered SSE event history with jump-to-step and a
- *   JSON download (the Mastra trace-download analog).
+ * - Data: the full-run JSON, the side-effects ledger, and a steps table with
+ *   the artifact → decision → receipt lineage.
+ * - Timeline: the sequence-ordered SSE event history plus a by-time case/run
+ *   merge, with jump-to-step and a JSON download (the trace-download analog).
+ * - Logs: the same stream behind facet filter chips, with a cost/duration
+ *   footer.
  *
  * Mounted two ways: embedded in `TicketTab` (issue + runs provided; the Form
  * lens is the full decision experience) and standalone as a `run` tab
@@ -65,13 +87,14 @@ const GraphCanvas = dynamic(() => import("./graph/GraphCanvas"), {
   ),
 });
 
-export type InspectorLens = "graph" | "form" | "data" | "timeline";
+export type InspectorLens = "graph" | "form" | "data" | "timeline" | "logs";
 
 const LENS_META: ReadonlyArray<{ id: InspectorLens; label: string }> = [
   { id: "graph", label: "Graph" },
   { id: "form", label: "Form" },
   { id: "data", label: "Data" },
   { id: "timeline", label: "Timeline" },
+  { id: "logs", label: "Logs" },
 ];
 
 const RUN_STATUS_COPY: Record<RunStatus, string> = {
@@ -100,11 +123,15 @@ const EVENT_LABELS: Record<string, string> = {
   "run.decision": "Decision",
   "run.locked": "Locked",
   "run.unlocked": "Unlocked",
+  "run.closed": "Closed",
 };
 
 type Tone = "good" | "warn" | "bad" | "info" | "muted";
 
 const NOOP = (): void => {};
+
+/** Stable identity for "no case trail" so the timeline memo does not thrash. */
+const EMPTY_CASE_EVENTS: CaseEvent[] = [];
 
 function workflowLabel(workflowId: string): string {
   return RUNNABLE_WORKFLOWS.find((workflow) => workflow.id === workflowId)?.label ?? workflowId;
@@ -127,6 +154,8 @@ function runSummaryOf(run: RunDetail): RunSummary {
     ticketKey: run.ticketKey,
     status: run.status,
     queuePosition: run.queuePosition,
+    waitingOn: run.waitingOn,
+    heldSlots: run.heldSlots,
     currentStepId: run.currentStepId,
     stepCount: run.stepCount,
     stepsDone: run.stepsDone,
@@ -206,11 +235,26 @@ function payloadWithoutSnapshot(event: RunEvent): Record<string, unknown> {
   return payload;
 }
 
+/** Badge tone per merged-timeline row kind. */
+const TIMELINE_KIND_TONE: Record<TimelineEntryKind, Tone> = {
+  case: "info",
+  run: "warn",
+  step: "muted",
+  decision: "good",
+  github: "muted",
+};
+
 const LENS_STORAGE_KEY = "allrounder.run.lenses.v1";
 const DEFAULT_LENS: InspectorLens = "graph";
 
 function isInspectorLens(value: unknown): value is InspectorLens {
-  return value === "graph" || value === "form" || value === "data" || value === "timeline";
+  return (
+    value === "graph" ||
+    value === "form" ||
+    value === "data" ||
+    value === "timeline" ||
+    value === "logs"
+  );
 }
 
 /** Lens choices persist per scope: a ticket tab or a standalone run tab. */
@@ -254,6 +298,8 @@ function LensIcon({ lens }: { lens: InspectorLens }) {
       return <IconCode />;
     case "timeline":
       return <IconClock />;
+    case "logs":
+      return <IconList />;
   }
 }
 
@@ -393,7 +439,12 @@ export function RunInspector({
   onToggleDebug,
   onRunsChanged,
   onActiveRun,
+  caseId,
+  caseEvents = EMPTY_CASE_EVENTS,
+  costMicro = null,
   runId,
+  focusStepId,
+  focusNonce,
 }: {
   /** Embedded (ticket) mode: RunPanel renders the Form lens with these props. */
   issue?: JiraIssue;
@@ -402,8 +453,17 @@ export function RunInspector({
   onToggleDebug?: () => void;
   onRunsChanged?: () => void;
   onActiveRun?: (run: RunDetail | null) => void;
+  /** The case backing this ticket (embedded mode) — where snaps find their trail. */
+  caseId?: string;
+  /** The case's event trail, merged into the Timeline lens (embedded mode). */
+  caseEvents?: CaseEvent[];
+  /** The case's spend in micro-USD for the Logs/Timeline footer. */
+  costMicro?: number | null;
   /** Standalone (run tab) mode: fetch this run and derive everything. */
   runId?: string;
+  /** Command-bar deep link: open this step's drawer once per nonce. */
+  focusStepId?: string;
+  focusNonce?: number;
 }) {
   const embedded = issue !== undefined && runs !== undefined;
   const [detail, setDetail] = useState<RunDetail | null>(null);
@@ -417,6 +477,16 @@ export function RunInspector({
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [timelineDown, setTimelineDown] = useState(false);
   const [timelineTick, setTimelineTick] = useState(0);
+  const [topology, setTopology] = useState<RunTopology | null>(null);
+  // N2 connectors: provider ids connected for this tenant, so a connected
+  // Gmail can claim the generic `email` satellite on the steps it serves.
+  // Failures fall back to no overlay — the declared glyphs stay.
+  const [connected, setConnected] = useState<string[]>([]);
+  const [logFilter, setLogFilter] = useState<LogFilterId>("all");
+  // Every run of the case, fetched lazily for the ticket-level timeline; the
+  // ref keeps failed lookups from looping until the user retries.
+  const [runCache, setRunCache] = useState<Record<string, RunDetail>>({});
+  const timelineFetchedRef = useRef<Set<string>>(new Set());
 
   const scope = embedded ? `ticket:${issue.key}` : `run:${runId ?? ""}`;
 
@@ -425,6 +495,8 @@ export function RunInspector({
     setLensLoaded(false);
     setLens(readLens(scope));
     setSelectedStepId(null);
+    timelineFetchedRef.current = new Set();
+    setRunCache({});
     setLensLoaded(true);
   }, [scope]);
 
@@ -477,11 +549,11 @@ export function RunInspector({
     [onActiveRun],
   );
 
-  // Timeline: subscribe only while the lens is visible; the stream replays
-  // the full history, so re-entering the lens rebuilds the list from zero.
+  // Timeline/Logs: subscribe only while a stream lens is visible; the stream
+  // replays the full history, so re-entering a lens rebuilds the list from zero.
   const timelineRunId = detail === null ? null : detail.runId;
   useEffect(() => {
-    if (lens !== "timeline" || timelineRunId === null) return;
+    if ((lens !== "timeline" && lens !== "logs") || timelineRunId === null) return;
     let cancelled = false;
     let close: (() => void) | null = null;
     setEvents([]);
@@ -503,12 +575,107 @@ export function RunInspector({
     };
   }, [lens, timelineRunId, timelineTick]);
 
-  // The graph's workflow frame: the catalog definition when present, else a
-  // minimal frame built from the run's step titles (no satellites).
+  // Retry affordance: bumping the timeline tick re-attempts failed detail
+  // lookups along with the stream reconnect.
+  useEffect(() => {
+    timelineFetchedRef.current = new Set();
+  }, [timelineTick]);
+
+  // Ticket-level feed: the Timeline lens covers every run of the case, not
+  // just the selected one, so fetch each listed run's detail once. Failures
+  // (and slow loads) fall back to summary rows; a run appearing in the list
+  // later fetches on the next pass.
+  useEffect(() => {
+    if (!embedded || lens !== "timeline" || runs === undefined) return;
+    const wanted = runs.filter((item) => !timelineFetchedRef.current.has(item.runId));
+    if (wanted.length === 0) return;
+    for (const item of wanted) timelineFetchedRef.current.add(item.runId);
+    let cancelled = false;
+    void (async () => {
+      const settled = await Promise.allSettled(wanted.map((item) => getRun(item.runId)));
+      if (cancelled) return;
+      setRunCache((previous) => {
+        const next = { ...previous };
+        settled.forEach((result, index) => {
+          const summary = wanted[index];
+          if (result.status === "fulfilled" && summary !== undefined) {
+            next[summary.runId] = result.value;
+          }
+        });
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [embedded, lens, runs, timelineTick]);
+
+  // N1 topology: one fetch per run supplies the graph frame (side-effecting
+  // steps, integration satellites, receipts, lock); failures fall back to the
+  // catalog frame, and the guard below ignores a stale run's payload.
+  useEffect(() => {
+    if (timelineRunId === null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const payload = await getRunTopology(timelineRunId);
+        if (!cancelled) setTopology(payload);
+      } catch {
+        if (!cancelled) setTopology(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [timelineRunId]);
+
+  // N2 overlay: one catalog fetch feeds the display-only provider swap below;
+  // a failure simply keeps the glyphs each workflow declares.
+  useEffect(() => {
+    let cancelled = false;
+    listConnectors()
+      .then((items) => {
+        if (!cancelled) setConnected(connectedProviders(items));
+      })
+      .catch(() => {
+        if (!cancelled) setConnected([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const graphTopology =
+    topology !== null && detail !== null && topology.runId === detail.runId ? topology : null;
+
+  // The graph's workflow frame: the N1 topology when it matches the run, else
+  // the catalog definition, else a minimal frame from the run's step titles.
+  // Declared integrations ride the N2 connector overlay (a connected Gmail
+  // badges the steps its `email` channel serves) — display only, so the swap
+  // never grants an execution path.
   const workflowPick = useMemo((): Pick<WorkflowDefinition, "id" | "steps"> | null => {
     if (detail === null) return null;
+    if (graphTopology !== null) {
+      return {
+        id: graphTopology.workflow,
+        steps: graphTopology.steps.map((step) => ({
+          id: step.stepId,
+          title: step.title,
+          sideEffecting: step.sideEffecting,
+          integrations: resolveStepProviders(step.integrations, connected),
+        })),
+      };
+    }
     const fromCatalog = catalog?.find((workflow) => workflow.id === detail.workflow) ?? null;
-    if (fromCatalog !== null) return { id: fromCatalog.id, steps: fromCatalog.steps };
+    if (fromCatalog !== null) {
+      return {
+        id: fromCatalog.id,
+        steps: fromCatalog.steps.map((step) => ({
+          ...step,
+          integrations: resolveStepProviders(step.integrations, connected),
+        })),
+      };
+    }
     return {
       id: detail.workflow,
       steps: detail.steps.map((step) => ({
@@ -518,7 +685,7 @@ export function RunInspector({
         integrations: [] as string[],
       })),
     };
-  }, [catalog, detail]);
+  }, [catalog, connected, detail, graphTopology]);
 
   const workflowStepsById = useMemo(() => {
     const map = new Map<string, { title: string; integrations: string[] }>();
@@ -540,6 +707,9 @@ export function RunInspector({
     return flags;
   }, [detail]);
 
+  const receiptMarks = useMemo(() => receiptFlags(detail?.steps ?? []), [detail]);
+  const receiptTotal = Object.keys(receiptMarks).length;
+
   const selectedStep = useMemo(
     () =>
       detail === null || selectedStepId === null
@@ -553,6 +723,36 @@ export function RunInspector({
     [detail],
   );
 
+  // The Timeline lens covers the whole case: every listed run, enriched with
+  // its fetched detail, and the selected run's freshest state on top (it is
+  // the one the SSE stream keeps current).
+  const timelineRuns = useMemo((): TimelineRun[] => {
+    if (!embedded) return detail === null ? [] : [detail];
+    return (runs ?? []).map((item) => {
+      const fresh =
+        detail !== null && detail.runId === item.runId
+          ? detail
+          : (runCache[item.runId] ?? null);
+      return {
+        runId: item.runId,
+        workflow: item.workflow,
+        status: fresh?.status ?? item.status,
+        startedAt: fresh?.startedAt ?? item.startedAt,
+        finishedAt: fresh?.finishedAt ?? item.finishedAt,
+        steps: fresh?.steps ?? [],
+      };
+    });
+  }, [detail, embedded, runCache, runs]);
+
+  const timelineEntries = useMemo(
+    () => mergeTimeline({ caseEvents, runs: timelineRuns }),
+    [caseEvents, timelineRuns],
+  );
+
+  const filteredEvents = useMemo(() => filterRunEvents(events, logFilter), [events, logFilter]);
+
+  const spendLine = runSpendLine(detail, costMicro);
+
   const handleGraphStepSelect = useCallback((stepId: string): void => {
     setSelectedStepId(stepId);
   }, []);
@@ -561,6 +761,21 @@ export function RunInspector({
     setSelectedStepId(stepId);
     setLens("graph");
   }, []);
+
+  // Command-bar deep link: once the run is loaded, open the linked step's
+  // drawer on the graph lens. The nonce guard keeps later snapshot refreshes
+  // from re-opening a drawer the user closed.
+  const commandFocusSeen = useRef<number | null>(null);
+  useEffect(() => {
+    if (focusStepId === undefined || focusStepId === "") return;
+    const nonce = focusNonce ?? 0;
+    if (commandFocusSeen.current === nonce) return;
+    if (detail === null) return;
+    if (!detail.steps.some((step) => step.stepId === focusStepId)) return;
+    commandFocusSeen.current = nonce;
+    setSelectedStepId(focusStepId);
+    setLens("graph");
+  }, [focusStepId, focusNonce, detail]);
 
   function downloadTimeline(): void {
     if (detail === null || events.length === 0) return;
@@ -599,7 +814,7 @@ export function RunInspector({
         <div className="view-hold">
           <IconPlay />
           <strong>No run selected</strong>
-          <p>The Graph, Form, Data, and Timeline lenses appear once a run is opened.</p>
+          <p>The Graph, Form, Data, Timeline, and Logs lenses appear once a run is opened.</p>
         </div>
       </section>
     );
@@ -619,8 +834,8 @@ export function RunInspector({
           <h2>{detail !== null ? workflowLabel(detail.workflow) : "Run inspector"}</h2>
           <p className="panel-note">
             {detail !== null
-              ? `Run ${shortRunId(detail.runId)} · ${detail.ticketKey} · one live run, four lenses.`
-              : "One run, four lenses — live graph, decision form, raw data, and the ordered event timeline."}
+              ? `Run ${shortRunId(detail.runId)} · ${detail.ticketKey} · one live run, five lenses.`
+              : "One run, five lenses — live graph, decision form, raw data, the ordered event timeline, and filtered logs."}
           </p>
         </div>
       )}
@@ -669,6 +884,7 @@ export function RunInspector({
                   onToggleDebug={toggleDebug}
                   onRunsChanged={onRunsChanged ?? NOOP}
                   onActiveRun={capture}
+                  caseId={caseId}
                 />
               ) : standaloneIssue !== null && standaloneSummary !== null ? (
                 <RunPanel
@@ -700,6 +916,11 @@ export function RunInspector({
                       {detail.attempt > 0 && (
                         <span className="inspector-chip">{`Attempt ${detail.attempt + 1}`}</span>
                       )}
+                      {receiptTotal > 0 && (
+                        <span className="inspector-chip">
+                          {`${receiptTotal} receipt${receiptTotal === 1 ? "" : "s"}`}
+                        </span>
+                      )}
                       {detail.status === "queued" && (
                         <span className="inspector-chip warn">
                           <IconClock />
@@ -725,6 +946,7 @@ export function RunInspector({
                       workflow={workflowPick}
                       states={stepStates}
                       effects={effectFlags}
+                      receipts={receiptMarks}
                       activeStepId={detail.currentStepId}
                       animated={!isRunTerminal(detail.status)}
                       onStepSelect={handleGraphStepSelect}
@@ -816,7 +1038,7 @@ export function RunInspector({
                             <th scope="col">Step</th>
                             <th scope="col">State</th>
                             <th scope="col">Decision</th>
-                            <th scope="col">Receipt</th>
+                            <th scope="col">Lineage</th>
                             <th scope="col">Updated</th>
                           </tr>
                         </thead>
@@ -843,7 +1065,23 @@ export function RunInspector({
                                     <span className="payload-badge tone-info">{action}</span>
                                   )}
                                 </td>
-                                <td>{step.receipt === null ? "—" : "signed"}</td>
+                                <td>
+                                  <span className="inspector-lineage">
+                                    {stepLineage(step).map((link) => (
+                                      <span
+                                        key={link.id}
+                                        className={`lineage-chip${link.on ? " on" : ""}`}
+                                        title={
+                                          link.on
+                                            ? `${link.label} recorded`
+                                            : `${link.label} not recorded`
+                                        }
+                                      >
+                                        {link.label}
+                                      </span>
+                                    ))}
+                                  </span>
+                                </td>
                                 <td className="num">{formatTimestamp(step.updatedAt)}</td>
                               </tr>
                             );
@@ -870,6 +1108,55 @@ export function RunInspector({
                 </p>
               ) : (
                 <div className="inspector-stack">
+                  <section className="inspector-card">
+                    <header className="inspector-card-head">
+                      <h3>Case timeline</h3>
+                      <span className="inspector-note">
+                        {timelineEntries.length === 0
+                          ? "No timestamped rows yet"
+                          : `${timelineEntries.length} rows · oldest first`}
+                      </span>
+                    </header>
+                    {timelineEntries.length === 0 ? (
+                      <p className="step-empty">
+                        Case events and run milestones appear here as they carry timestamps.
+                      </p>
+                    ) : (
+                      <ol className="inspector-timeline">
+                        {timelineEntries.map((entry) => (
+                          <li key={entry.id} className="inspector-event">
+                            <div className="inspector-event-head">
+                              <span className="inspector-event-seq">
+                                {formatTimestamp(entry.at)}
+                              </span>
+                              <span
+                                className={`payload-badge tone-${TIMELINE_KIND_TONE[entry.kind]}`}
+                              >
+                                {entry.kind}
+                              </span>
+                              <span className="inspector-event-title">{entry.title}</span>
+                              {entry.href !== null && (
+                                <a
+                                  className="inspector-event-link"
+                                  href={entry.href}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  aria-label={`Open ${entry.title} in a new tab`}
+                                >
+                                  <IconExternalLink />
+                                </a>
+                              )}
+                            </div>
+                            <p className="inspector-note">{entry.detail}</p>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                    <p className="inspector-note">
+                      Jira comments, decisions, and GitHub activity merge here; Gmail and Calendar
+                      rows arrive with the connectors vault.
+                    </p>
+                  </section>
                   <div className="inspector-timeline-bar">
                     <span className="inspector-note">
                       {events.length === 0
@@ -922,6 +1209,67 @@ export function RunInspector({
                       ))}
                     </ol>
                   )}
+                  <p className="inspector-spend-line">{spendLine}</p>
+                </div>
+              ))}
+
+            {lens === "logs" &&
+              (detail === null ? (
+                <p className="ticket-notice" role="status">
+                  Loading the run log…
+                </p>
+              ) : (
+                <div className="inspector-stack">
+                  <div className="inspector-log-filters" role="group" aria-label="Log filters">
+                    {LOG_FILTERS.map((filter) => (
+                      <button
+                        key={filter.id}
+                        type="button"
+                        className={`inspector-filter-chip${logFilter === filter.id ? " active" : ""}`}
+                        aria-pressed={logFilter === filter.id}
+                        onClick={() => setLogFilter(filter.id)}
+                      >
+                        {filter.label}
+                      </button>
+                    ))}
+                    <span className="inspector-note">
+                      {`${filteredEvents.length} of ${events.length} event${events.length === 1 ? "" : "s"}`}
+                    </span>
+                    {timelineDown && (
+                      <button
+                        type="button"
+                        className="wf-secondary"
+                        onClick={() => setTimelineTick((tick) => tick + 1)}
+                      >
+                        <IconRefresh />
+                        <span>Retry stream</span>
+                      </button>
+                    )}
+                  </div>
+                  {timelineDown && (
+                    <p className="run-action-error" role="alert">
+                      The live stream dropped — the list below may be stale.
+                    </p>
+                  )}
+                  {filteredEvents.length === 0 ? (
+                    <p className="step-empty" role="status">
+                      {events.length === 0
+                        ? "Waiting for the first event…"
+                        : "No events match this filter yet."}
+                    </p>
+                  ) : (
+                    <ol className="inspector-timeline">
+                      {filteredEvents.map((event, index) => (
+                        <TimelineRow
+                          key={typeof event.sequence === "number" ? event.sequence : `log-${index}`}
+                          event={event}
+                          steps={detail.steps}
+                          onJumpStep={jumpToStep}
+                        />
+                      ))}
+                    </ol>
+                  )}
+                  <p className="inspector-spend-line">{spendLine}</p>
                 </div>
               ))}
           </div>

@@ -44,6 +44,7 @@ from .jira import (
     HttpJiraTransport,
     JiraBoardIssue,
     JiraBoardSummary,
+    description_to_adf,
 )
 from .logging import get_logger
 from .resilience import retry_sync
@@ -504,6 +505,7 @@ class McpJiraTransport:
             labels=self._labels(fields.get("labels")),
             updated=str(fields.get("updated", datetime.min.isoformat())),
             browse_url=f"{self._site_url}/browse/{key}",
+            description_adf=description_to_adf(fields.get("description")),
         )
 
     @staticmethod

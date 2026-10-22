@@ -1,6 +1,38 @@
 import type { AgentScenario } from "../../script.js";
 
 /**
+ * Few-shot scenarios for the acceptance-criteria drafter. Expected outputs are
+ * on-contract (`FeatureCriteriaOutputSchema`): a short list of independently
+ * testable criteria distilled from one ticket's free-text description.
+ */
+export const featureAcDrafterScenarios: AgentScenario[] = [
+  {
+    name: "orders status filter",
+    input: {
+      ticket: { key: "FEAT-7", text: "Add status filters to the orders search page so auditors can narrow the list. The chosen filter should persist." },
+    },
+    expectedOutput: {
+      criteria: [
+        "Given the orders search page, a user can filter orders by status.",
+        "The selected status filter survives a page reload.",
+      ],
+    },
+  },
+  {
+    name: "audit log CSV export",
+    input: {
+      ticket: { key: "FEAT-12", text: "Expose the audit log as a CSV download for auditors. Background: compliance asked for this. See ticket FEAT-9 for context." },
+    },
+    expectedOutput: {
+      criteria: [
+        "An auditor can download the audit log as a CSV file.",
+        "The CSV rows match the existing audit log fields.",
+      ],
+    },
+  },
+];
+
+/**
  * Few-shot scenarios for the feature planner. Expected outputs are
  * on-contract (`FeaturePlanOutputSchema`): target-behaviour summary +
  * confidence + the implementation areas the change spans.

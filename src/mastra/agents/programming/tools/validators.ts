@@ -1,5 +1,5 @@
-import type { PatchPlan, ValidationReport } from "../contracts.js";
-import { ValidationReportSchema } from "../contracts.js";
+import type { PatchFile, PatchPlan, ValidationReport, ValidatorResult } from "../contracts.js";
+import { ValidationReportSchema, ValidatorResultSchema } from "../contracts.js";
 
 type Validator = (content: string) => string | undefined;
 
@@ -71,7 +71,40 @@ const validators: Record<string, Validator> = {
   "basic-syntax": (content) => balanced(content, { "(": ")", "[": "]", "{": "}" }),
 };
 
+/** The patch a per-repo check runs over: its target repository and files. */
+export interface RepoCheckContext {
+  readonly repository: string;
+  readonly files: PatchFile[];
+}
+
+/**
+ * Optional per-repo real-tooling seam (type-check, lint, test). `affords`
+ * is the harnessability gate a repo declares; `run` executes the tooling and
+ * returns one result per check/file. Kept behind the seam so repos that lack
+ * the tooling cost nothing and the deterministic structure floor still runs.
+ */
+export interface RepoChecks {
+  affords(context: RepoCheckContext): boolean;
+  run(context: RepoCheckContext): Promise<ValidatorResult[]>;
+}
+
+/** Outcome of a checks pass: whether it ran, its results, or a skip reason. */
+export interface CheckOutcome {
+  readonly ran: boolean;
+  readonly results: ValidatorResult[];
+  readonly reason?: string;
+}
+
 export class ValidatorRegistry {
+  /**
+   * The always-on deterministic floor (json/yaml/xml/basic-syntax) plus an
+   * optional per-repo checks seam. `checks` runs real tooling (type-check,
+   * lint, test) only when the target repo affords it and only pre-Draft-PR
+   * (gated by cost), so structure never waits on a slow check and a check
+   * that the repo cannot run is skipped with a logged reason.
+   */
+  constructor(private readonly checks?: RepoChecks) {}
+
   validate(patch: PatchPlan, attempts = 1): ValidationReport {
     const results = patch.files.flatMap((file) =>
       file.validators.map((name) => {
@@ -92,5 +125,29 @@ export class ValidatorRegistry {
       attempts,
       results,
     });
+  }
+
+  /**
+   * Run the optional per-repo checks over the patch. Returns the raw results
+   * and whether checks actually ran; a skip carries a reason so the flow can
+   * log it and the benchmark can count `checksRun` honestly. Invalid result
+   * shapes are rejected through the shared contract.
+   */
+  async runChecks(
+    patch: PatchPlan,
+    repository: string,
+  ): Promise<CheckOutcome> {
+    if (this.checks === undefined) {
+      return { ran: false, results: [], reason: "no per-repo checks configured" };
+    }
+    const context: RepoCheckContext = { repository, files: patch.files };
+    if (!this.checks.affords(context)) {
+      return { ran: false, results: [], reason: "repository does not afford checks" };
+    }
+    const results = await this.checks.run(context);
+    return {
+      ran: true,
+      results: results.map((result) => ValidatorResultSchema.parse(result)),
+    };
   }
 }

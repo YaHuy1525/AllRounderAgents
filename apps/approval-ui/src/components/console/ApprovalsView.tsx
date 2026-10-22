@@ -2,13 +2,14 @@
 
 import { useEffect, useState, type CSSProperties } from "react";
 
+import { riskBand } from "@/lib/approvalQueue";
 import { integrationAccent, integrationLabel, workflowProviderIndex } from "@/lib/integrations";
 import type { Approval } from "@/lib/models";
 import { DECIDE_HINT } from "@/lib/roles";
 import { workflowLabel } from "@/lib/runs";
 import { listWorkflows } from "@/lib/workflows";
 
-import { IconArrowRight, IconCheck, IconCheckCircle, IconClock, IconFileText, IconLock, IconXCircle, ProviderGlyph } from "./icons";
+import { IconArrowRight, IconCheck, IconCheckCircle, IconClock, IconFileText, IconLock, IconShield, IconXCircle, ProviderGlyph } from "./icons";
 import { PayloadView } from "./PayloadView";
 
 type RunRef = { runId: string; workflow: string };
@@ -189,8 +190,19 @@ export function ApprovalsView({
                   <IconFileText />
                   {`Case ${approval.caseId}`}
                 </span>
-                <span className={`approval-status ${decisionClass(approval.decision)}`}>
-                  {decisionLabel(approval.decision)}
+                <span className="approval-head-right">
+                  {(() => {
+                    const band = riskBand(approval.risk);
+                    return band === null ? null : (
+                      <span className={band.className}>
+                        <IconShield />
+                        {band.label}
+                      </span>
+                    );
+                  })()}
+                  <span className={`approval-status ${decisionClass(approval.decision)}`}>
+                    {decisionLabel(approval.decision)}
+                  </span>
                 </span>
               </header>
               <p className="approval-scope">

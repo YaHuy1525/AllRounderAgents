@@ -12,7 +12,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/approval-ui/package.json ./apps/approval-ui/package.json
 
-RUN npm ci --workspaces=false
+# Peer deps are not auto-installed (see .npmrc), so `ci` must run with the same
+# flag. The .npmrc is not copied into the image, and a bare `npm ci` would
+# demand the dropped peer entries (nested zod, @atlaskit's react@18) and report
+# the lock out of sync. The installer is pinned to one npm major in both stages
+# so a build here matches a fresh `npm ci` on any machine of the same npm line.
+RUN npm install --global npm@11
+
+RUN npm ci --workspaces=false --legacy-peer-deps
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -30,12 +37,18 @@ WORKDIR /app
 
 # Production dependencies only (the bundle resolves @mastra/* from node_modules).
 COPY package.json package-lock.json ./
-RUN npm ci --workspaces=false --omit=dev && npm cache clean --force
+RUN npm install --global npm@11
+RUN npm ci --workspaces=false --omit=dev --legacy-peer-deps && npm cache clean --force
 
 # Layout trick (Gotcha 2): the bundle resolves `fixtures/` three levels up from
 # `.mastra/output`, so the server lives at /app/svc and fixtures at /app/fixtures.
 COPY --from=builder /app/.mastra/output ./svc/.mastra/output
 COPY fixtures ./fixtures
+
+# The observability DuckDB store opens `mastra.duckdb` in the working directory,
+# so /app/svc (created root-owned by WORKDIR and the stage-copy) must be
+# writable by the runtime user.
+RUN chown -R node:node /app/svc
 
 USER node
 

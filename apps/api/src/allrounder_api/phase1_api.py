@@ -45,6 +45,9 @@ class ApprovalCreate(ApiModel):
     approver: str = Field(min_length=1, max_length=200)
     scope: str = Field(pattern=r"^[a-z]+:[a-z]+$")
     expires_at: datetime
+    # Declared risk band on the 0-100 governance scale (policy/risk.yaml
+    # anchors 10/55/90); absent stays None and sorts last in the queue.
+    risk: int | None = Field(default=None, ge=0, le=100)
 
 
 class ApprovalDecision(ApiModel):
@@ -107,6 +110,7 @@ def build_phase1_router(
             action=request.action,
             evidence=[item.model_dump(by_alias=True) for item in request.evidence],
             approver=identity.subject, scope=request.scope, expires_at=request.expires_at,
+            risk=request.risk,
         )
         return _approval_dict(await approvals.create(approval))
 
@@ -275,4 +279,5 @@ def _approval_dict(value: ApprovalRecord) -> dict[str, object]:
         "decision": value.decision,
         "comment": value.comment,
         "decidedAt": value.decided_at.isoformat() if value.decided_at else None,
+        "risk": value.risk,
     }

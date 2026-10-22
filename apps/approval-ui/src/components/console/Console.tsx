@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { ApiError, api, apiUrl } from "@/lib/api";
+import { queueOrder } from "@/lib/approvalQueue";
 import { chooseSignInMethod, readStoredSession, signInStatusMessage, type SignInMethod } from "@/lib/auth";
 import { compactTickets, type JiraIssue } from "@/lib/board";
 import type { Approval, SessionInfo, Workspace } from "@/lib/models";
@@ -11,6 +12,7 @@ import {
   emptyUiPrefs,
   loadPrefs,
   loadUiPrefs,
+  rememberRecentCommand,
   rememberRecentTicket,
   savePrefs,
   saveUiPrefs,
@@ -18,8 +20,9 @@ import {
   type JiraPrefs,
   type UiPrefs,
 } from "@/lib/prefs";
-import { canDecide, canManageAccounts, canStartRun } from "@/lib/roles";
+import { canDecide, canManageAccounts, canStartRun, canUploadKnowledge } from "@/lib/roles";
 import { workflowLabel } from "@/lib/runs";
+import { commandTarget, type SearchHit } from "@/lib/search";
 import { isTypingTarget, resolveShortcut, type ShortcutAction } from "@/lib/shortcuts";
 import { AUTH_STORAGE_KEY, getSupabaseClient } from "@/lib/supabase";
 import {
@@ -42,12 +45,15 @@ import { AccountPanel } from "./AccountPanel";
 import { ApprovalsView } from "./ApprovalsView";
 import { AssistantPanel } from "./AssistantPanel";
 import { BoardView } from "./BoardView";
+import { CommandBar } from "./CommandBar";
 import { DocsPanel } from "./DocsPanel";
+import { KnowledgeView } from "./KnowledgeView";
 import {
   IconAccount,
   IconActivity,
   IconApprovals,
   IconBoard,
+  IconBook,
   IconChat,
   IconChevronRight,
   IconClock,
@@ -66,11 +72,20 @@ import { ObservabilityView } from "./ObservabilityView";
 import { RunInspector } from "./RunInspector";
 import { RunsView } from "./RunsView";
 import { SettingsView } from "./SettingsView";
+import { TaskInboxView } from "./TaskInboxView";
 import { TicketTab } from "./TicketTab";
 import { WorkflowCatalogView } from "./WorkflowCatalogView";
 import { WorkflowDetailView } from "./WorkflowDetailView";
 
-type PanelKind = "approvals" | "docs" | "settings" | "account" | "runs" | "observability";
+type PanelKind =
+  | "approvals"
+  | "inbox"
+  | "kb"
+  | "docs"
+  | "settings"
+  | "account"
+  | "runs"
+  | "observability";
 
 type BoardResult = {
   project: string;
@@ -154,6 +169,7 @@ export function Console() {
   const [authStatus, setAuthStatus] = useState(
     "The Jira board stays locked until you sign in.",
   );
+  const [commandOpen, setCommandOpen] = useState(false);
   const [signedInEmail, setSignedInEmail] = useState("");
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [sessionRestored, setSessionRestored] = useState(false);
@@ -259,7 +275,7 @@ export function Console() {
   const loadApprovals = useCallback(async (): Promise<void> => {
     try {
       const result = await api<Approval[]>("/approvals");
-      setApprovals(result);
+      setApprovals(queueOrder(result));
       setApprovalsFailed(false);
     } catch {
       setApprovals([]);
@@ -420,11 +436,12 @@ export function Console() {
     else if (action === "runs") openPanel("runs");
     else if (action === "workflows") openWorkflows();
     else if (action === "new-tab") addTab();
+    else if (action === "command") setCommandOpen(true);
   };
 
-  // Global shortcuts: `g` then b/r/w for navigation, `+` for a new tab.
-  // Typing targets and modified chords are ignored; j/k list movement lives
-  // inside the runs table itself.
+  // Global shortcuts: `g` then b/r/w for navigation, `+` for a new tab, `/`
+  // for the command bar. Typing targets and modified chords are ignored;
+  // j/k list movement lives inside the runs table itself.
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent): void {
       if (event.defaultPrevented) return;
@@ -456,8 +473,17 @@ export function Console() {
     );
   }
 
-  function focusTicket(ref: TicketRef): void {
-    const next = openTicketTab(tabsRef.current, ref);
+  function rememberCommand(query: string): void {
+    setUiPrefs((current) =>
+      saveUiPrefs(window.localStorage, {
+        ...current,
+        recentCommands: rememberRecentCommand(current.recentCommands, query),
+      }),
+    );
+  }
+
+  function focusTicket(ref: TicketRef, options: { focusStepId?: string | null } = {}): void {
+    const next = openTicketTab(tabsRef.current, ref, options);
     tabsRef.current = next.tabs;
     setTabs(next.tabs);
     activeTabIdRef.current = next.activeId;
@@ -543,18 +569,50 @@ export function Console() {
   }
 
   /** Platform chips and runs rows deep-link into a standalone run inspector. */
-  function openRun(run: { runId: string; workflow: string; ticketKey?: string }): void {
+  function openRun(run: {
+    runId: string;
+    workflow: string;
+    ticketKey?: string;
+    focusStepId?: string;
+  }): void {
     const label = run.workflow === "" ? "Run" : workflowLabel(run.workflow);
     const ticketKey = run.ticketKey !== undefined && run.ticketKey !== "" ? run.ticketKey : null;
     const next = openRunTab(tabsRef.current, {
       id: run.runId,
       title: ticketKey === null ? label : `${label} · ${ticketKey}`,
       ...(ticketKey === null ? {} : { ticketKey }),
+      ...(run.focusStepId === undefined ? {} : { focusStepId: run.focusStepId }),
     });
     tabsRef.current = next.tabs;
     setTabs(next.tabs);
     activeTabIdRef.current = next.activeId;
     setActiveTabId(next.activeId);
+  }
+
+  /**
+   * Command-bar activation. Deep links only: ticket hits open their tab (and
+   * focus the linked step), run hits open the run inspector, approval hits
+   * open the approvals panel. No decision endpoint is ever called from here.
+   */
+  function navigateCommandHit(hit: SearchHit): void {
+    const target = commandTarget(hit);
+    if (target === null) return;
+    if (target.kind === "approvals") {
+      openPanel("approvals");
+      return;
+    }
+    if (target.kind === "run") {
+      openRun({
+        runId: target.runId,
+        workflow: hit.workflow ?? "",
+        ticketKey: target.ticketKey ?? undefined,
+        ...(target.stepId === null ? {} : { focusStepId: target.stepId }),
+      });
+      return;
+    }
+    const summary =
+      issues.find((issue) => issue.key === target.ticketKey)?.summary ?? hit.title;
+    focusTicket({ key: target.ticketKey, summary }, { focusStepId: target.stepId });
   }
 
   function focusChat(): void {
@@ -699,6 +757,7 @@ export function Console() {
   const allowStart = canStartRun(accountInfo.roles);
   const allowDecide = canDecide(accountInfo.roles);
   const allowAccounts = canManageAccounts(accountInfo.roles);
+  const allowKnowledge = canUploadKnowledge(accountInfo.roles);
 
   return (
     <>
@@ -844,6 +903,28 @@ export function Console() {
               >
                 <IconActivity />
                 <span className="rail-label">Runs</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "inbox" ? " active" : ""}`}
+                data-view="inbox"
+                aria-label="Inbox"
+                title="Inbox"
+                onClick={() => openPanel("inbox")}
+              >
+                <IconInbox />
+                <span className="rail-label">Inbox</span>
+              </button>
+              <button
+                type="button"
+                className={`rail-button${activeTab.kind === "kb" ? " active" : ""}`}
+                data-view="knowledge"
+                aria-label="Knowledge"
+                title="Knowledge"
+                onClick={() => openPanel("kb")}
+              >
+                <IconBook />
+                <span className="rail-label">Knowledge</span>
               </button>
               <button
                 type="button"
@@ -1031,8 +1112,10 @@ export function Console() {
                   lastSync={lastSync}
                   refreshing={refreshing}
                   search={search}
+                  sort={uiPrefs.boardSort}
                   activeTicketKey={activeTicketKey}
                   onSearchChange={setSearch}
+                  onSortChange={(boardSort) => applyUiPrefs({ boardSort })}
                   onRefresh={() => void loadBoard()}
                   onOpenDetails={openTicket}
                   onOpenRun={openRun}
@@ -1045,6 +1128,9 @@ export function Console() {
                   issue={activeIssue}
                   approvals={approvals}
                   onDecide={decideSafely}
+                  onOpenSearch={() => setCommandOpen(true)}
+                  focusStepId={activeTab.focusStepId}
+                  focusNonce={activeTab.focusNonce}
                   canDecide={allowDecide}
                   canStart={allowStart}
                 />
@@ -1090,12 +1176,24 @@ export function Console() {
                   issues={issues}
                   status={status}
                   onOpenTicket={openTicket}
+                  onOpenRun={(run) => openRun(run)}
                   initialWorkflowId={activeTab.workflowId}
                   canStart={allowStart}
                 />
               )}
 
               {activeTab.kind === "runs" && <RunsView onOpenRun={openRun} />}
+
+              {activeTab.kind === "inbox" && (
+                <TaskInboxView
+                  tickets={issues}
+                  canDecide={allowDecide}
+                  onOpenRun={openRun}
+                  onOpenTicket={(ticket) => focusTicket(ticket)}
+                />
+              )}
+
+              {activeTab.kind === "kb" && <KnowledgeView canUpload={allowKnowledge} />}
 
               {activeTab.kind === "workflow" &&
                 (activeTab.workflowId ? (
@@ -1112,13 +1210,37 @@ export function Console() {
                   />
                 ))}
 
-              {activeTab.kind === "run" && <RunInspector runId={activeTab.runId} />}
+              {activeTab.kind === "run" && (
+                <RunInspector
+                  runId={activeTab.runId}
+                  focusStepId={activeTab.focusStepId}
+                  focusNonce={activeTab.focusNonce}
+                />
+              )}
 
               {activeTab.kind === "observability" && <ObservabilityView />}
             </div>
           </main>
 
-          <AssistantPanel tickets={chatTickets} selectedKey={activeTicketKey} />
+          <AssistantPanel
+            tickets={chatTickets}
+            selectedKey={activeTicketKey}
+            onOpenRun={openRun}
+            onOpenTicket={(ticketKey) => {
+              const issue = issues.find((item) => item.key === ticketKey);
+              focusTicket({ key: ticketKey, summary: issue?.summary ?? "" });
+            }}
+            onOpenInbox={() => openPanel("inbox")}
+          />
+
+          <CommandBar
+            open={commandOpen}
+            tickets={issues}
+            recent={uiPrefs.recentCommands}
+            onClose={() => setCommandOpen(false)}
+            onRemember={rememberCommand}
+            onNavigate={navigateCommandHit}
+          />
         </div>
       )}
     </>

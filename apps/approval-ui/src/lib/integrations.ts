@@ -30,6 +30,13 @@ export const INTEGRATION_PROVIDERS: readonly IntegrationProvider[] = [
   { id: "payroll", label: "Payroll", accent: "#e2a0e8" },
   { id: "xero", label: "Xero", accent: "#4ec3e0" },
   { id: "halopsa", label: "HaloPSA", accent: "#4c6ef5" },
+  // Connectable-only (N2 connectors): no seeded workflow declares these ids
+  // yet; they are render keys for the Connections panel and the satellite
+  // overlay that swaps a connected Gmail/Calendar badge onto the steps whose
+  // generic channel glyph it backs (gmail backs `email`, calendar the
+  // scheduling channel).
+  { id: "gmail", label: "Gmail", accent: "#e8837f" },
+  { id: "calendar", label: "Calendar", accent: "#7aa7f8" },
 ];
 
 const PROVIDER_BY_ID = new Map(INTEGRATION_PROVIDERS.map((item) => [item.id, item]));

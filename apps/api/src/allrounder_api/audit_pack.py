@@ -1,4 +1,4 @@
-"""Audit pack exporter v0: per client per month, JSON plus PDF.
+"""Audit pack exporter: per client per month and per case, JSON plus PDF.
 
 The pack is built only from the immutable trail: the run archive (unioned with
 the live registry, so runs that have not archived yet still appear), the case
@@ -11,6 +11,10 @@ pinned to the decision time (receipts expire one hour after issue, so
 wall-clock validation would always fail). Regeneration decisions carry no
 receipt by design: they are recorded and counted as decisions, never as
 failed receipts.
+
+The case pack (U6) is the per-ticket generalization: one case, all of its
+runs, plus the cited sources and changed files extracted from the artifacts so
+a pack for any lane carries decisions, receipts, citations, diffs, and cost.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from functools import partial
 from io import BytesIO
 from xml.sax.saxutils import escape
 
@@ -154,6 +159,129 @@ class AuditPackBuilder:
             "runs": run_payloads,
         }
 
+    async def build_case(self, *, tenant_id: str, case_id: str) -> dict[str, object]:
+        """One case, all its runs, and the evidence lifted from its artifacts.
+
+        Raises ``KeyError`` when the case does not exist for the tenant, so
+        the caller can answer 404 instead of inventing an empty pack.
+        """
+
+        if self._cases is None:
+            raise KeyError(case_id)
+        record = await self._cases.get(case_id, tenant_id)
+
+        runs_by_id: dict[str, WorkflowRun] = {}
+        for run in await self._archive.list_full(
+            tenant_id, case_id_prefix=case_id, limit=self._run_limit
+        ):
+            if run.case_id == case_id:
+                runs_by_id[run.run_id] = run
+        # The archive wins for runs recorded on both sides; the registry adds
+        # the runs that are still in flight (not yet archived).
+        for run in await self._registry.list_recent(tenant_id, limit=self._registry_limit):
+            if run.run_id in runs_by_id or run.case_id != case_id:
+                continue
+            runs_by_id[run.run_id] = run
+        runs = sorted(runs_by_id.values(), key=lambda item: (item.started_at, item.run_id))
+
+        citations: list[dict[str, object]] = []
+        changed_files: list[dict[str, object]] = []
+        seen_citations: set[tuple[str, str]] = set()
+        seen_files: set[tuple[str, str]] = set()
+
+        def collect_citation(run_id: str, step_id: str, item: Mapping[str, object]) -> None:
+            source_id = item.get("sourceId")
+            if not isinstance(source_id, str) or not source_id:
+                return
+            span = item.get("span")
+            entry: dict[str, object] = {
+                "runId": run_id,
+                "stepId": step_id,
+                "sourceId": source_id,
+                "span": span if isinstance(span, str) else "",
+            }
+            key = (step_id, f"{source_id}:{entry['span']}")
+            if key in seen_citations:
+                return
+            seen_citations.add(key)
+            citations.append(entry)
+
+        def _count(value: object) -> int:
+            return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+        def collect_file(run_id: str, step_id: str, item: Mapping[str, object]) -> None:
+            path = item.get("path")
+            if not isinstance(path, str) or not path:
+                return
+            entry: dict[str, object] = {
+                "runId": run_id,
+                "stepId": step_id,
+                "path": path,
+                "status": item.get("status") if isinstance(item.get("status"), str) else "",
+                "additions": _count(item.get("additions")),
+                "deletions": _count(item.get("deletions")),
+            }
+            area = item.get("area")
+            if isinstance(area, str) and area:
+                entry["area"] = area
+            key = (step_id, path)
+            if key in seen_files:
+                return
+            seen_files.add(key)
+            changed_files.append(entry)
+
+        decision_count = 0
+        verified_count = 0
+        failed_count = 0
+        run_payloads: list[dict[str, object]] = []
+        for run in runs:
+            payload, decisions, verified, failed = self._run_payload(run)
+            decision_count += decisions
+            verified_count += verified
+            failed_count += failed
+            for step in run.steps:
+                if step.artifact is not None:
+                    # partial binds the step identity without a late-closure
+                    # trap (and without the lambdas mypy cannot infer).
+                    _walk_artifacts(
+                        step.artifact,
+                        partial(collect_citation, run.run_id, step.step_id),
+                        partial(collect_file, run.run_id, step.step_id),
+                    )
+            run_payloads.append(payload)
+
+        case_payload = _case_payload(record)
+        return {
+            "packVersion": PACK_VERSION,
+            "packKind": "case",
+            "packKey": f"{tenant_id}:{case_id}",
+            "tenantId": tenant_id,
+            "caseId": record.id,
+            "ticketKey": record.ticket_key,
+            "domain": record.domain,
+            "status": record.status,
+            "outcome": record.outcome,
+            "generatedAt": self._clock().astimezone(UTC).isoformat(),
+            "summary": {
+                "caseCount": 1,
+                "runCount": len(runs),
+                "completedRuns": sum(1 for run in runs if run.status == "completed"),
+                "failedRuns": sum(1 for run in runs if run.status == "failed"),
+                "cancelledRuns": sum(1 for run in runs if run.status == "cancelled"),
+                "decisionCount": decision_count,
+                "receiptsVerified": verified_count,
+                "receiptsFailed": failed_count,
+                "eventCount": len(record.events),
+                "costUsdMicro": record.cost_usd_micro,
+                "citationCount": len(citations),
+                "changedFileCount": len(changed_files),
+            },
+            "cases": [case_payload],
+            "citations": citations,
+            "changedFiles": changed_files,
+            "runs": run_payloads,
+        }
+
     # ------------------------------------------------------------ internals
 
     async def _case(self, tenant_id: str, case_id: str) -> CaseRecord | None:
@@ -271,6 +399,9 @@ class AuditPackBuilder:
                 action=action_dict,
                 scope=scope,
                 run_id=run.run_id,
+                # Run receipts are always issued run-bound by ``RunService``;
+                # an audit pack must not certify a token missing that binding.
+                require_run_id=True,
                 now=decided_at,
             )
         except ReceiptError:
@@ -320,6 +451,40 @@ def _case_payload(record: CaseRecord) -> dict[str, object]:
     }
 
 
+# ------------------------------------------------------------ evidence walk
+
+
+def _walk_artifacts(
+    value: object,
+    on_citation: Callable[[Mapping[str, object]], None],
+    on_file: Callable[[Mapping[str, object]], None],
+) -> None:
+    """Recursively surface ``citations`` and ``files`` lists in an artifact.
+
+    Lane artifacts nest differently (the HR drafter carries ``citations`` of
+    ``{sourceId, span}``, the coding drafters carry ``files`` of
+    ``{path, status, additions, deletions}``), so the pack walks the JSON and
+    lifts both shapes wherever they appear — no per-lane contract.
+    """
+
+    if isinstance(value, Mapping):
+        citations = value.get("citations")
+        if isinstance(citations, list):
+            for item in citations:
+                if isinstance(item, Mapping):
+                    on_citation(item)
+        files = value.get("files")
+        if isinstance(files, list):
+            for item in files:
+                if isinstance(item, Mapping):
+                    on_file(item)
+        for item in value.values():
+            _walk_artifacts(item, on_citation, on_file)
+    elif isinstance(value, list):
+        for item in value:
+            _walk_artifacts(item, on_citation, on_file)
+
+
 # ----------------------------------------------------------------- PDF render
 
 _PDF_FOOTER = (
@@ -348,45 +513,119 @@ def render_pdf(pack: Mapping[str, object]) -> bytes:
     cell_head = ParagraphStyle("PackCellHead", parent=cell, fontName="Helvetica-Bold",)
 
     story: list[object] = []
-    story.append(Paragraph("MSP audit pack", styles["Title"]))
-    story.append(
-        Paragraph(
-            escape(
-                f"Client {_text(pack.get('clientRef'))} · month {_text(pack.get('month'))} "
-                f"· tenant {_text(pack.get('tenantId'))}"
-            ),
-            body,
+    case_kind = pack.get("packKind") == "case"
+    if case_kind:
+        story.append(Paragraph("Case audit pack", styles["Title"]))
+        story.append(
+            Paragraph(
+                escape(
+                    f"Ticket {_text(pack.get('ticketKey'))} · case {_text(pack.get('caseId'))} "
+                    f"· {_text(pack.get('status'))} · domain {_text(pack.get('domain'))} "
+                    f"· tenant {_text(pack.get('tenantId'))}"
+                ),
+                body,
+            )
         )
-    )
-    story.append(Spacer(1, 6))
-    window = _as_dict(pack.get("window"))
-    story.append(
-        _table(
-            [
-                [_cell("Generated", cell_head), _cell("Window start", cell_head),
-                 _cell("Window end", cell_head), _cell("Pack version", cell_head)],
-                [_cell(pack.get("generatedAt"), cell), _cell(window.get("since"), cell),
-                 _cell(window.get("until"), cell), _cell(pack.get("packVersion"), cell)],
-            ]
+        story.append(Spacer(1, 6))
+        story.append(
+            _table(
+                [
+                    [_cell("Generated", cell_head), _cell("Pack version", cell_head),
+                     _cell("Outcome", cell_head)],
+                    [_cell(pack.get("generatedAt"), cell), _cell(pack.get("packVersion"), cell),
+                     _cell(pack.get("outcome"), cell)],
+                ]
+            )
         )
-    )
+    else:
+        story.append(Paragraph("MSP audit pack", styles["Title"]))
+        story.append(
+            Paragraph(
+                escape(
+                    f"Client {_text(pack.get('clientRef'))} · month {_text(pack.get('month'))} "
+                    f"· tenant {_text(pack.get('tenantId'))}"
+                ),
+                body,
+            )
+        )
+        story.append(Spacer(1, 6))
+        window = _as_dict(pack.get("window"))
+        story.append(
+            _table(
+                [
+                    [_cell("Generated", cell_head), _cell("Window start", cell_head),
+                     _cell("Window end", cell_head), _cell("Pack version", cell_head)],
+                    [_cell(pack.get("generatedAt"), cell), _cell(window.get("since"), cell),
+                     _cell(window.get("until"), cell), _cell(pack.get("packVersion"), cell)],
+                ]
+            )
+        )
 
     summary = _as_dict(pack.get("summary"))
+    cost_micro = summary.get("costUsdMicro")
+    if isinstance(cost_micro, int) and not isinstance(cost_micro, bool):
+        cost_text = f"${cost_micro / 1_000_000:.4f}"
+    else:
+        cost_text = None
     story.append(Paragraph("Summary", styles["Heading2"]))
-    story.append(
-        _table(
-            [
-                [_cell("Cases", cell_head), _cell("Runs", cell_head),
-                 _cell("Decisions", cell_head), _cell("Receipts OK", cell_head),
-                 _cell("Receipts failed", cell_head), _cell("Events", cell_head)],
-                [_cell(summary.get("caseCount"), cell), _cell(summary.get("runCount"), cell),
-                 _cell(summary.get("decisionCount"), cell),
-                 _cell(summary.get("receiptsVerified"), cell),
-                 _cell(summary.get("receiptsFailed"), cell),
-                 _cell(summary.get("eventCount"), cell)],
-            ]
-        )
-    )
+    summary_head = [
+        _cell("Cases", cell_head), _cell("Runs", cell_head),
+        _cell("Decisions", cell_head), _cell("Receipts OK", cell_head),
+        _cell("Receipts failed", cell_head), _cell("Events", cell_head),
+    ]
+    summary_cells = [
+        _cell(summary.get("caseCount"), cell), _cell(summary.get("runCount"), cell),
+        _cell(summary.get("decisionCount"), cell),
+        _cell(summary.get("receiptsVerified"), cell),
+        _cell(summary.get("receiptsFailed"), cell),
+        _cell(summary.get("eventCount"), cell),
+    ]
+    if cost_text is not None:
+        summary_head.append(_cell("Cost", cell_head))
+        summary_cells.append(_cell(cost_text, cell))
+    story.append(_table([summary_head, summary_cells]))
+
+    if "citations" in pack:
+        citations = _list_of_dicts(pack.get("citations"))
+        story.append(Paragraph("Cited sources", styles["Heading2"]))
+        if not citations:
+            story.append(Paragraph("No cited sources in this case.", body))
+        else:
+            story.append(
+                _table(
+                    [
+                        [_cell("Run", cell_head), _cell("Step", cell_head),
+                         _cell("Source", cell_head), _cell("Span", cell_head)],
+                        *[
+                            [_cell(item.get("runId"), cell), _cell(item.get("stepId"), cell),
+                             _cell(item.get("sourceId"), cell), _cell(item.get("span"), cell)]
+                            for item in citations
+                        ],
+                    ]
+                )
+            )
+
+    if "changedFiles" in pack:
+        changed_files = _list_of_dicts(pack.get("changedFiles"))
+        story.append(Paragraph("Changed files", styles["Heading2"]))
+        if not changed_files:
+            story.append(Paragraph("No changed files recorded in this case.", body))
+        else:
+            story.append(
+                _table(
+                    [
+                        [_cell("Run", cell_head), _cell("Step", cell_head),
+                         _cell("Path", cell_head), _cell("Status", cell_head),
+                         _cell("Additions", cell_head), _cell("Deletions", cell_head)],
+                        *[
+                            [_cell(item.get("runId"), cell), _cell(item.get("stepId"), cell),
+                             _cell(item.get("path"), cell), _cell(item.get("status"), cell),
+                             _cell(item.get("additions"), cell), _cell(item.get("deletions"), cell)]
+                            for item in changed_files
+                        ],
+                    ]
+                )
+            )
 
     cases = _list_of_dicts(pack.get("cases"))
     story.append(Paragraph("Cases and event trail", styles["Heading2"]))

@@ -13,6 +13,7 @@ from ..repositories import ApprovalRepository, CaseRepository
 from .archive import RunArchive
 from .ceilings import (
     APPLY_SLOT,
+    MODEL_SLOT,
     RUN_SLOT,
     MemoryConcurrencyCeiling,
     RedisConcurrencyCeiling,
@@ -39,6 +40,7 @@ def build_memory_run_service(
     mastra_timeout_seconds: float = 60.0,
     max_concurrent: int = 5,
     max_concurrent_applies: int = 2,
+    max_concurrent_model_calls: int = 4,
     config: RunServiceConfig | None = None,
     clock: Callable[[], datetime] | None = None,
     locks: TargetLockStore | None = None,
@@ -49,7 +51,11 @@ def build_memory_run_service(
         workflows=workflows or WORKFLOW_DEFINITIONS,
         registry=InMemoryRunRegistry(),
         ceilings=MemoryConcurrencyCeiling(
-            {RUN_SLOT: max_concurrent, APPLY_SLOT: max_concurrent_applies}
+            {
+                RUN_SLOT: max_concurrent,
+                APPLY_SLOT: max_concurrent_applies,
+                MODEL_SLOT: max_concurrent_model_calls,
+            }
         ),
         locks=locks or MemoryTargetLockStore(),
         receipts=MemoryRunReceiptStore(),
@@ -79,6 +85,7 @@ def build_redis_run_service(
     mastra_timeout_seconds: float = 60.0,
     max_concurrent: int = 5,
     max_concurrent_applies: int = 2,
+    max_concurrent_model_calls: int = 4,
     config: RunServiceConfig | None = None,
     clock: Callable[[], datetime] | None = None,
     metrics: RunMetrics | None = None,
@@ -93,7 +100,12 @@ def build_redis_run_service(
         workflows=workflows or WORKFLOW_DEFINITIONS,
         registry=RedisRunRegistry(client, ttl_seconds=registry_ttl_seconds),
         ceilings=RedisConcurrencyCeiling(
-            client, {RUN_SLOT: max_concurrent, APPLY_SLOT: max_concurrent_applies}
+            client,
+            {
+                RUN_SLOT: max_concurrent,
+                APPLY_SLOT: max_concurrent_applies,
+                MODEL_SLOT: max_concurrent_model_calls,
+            },
         ),
         locks=RedisTargetLockStore(client),
         receipts=RedisRunReceiptStore(client, ttl_seconds=receipt_ttl_seconds),

@@ -32,6 +32,9 @@ from allrounder_api.judging import (
     aggregate_suite,
     build_chat_prompt,
     calibrate,
+    coding_deterministic_outcomes,
+    coding_output_from_artifacts,
+    coding_state,
     compare_with_baseline,
     failure_lines,
     hr_deterministic_outcomes,
@@ -290,6 +293,105 @@ def test_security_output_extraction() -> None:
     assert security_output_from_artifacts({"triage": {"classification": "x"}}) == {
         "classification": "x"
     }
+
+
+# --------------------------------------------------------- coding-lane checks
+
+
+def _coding_artifacts(*, uncovered: bool = False, orphan_evidence: bool = False) -> dict:
+    coverage = [
+        {"id": "ac-1", "text": "one", "covered": True, "evidence": "src/A.tsx"},
+        {
+            "id": "ac-2",
+            "text": "two",
+            "covered": not uncovered,
+            "evidence": None if uncovered else "src/A.tsx",
+        },
+    ]
+    if orphan_evidence:
+        coverage[1] = {"id": "ac-2", "text": "two", "covered": True, "evidence": None}
+    return {
+        "feature-selection": {
+            "acceptanceCriteria": [
+                {"id": "ac-1", "text": "one", "included": True},
+                {"id": "ac-2", "text": "two", "included": True},
+            ]
+        },
+        "implementation": {
+            "verdict": "ready",
+            "confidence": 0.8,
+            "summary": "did the thing",
+            "strengths": [],
+            "risksOpenQuestions": [],
+            "files": [
+                {
+                    "path": "src/A.tsx",
+                    "status": "modified",
+                    "area": "ui",
+                    "additions": 3,
+                    "deletions": 1,
+                    "changeDescription": "edit A",
+                    "criteriaIds": ["ac-1", "ac-2"],
+                    "diff": "+changed",
+                }
+            ],
+            "criteriaCoverage": coverage,
+            "validation": {"passed": True, "attempts": 1},
+        },
+        "complete": {"criteriaTotal": 2, "criteriaCovered": 2},
+    }
+
+
+def test_coding_output_extraction() -> None:
+    assert coding_output_from_artifacts({}) == {}
+    output = coding_output_from_artifacts(_coding_artifacts())
+    assert output["verdict"] == "ready"
+    assert len(output["files"]) == 1
+    assert len(output["acceptanceCriteria"]) == 2
+
+
+def test_coding_checks_pass_on_a_fully_covered_run() -> None:
+    output = coding_output_from_artifacts(_coding_artifacts())
+    outcomes = coding_deterministic_outcomes(output=output, tags=[])
+    assert all(item.passed for item in outcomes)
+
+
+def test_coding_checks_fail_on_an_uncovered_criterion() -> None:
+    output = coding_output_from_artifacts(_coding_artifacts(uncovered=True))
+    by_id = {
+        item.criterion_id: item for item in coding_deterministic_outcomes(output=output, tags=[])
+    }
+    assert by_id["all_criteria_covered"].passed is False
+    assert "ac-2" in by_id["all_criteria_covered"].detail
+
+
+def test_coding_checks_fail_on_covered_criterion_without_evidence() -> None:
+    output = coding_output_from_artifacts(_coding_artifacts(orphan_evidence=True))
+    by_id = {
+        item.criterion_id: item
+        for item in coding_deterministic_outcomes(output=output, tags=[])
+    }
+    assert by_id["coverage_evidence_resolves"].passed is False
+    assert "ac-2" in by_id["coverage_evidence_resolves"].detail
+
+
+def test_coding_state_carries_self_report_diff_and_criteria() -> None:
+    output = coding_output_from_artifacts(_coding_artifacts())
+    state = coding_state(
+        ticket={"ticketKey": "SCRUM-9", "ticketSummary": "do the thing"}, output=output
+    )
+    assert state["ticket"]["ticketKey"] == "SCRUM-9"
+    assert state["selfReport"]["verdict"] == "ready"
+    assert state["files"][0]["diffExcerpt"] == "+changed"
+    assert {row["id"] for row in state["criteria"]} == {"ac-1", "ac-2"}
+
+
+def test_coding_state_truncates_a_long_diff() -> None:
+    artifacts = _coding_artifacts()
+    artifacts["implementation"]["files"][0]["diff"] = "x" * 2000
+    state = coding_state(ticket={}, output=coding_output_from_artifacts(artifacts))
+    assert state["files"][0]["diffExcerpt"].endswith("...[truncated]")
+    assert len(state["files"][0]["diffExcerpt"]) < 2000
 
 
 # --------------------------------------------------------------- coercion

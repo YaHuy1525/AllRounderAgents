@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en" style="color-scheme: dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Coding Flow Walkthrough</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: { colors: {
+      wt: {
+        bg: '#000000', surface: '#0a0a0a', raised: '#141414',
+        border: '#2a2a2a', fg: '#ffffff', muted: '#a0a0a0',
+        accent: '#a855f7', file: '#c084fc', red: '#ef4444',
+      },
+      node: {
+        component: '#a855f7', composable: '#7c3aed', utility: '#6d28d9',
+        external: '#525252', event: '#d8b4fe', data: '#9333ea',
+      },
+    }}},
+  };
+</script>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  .mermaid-wrap svg { max-width: none !important; height: auto !important; }
+  .mermaid-wrap .node { cursor: pointer; }
+  .mermaid-wrap .node:hover rect,
+  .mermaid-wrap .node:hover polygon,
+  .mermaid-wrap .node:hover circle,
+  .mermaid-wrap .node:hover .label-container { filter: brightness(1.3); transition: filter .15s; }
+  .dt-body p { color:#a0a0a0; font-size:.88rem; line-height:1.65; margin-bottom:10px; }
+  .dt-body p code {
+    background:rgba(168,85,247,.12); padding:1px 6px; border-radius:4px;
+    font-family:'SF Mono','Fira Code',monospace; font-size:.82rem; color:#c084fc;
+  }
+  .dt-body .shiki, .dt-body pre.code-fallback {
+    background: #000000; border: 1px solid #2a2a2a; border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; margin: 8px 0 14px;
+  }
+  .dt-body .shiki { background: #000000 !important; }
+  .dt-body .shiki code, .dt-body pre.code-fallback code {
+    font-family: 'SF Mono','Fira Code',monospace; font-size: .78rem; line-height: 1.55;
+    background: none; padding: 0; border-radius: 0;
+  }
+  .dt-body .shiki code { color: inherit; }
+  .dt-body pre.code-fallback code { color: #e0e0e0; }
+</style>
+</head>
+<body class="bg-wt-bg text-wt-fg antialiased">
+<div id="root"></div>
+<script type="module">
+import { createHighlighter } from 'https://cdn.jsdelivr.net/npm/shiki@3.22.0/+esm';
+
+const { useState, useEffect, useRef, useCallback } = React;
+const h = React.createElement;
+
+const SUMMARY =
+  "codingFlow turns one Jira coding ticket into either a Draft PR or a policy escalation, through nine named steps that share a single run-state object. Each step either advances the work or marks the run closed, and the last step archives the full evidence trail (diagnosis, patch, validators, critic verdict, cost) for the benchmark. The human approval gate before any GitHub write is the safety centrepiece.";
+
+const DIAGRAM = `
+graph TD
+  subgraph run_setup["Run Setup"]
+    loadContext["Load Run Context"]
+  end
+  subgraph understand["Understand the Problem"]
+    investigate["Investigate Root Cause"]
+    evidenceGate["Evidence and Confidence Gate"]
+  end
+  subgraph make_change["Make the Change"]
+    planPatch["Plan Surgical Patch"]
+    approvalGate["Human Approval Gate"]
+    freshnessCheck["Fresh Source Check"]
+  end
+  subgraph check_work["Check the Work"]
+    validationRepair["Validate and Self-Repair"]
+    specCritic["Spec Critic"]
+  end
+  subgraph deliver["Deliver and Archive"]
+    draftPr["Open Draft PR"]
+    evidenceClose["Evidence Close"]
+  end
+
+  loadContext -->|"starts the run"| investigate
+  investigate -->|"produces a diagnosis"| evidenceGate
+  evidenceGate -->|"clears the confidence floor"| planPatch
+  evidenceGate -.->|"escalates"| evidenceClose
+  planPatch -->|"proposes files"| approvalGate
+  approvalGate ==>|"approved, resumes"| freshnessCheck
+  approvalGate -.->|"rejected or expired"| evidenceClose
+  freshnessCheck -->|"base branch unchanged"| validationRepair
+  freshnessCheck -.->|"stale source"| evidenceClose
+  validationRepair -->|"structure passes"| specCritic
+  validationRepair -.->|"repair fails or doom loop"| evidenceClose
+  specCritic -->|"on spec"| draftPr
+  specCritic -.->|"blocked"| evidenceClose
+  draftPr ==>|"receipt and CI status"| evidenceClose
+
+  classDef component fill:#a855f7,stroke:#c084fc,color:#fff
+  classDef composable fill:#7c3aed,stroke:#a78bfa,color:#fff
+  classDef utility fill:#6d28d9,stroke:#8b5cf6,color:#fff
+  classDef external fill:#525252,stroke:#737373,color:#fff
+  classDef event fill:#d8b4fe,stroke:#e9d5ff,color:#000
+  classDef data fill:#9333ea,stroke:#a855f7,color:#fff
+
+  class loadContext event
+  class investigate,planPatch,specCritic composable
+  class evidenceGate,approvalGate,freshnessCheck,validationRepair component
+  class draftPr external
+  class evidenceClose data
+
+  click loadContext nodeClickHandler "View details"
+  click investigate nodeClickHandler "View details"
+  click evidenceGate nodeClickHandler "View details"
+  click planPatch nodeClickHandler "View details"
+  click approvalGate nodeClickHandler "View details"
+  click freshnessCheck nodeClickHandler "View details"
+  click validationRepair nodeClickHandler "View details"
+  click specCritic nodeClickHandler "View details"
+  click draftPr nodeClickHandler "View details"
+  click evidenceClose nodeClickHandler "View details"
+`;
+
+const NODES = {
+  loadContext: {
+    title: "Load Run Context",
+    description:
+      "Validates the incoming ticket payload against the coding contract and seeds the run-state object every later step reads and extends. A 4,000-character problem statement (now fed by the full ticket description) is the spec for the whole run.",
+    files: ["src/mastra/agents/programming/flow.ts:408-416"],
+    code: `execute: async ({ inputData }) => ({
+  input: CodingWorkflowInputSchema.parse(inputData),
+  validation: EMPTY_VALIDATION,
+}),`,
+    lang: "typescript",
+  },
+  investigate: {
+    title: "Investigate Root Cause",
+    description:
+      "The investigator agent reads the real repository through GitHub file-read, directory-listing, and code-search tools, then returns a root-cause analysis with cited file-and-line evidence. A model failure here does not throw; it degrades to a zero-confidence escalation.",
+    files: [
+      "src/mastra/agents/programming/flow.ts:418-441",
+      "src/mastra/agents/programming/flow.ts:200-224",
+    ],
+    code: `const prompt = [
+  environmentBrief(context, undefined),
+  "Investigate this coding ticket from a Jira bug report.",
+  "Problem:",
+  context.input.problem,`,
+    lang: "typescript",
+  },
+  evidenceGate: {
+    title: "Evidence and Confidence Gate",
+    description:
+      "A deterministic policy step, not an LLM judgement: the diagnosis must cite real evidence and clear the confidence floor (default 0.8), and must claim the issue is fixable. Anything weaker closes the run as an escalation before a patch is ever attempted.",
+    files: ["src/mastra/agents/programming/flow.ts:443-467"],
+    code: `if (rca.evidence.length === 0 || rca.confidence < confidenceFloor) {
+  return escalate(
+    state,
+    "insufficient_evidence",
+    "RCA evidence or confidence is below policy",
+  );
+}`,
+    lang: "typescript",
+  },
+  planPatch: {
+    title: "Plan Surgical Patch",
+    description:
+      "The actor agent drafts the smallest change that fixes the cited cause, but only files named in the evidence may be touched, and each file declares which deterministic validators should score it. Current source content is injected so the model patches what it can see, not what it remembers.",
+    files: [
+      "src/mastra/agents/programming/flow.ts:469-489",
+      "src/mastra/agents/programming/flow.ts:226-269",
+    ],
+    code: `const patch = PatchPlanSchema.parse(
+  await model.planPatch(context, requireRca(state)),
+);
+return { ...state, patch };`,
+    lang: "typescript",
+  },
+  approvalGate: {
+    title: "Human Approval Gate",
+    description:
+      "Preflight checks repository policy against the writer. Patches touching destructive paths suspend the run with a tamper-evident payload (SHA-256 per file, action hash, byte counts) and only resume on an approved decision carrying a receipt. Nothing is written to GitHub without that human signature.",
+    files: ["src/mastra/agents/programming/flow.ts:491-563"],
+    code: `return await suspend({
+  runId: input.runId,
+  ticketKey: input.ticketKey,
+  actionHash: computePatchHash(patch.files),
+  destructivePaths: deniedDestructivePaths(state),
+});`,
+    lang: "typescript",
+  },
+  freshnessCheck: {
+    title: "Fresh Source Check",
+    description:
+      "Compares the live base-branch SHA with the snapshot the investigation was done against. If the repository moved during the run (or during a long approval wait), the patch is stale by construction and the run escalates instead of writing blind.",
+    files: ["src/mastra/agents/programming/flow.ts:565-578"],
+    code: `const actual = await reader.sourceSha(state.input.owner, state.input.repo, state.input.baseBranch);
+if (actual !== state.input.sourceSha) {
+  return escalate(state, "stale_source", "Base branch changed after investigation");
+}`,
+    lang: "typescript",
+  },
+  validationRepair: {
+    title: "Validate and Self-Repair",
+    description:
+      "Deterministic validators (json, yaml, xml, basic-syntax) score the patch, with exactly one machine repair attempt allowed. A repair that hashes identical to the failed patch is caught as a doom loop and stopped before spending more budget. Optional per-repo real-tooling checks run after the structure floor passes.",
+    files: [
+      "src/mastra/agents/programming/flow.ts:580-761",
+      "src/mastra/agents/programming/flow.ts:271-297",
+    ],
+    code: `if (computePatchHash(repaired.files) === failedHash) {
+  harness.doomLoopStops = true;
+  return escalate(
+    state,
+    "doom_loop",
+    "The repair reproduced an identical failed patch; stopping before a second attempt",
+    { validation: report, harness },
+  );
+}`,
+    lang: "typescript",
+  },
+  specCritic: {
+    title: "Spec Critic",
+    description:
+      "The validator agent judges the patch against the ticket acceptance criteria and cited locations, never against the actor's own summary of its work. A block buys one targeted regeneration with the critique attached (while the repair budget is unspent), then escalates. Every verdict and counter lands in the harness signals.",
+    files: [
+      "src/mastra/agents/programming/flow.ts:697-751",
+      "src/mastra/agents/programming/flow.ts:299-332",
+    ],
+    code: `let verdict = CriticReportSchema.parse(
+  await model.verify(context, patch, requireRca(state)),
+);
+// blocked: one targeted regeneration, then escalate as critic_blocked`,
+    lang: "typescript",
+  },
+  draftPr: {
+    title: "Open Draft PR",
+    description:
+      "The writer applies the approved, validated patch to its own branch and opens a Draft PR whose body carries the ticket, diagnosis, manifest, and validation report. GitHub CI status is recorded, and a pending or failing pipeline still leaves the PR for human review rather than silently retrying.",
+    files: ["src/mastra/agents/programming/flow.ts:763-816"],
+    code: `pr = await writer.apply(
+  manifest,
+  patch.files,
+  \`[\${state.input.ticketKey}] \${patch.summary}\`,
+  codingPullRequestBody(state.input, rca, manifest, state.validation),
+);`,
+    lang: "typescript",
+  },
+  evidenceClose: {
+    title: "Evidence Close",
+    description:
+      "The only terminal step. Every earlier escalation simply marked the run closed and let later steps pass the state through untouched. Here the per-run token cost is consumed from the shared usage ledger and the full record (RCA, patch, validators, critic, PR, harness counters, cost) is archived for the console and the benchmark.",
+    files: [
+      "src/mastra/agents/programming/flow.ts:818-854",
+      "src/mastra/agents/programming/flow.ts:195-198",
+    ],
+    code: `const costUsdMicro = model.consumeUsage?.(state.input.runId) ?? 0;
+await store.save(record);
+// status: escalated | draft_pr_opened | awaiting_ci`,
+    lang: "typescript",
+  },
+};
+
+const LEGEND = [
+  { label: "Trigger", color: "bg-node-event" },
+  { label: "Agent step", color: "bg-node-composable" },
+  { label: "Deterministic gate", color: "bg-node-component" },
+  { label: "GitHub write", color: "bg-node-external" },
+  { label: "Archive", color: "bg-node-data" },
+];
+
+const langs = [...new Set(Object.values(NODES).map((n) => n.lang).filter(Boolean))];
+let highlighter = null;
+try {
+  highlighter = await createHighlighter({ themes: ["vitesse-dark"], langs });
+} catch (e) {
+  console.warn("Shiki failed:", e);
+}
+const HIGHLIGHTED = {};
+for (const [id, node] of Object.entries(NODES)) {
+  if (node.code && highlighter) {
+    try {
+      HIGHLIGHTED[id] = highlighter.codeToHtml(node.code, {
+        lang: node.lang || "typescript",
+        theme: "vitesse-dark",
+      });
+    } catch (e) {
+      console.warn(`Highlight failed for ${id}:`, e);
+    }
+  }
+}
+
+function usePanZoom() {
+  const viewportRef = useRef(null), canvasRef = useRef(null), zoomDisplayRef = useRef(null);
+  const st = useRef({ zoom: 1, panX: 0, panY: 0 });
+  const drag = useRef({ on: false, lx: 0, ly: 0 });
+
+  const apply = useCallback(() => {
+    const { zoom, panX, panY } = st.current;
+    if (canvasRef.current)
+      canvasRef.current.style.transform = `translate(${panX}px,${panY}px) scale(${zoom})`;
+    if (zoomDisplayRef.current)
+      zoomDisplayRef.current.textContent = Math.round(zoom * 100) + "%";
+  }, []);
+
+  const fitToScreen = useCallback(() => {
+    const svg = canvasRef.current && canvasRef.current.querySelector("svg");
+    const vp = viewportRef.current;
+    if (!svg || !vp) return;
+    const s = st.current;
+    const vw = vp.clientWidth, vh = vp.clientHeight;
+    const sw = svg.getBoundingClientRect().width / s.zoom;
+    const sh = svg.getBoundingClientRect().height / s.zoom;
+    const fit = Math.max(0.15, Math.min(2, Math.min((vw - 80) / sw, (vh - 80) / sh)));
+    s.zoom = fit; s.panX = (vw - sw * fit) / 2; s.panY = (vh - sh * fit) / 2;
+    apply();
+  }, [apply]);
+
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      const r = vp.getBoundingClientRect();
+      const mx = e.clientX - r.left, my = e.clientY - r.top, s = st.current;
+      const f = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      const nz = Math.min(4, Math.max(0.15, s.zoom * f)), sc = nz / s.zoom;
+      s.panX = mx - sc * (mx - s.panX); s.panY = my - sc * (my - s.panY); s.zoom = nz;
+      apply();
+    };
+    const onDown = (e) => {
+      if (e.target.closest(".node")) return;
+      drag.current = { on: true, lx: e.clientX, ly: e.clientY };
+      vp.setPointerCapture(e.pointerId);
+    };
+    const onMove = (e) => {
+      const d = drag.current; if (!d.on) return;
+      st.current.panX += e.clientX - d.lx; st.current.panY += e.clientY - d.ly;
+      d.lx = e.clientX; d.ly = e.clientY; apply();
+    };
+    const onUp = () => { drag.current.on = false; };
+    vp.addEventListener("wheel", onWheel, { passive: false });
+    vp.addEventListener("pointerdown", onDown);
+    vp.addEventListener("pointermove", onMove);
+    vp.addEventListener("pointerup", onUp);
+    vp.addEventListener("pointercancel", onUp);
+    window.addEventListener("resize", fitToScreen);
+    return () => {
+      vp.removeEventListener("wheel", onWheel);
+      vp.removeEventListener("pointerdown", onDown);
+      vp.removeEventListener("pointermove", onMove);
+      vp.removeEventListener("pointerup", onUp);
+      vp.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("resize", fitToScreen);
+    };
+  }, [apply, fitToScreen]);
+
+  const zoomIn = useCallback(() => { st.current.zoom = Math.min(4, st.current.zoom * 1.25); apply(); }, [apply]);
+  const zoomOut = useCallback(() => { st.current.zoom = Math.max(0.15, st.current.zoom / 1.25); apply(); }, [apply]);
+  return { viewportRef, canvasRef, zoomDisplayRef, zoomIn, zoomOut, fitToScreen };
+}
+
+function MermaidDiagram({ onNodeClick }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    window.nodeClickHandler = onNodeClick;
+    mermaid.initialize({
+      startOnLoad: false, theme: "dark", securityLevel: "loose",
+      themeVariables: {
+        primaryColor: "#0a0a0a", primaryTextColor: "#ffffff", primaryBorderColor: "#2a2a2a",
+        lineColor: "#a0a0a0", background: "#000000",
+        secondaryColor: "#000000", tertiaryColor: "#000000",
+        mainBkg: "#0a0a0a", nodeBorder: "#2a2a2a",
+        clusterBkg: "rgba(10,10,10,0.8)", clusterBorder: "#7c3aed",
+        titleColor: "#ffffff", edgeLabelBackground: "transparent",
+      },
+      flowchart: { useMaxWidth: false, htmlLabels: true, curve: "basis" },
+    });
+    mermaid.render("walkthrough-diagram", DIAGRAM).then(({ svg, bindFunctions }) => {
+      if (ref.current) { ref.current.innerHTML = svg; bindFunctions && bindFunctions(ref.current); }
+    });
+    return () => { delete window.nodeClickHandler; };
+  }, [onNodeClick]);
+  return h("div", { ref, className: "mermaid-wrap" });
+}
+
+function Summary({ collapsed, onToggle }) {
+  if (collapsed) {
+    return h("div",
+      { onClick: onToggle,
+        className: "fixed top-16 left-6 z-10 px-3 py-1.5 bg-wt-surface/60 backdrop-blur border border-wt-border rounded-full shadow-lg cursor-pointer hover:bg-wt-surface/80 transition-all duration-300" },
+      h("span", { className: "text-xs text-wt-muted font-medium" }, "ℹ︎ Summary"));
+  }
+  return h("div",
+    { onClick: onToggle,
+      className: "fixed top-16 left-6 z-10 max-w-lg px-4 py-3 bg-wt-surface/80 backdrop-blur border border-wt-border rounded-lg shadow-lg cursor-pointer transition-all duration-300" },
+    h("p", { className: "text-sm text-wt-muted leading-relaxed" }, SUMMARY),
+    h("p", { className: "text-[0.65rem] text-wt-muted/50 mt-1.5" }, "Click to dismiss"));
+}
+
+function DetailPanel({ nodeId, node, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const codeHtml = HIGHLIGHTED[nodeId];
+  return h("div", { className: "fixed top-4 right-4 bottom-4 w-[560px] z-30 bg-wt-surface border border-wt-border rounded-xl shadow-2xl flex flex-col overflow-hidden" },
+    h("button", {
+      onClick: onClose,
+      className: "absolute top-3 right-3 z-10 w-7 h-7 rounded-md border border-wt-border bg-wt-raised text-wt-muted flex items-center justify-center text-lg hover:bg-wt-red hover:border-wt-red hover:text-white transition-colors" }, "×"),
+    h("div", { className: "flex-1 overflow-y-auto p-5" },
+      h("h2", { className: "text-lg font-bold text-wt-fg mb-3 pr-9" }, node.title),
+      h("div", { className: "dt-body" }, h("p", null, node.description)),
+      node.code && h("div", { className: "dt-body" },
+        codeHtml
+          ? h("div", { dangerouslySetInnerHTML: { __html: codeHtml } })
+          : h("pre", { className: "code-fallback" }, h("code", null, node.code))),
+      node.files && node.files.length > 0 && h("div", { className: "mt-4 pt-3 border-t border-wt-border" },
+        h("div", { className: "text-[0.7rem] uppercase tracking-wider text-wt-muted font-semibold mb-1.5" }, "Files"),
+        h("code", { className: "text-sm text-wt-file font-mono leading-relaxed" },
+          node.files.map((f, i) => h("span", { key: i }, f, h("br")))))));
+}
+
+function ZoomControls({ zoomDisplayRef, onZoomIn, onZoomOut, onFit }) {
+  const btn = "w-8 h-8 rounded-md border border-wt-border bg-wt-surface text-wt-muted flex items-center justify-center hover:bg-wt-raised hover:text-wt-fg transition-colors text-sm";
+  return h("div", { className: "fixed bottom-5 left-5 z-20 flex flex-col gap-2" },
+    h("button", { className: btn, onClick: onZoomIn, title: "Zoom in" }, "+"),
+    h("button", { className: btn, onClick: onZoomOut, title: "Zoom out" }, "−"),
+    h("button", { className: btn, onClick: onFit, title: "Fit to screen" }, "⤢"),
+    h("div", { ref: zoomDisplayRef, className: "text-[0.65rem] text-wt-muted text-center mt-1" }, "100%"));
+}
+
+function App() {
+  const [activeId, setActiveIdRaw] = useState(null);
+  const [summaryCollapsed, setSummaryCollapsed] = useState(true);
+  const pz = usePanZoom();
+
+  const setActiveNode = useCallback((nodeId) => {
+    setActiveIdRaw(nodeId);
+    document.querySelectorAll(".mermaid-wrap .node").forEach((n) => { n.style.opacity = nodeId ? "0.4" : "1"; });
+    if (nodeId) {
+      const el = document.querySelector(`.mermaid-wrap .node[id*="${nodeId}"]`);
+      if (el) el.style.opacity = "1";
+    }
+  }, []);
+  const closeDetail = useCallback(() => {
+    setActiveIdRaw(null);
+    document.querySelectorAll(".mermaid-wrap .node").forEach((n) => { n.style.opacity = "1"; });
+  }, []);
+  useEffect(() => { setTimeout(pz.fitToScreen, 600); }, [pz.fitToScreen]);
+
+  return h(React.Fragment, null,
+    h("header", { className: "fixed top-0 inset-x-0 z-10 px-6 py-3.5 bg-gradient-to-b from-wt-bg to-transparent pointer-events-none" },
+      h("h1", { className: "text-base font-semibold text-wt-fg" }, "Coding Flow: one ticket, nine steps, one receipt"),
+      h("p", { className: "text-sm text-wt-muted mt-0.5" }, "src/mastra/agents/programming/flow.ts · createCodingFlow")),
+    h(Summary, { collapsed: summaryCollapsed, onToggle: () => setSummaryCollapsed((c) => !c) }),
+    h("div", { ref: pz.viewportRef, className: "w-full h-screen overflow-hidden cursor-grab active:cursor-grabbing" },
+      h("div", { ref: pz.canvasRef, className: "origin-top-left will-change-transform inline-block p-[80px_60px_60px]" },
+        h(MermaidDiagram, { onNodeClick: setActiveNode }))),
+    h(ZoomControls, { zoomDisplayRef: pz.zoomDisplayRef, onZoomIn: pz.zoomIn, onZoomOut: pz.zoomOut, onFit: pz.fitToScreen }),
+    h("div", { className: "fixed bottom-5 left-1/2 -translate-x-1/2 z-20 flex gap-4 px-4 py-2 bg-wt-surface border border-wt-border rounded-lg shadow-xl" },
+      LEGEND.map((l) => h("span", { key: l.label, className: "flex items-center gap-1.5 text-xs text-wt-muted" },
+        h("span", { className: `w-2 h-2 rounded-full ${l.color}` }), l.label))),
+    activeId && NODES[activeId] && h(DetailPanel, { nodeId: activeId, node: NODES[activeId], onClose: closeDetail }),
+    h("div", { className: "fixed bottom-5 right-5 z-20 text-xs text-wt-muted opacity-50" },
+      h("kbd", null, "Scroll"), " zoom · ", h("kbd", null, "Drag"), " pan · Click nodes for details"));
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+</script>
+</body>
+</html>

@@ -6,6 +6,7 @@ from allrounder_api.auth import FakeBearerVerifier, Principal
 from allrounder_api.metrics import MetricsRegistry
 from allrounder_api.repositories import InMemoryApprovalRepository
 from allrounder_api.runs import (
+    MemoryRunArchive,
     RunServiceConfig,
     ScriptedMastraRunClient,
     build_memory_run_service,
@@ -258,3 +259,86 @@ def test_metrics_summary_reports_live_queue_depth_per_tenant() -> None:
         "/metrics/summary", headers={"Authorization": "Bearer outsider"}
     ).json()
     assert other["queue"]["active"] == 0
+
+
+# --------------------------------------------------------- benchmark route
+
+REVIEW_STEPS = ("select-pr", "review-options", "ai-review", "complete")
+
+
+def test_metrics_benchmark_requires_a_verified_viewer() -> None:
+    # Auth guard parity with /metrics/summary: no/invalid token 401, a valid
+    # viewer 200 with the empty-benchmark shape.
+    client = metrics_client()
+    assert client.get("/metrics/benchmark").status_code == 401
+    assert (
+        client.get("/metrics/benchmark", headers={"Authorization": "Bearer missing"}).status_code
+        == 401
+    )
+    response = client.get("/metrics/benchmark", headers={"Authorization": "Bearer viewer"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lanes"] == []
+    assert payload["totals"]["terminalRuns"] == 0
+    assert payload["totals"]["passRate"] is None
+
+
+def test_metrics_benchmark_rejects_principals_without_a_view_role() -> None:
+    verifier = FakeBearerVerifier({"nobody": Principal("user-9", "tenant-z", frozenset())})
+    client = TestClient(
+        create_app(
+            settings=Settings(webhook_secret="test"),
+            auth_verifier=verifier,
+            metrics=MetricsRegistry(),
+        )
+    )
+    response = client.get("/metrics/benchmark", headers={"Authorization": "Bearer nobody"})
+    assert response.status_code == 403
+
+
+def test_metrics_benchmark_reports_archived_coding_lanes() -> None:
+    archive = MemoryRunArchive()
+    service = build_memory_run_service(
+        signer=ApprovalReceiptSigner(b"benchmark-route-secret-for-tests-001"),
+        approvals=InMemoryApprovalRepository(),
+        mastra=ScriptedMastraRunClient({"reviewFlow": REVIEW_STEPS}),
+        archive=archive,  # type: ignore[arg-type]
+        config=RunServiceConfig(),
+    )
+    principal = Principal("user-1", "tenant-a", frozenset({"agent", "viewer"}))
+    client = TestClient(
+        create_app(
+            settings=Settings(webhook_secret="test"),
+            auth_verifier=FakeBearerVerifier({"tok": principal}),
+            metrics=MetricsRegistry(),
+            runs_service=service,
+        )
+    )
+    headers = {"Authorization": "Bearer tok"}
+    created = client.post(
+        "/runs",
+        json={"workflow": "review", "ticketKey": "ABC-1", "caseId": "case-1", "input": {}},
+        headers=headers,
+    )
+    assert created.status_code == 201
+    run_id = created.json()["runId"]
+    for step_id in REVIEW_STEPS:
+        assert (
+            client.post(
+                f"/runs/{run_id}/steps/{step_id}/decision",
+                json={"action": "proceed"},
+                headers=headers,
+            ).status_code
+            == 200
+        )
+
+    payload = client.get("/metrics/benchmark", headers=headers).json()
+    assert [lane["workflow"] for lane in payload["lanes"]] == ["review"]
+    review = payload["lanes"][0]
+    assert review["terminalRuns"] == 1
+    assert review["passes"] == 1
+    assert review["passRate"] == 1.0
+    # Every proceeded gate is an approval, so each step's rate is 1.0.
+    assert {row["stepId"] for row in review["steps"]} == set(REVIEW_STEPS)
+    assert all(row["approvalRate"] == 1.0 for row in review["steps"])
+    assert payload["totals"]["terminalRuns"] == 1

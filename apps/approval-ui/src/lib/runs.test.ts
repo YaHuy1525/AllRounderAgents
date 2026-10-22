@@ -15,11 +15,13 @@ import {
   normalizeClientRef,
   packMonth,
   parseRunSnapshot,
+  parseRunTopology,
   parseSseChunk,
   runDurationSeconds,
   runListQuery,
   runVisualState,
   sortRunsNewestFirst,
+  syntheticTaskKey,
   workflowLabel,
   workflowsForTicket,
   type RunDetail,
@@ -27,6 +29,8 @@ import {
   type RunStep,
   type RunStepState,
   type RunSummary,
+  type RunTopology,
+  type RunTopologyStep,
 } from "./runs.js";
 
 const STEP_IDS = ["select-pr", "review-options", "ai-review", "complete"];
@@ -54,6 +58,8 @@ function makeRun(overrides: Partial<RunDetail> = {}): RunDetail {
     ticketKey: "ENG-101",
     status: "running",
     queuePosition: null,
+    waitingOn: null,
+    heldSlots: [],
     currentStepId: "select-pr",
     stepCount: 4,
     stepsDone: 0,
@@ -76,6 +82,48 @@ function makeEvent(overrides: Partial<RunEvent> & { type: string }): RunEvent {
   return { runId: "run-1", sequence: 1, ...overrides };
 }
 
+function makeTopologyStep(
+  stepId: string,
+  overrides: Partial<RunTopologyStep> = {},
+): RunTopologyStep {
+  return {
+    stepId,
+    index: STEP_IDS.indexOf(stepId),
+    title: stepId,
+    state: "pending",
+    sideEffecting: stepId === "complete",
+    integrations: stepId === "complete" ? ["github"] : [],
+    fields: [],
+    receipt: null,
+    actionHash: null,
+    hasArtifact: false,
+    hasDecision: false,
+    regenerations: 0,
+    updatedAt: "2026-09-12T10:00:00Z",
+    ...overrides,
+  };
+}
+
+function makeTopology(overrides: Partial<RunTopology> = {}): RunTopology {
+  return {
+    runId: "run-1",
+    workflow: "review",
+    status: "awaiting_human",
+    attempt: 0,
+    currentStepId: "select-pr",
+    stepCount: 4,
+    stepsDone: 0,
+    startedAt: "2026-09-12T10:00:00Z",
+    finishedAt: null,
+    lock: null,
+    receipts: { signed: 0, items: [] },
+    steps: STEP_IDS.map((id) =>
+      makeTopologyStep(id, id === "select-pr" ? { state: "awaiting_human" } : {}),
+    ),
+    ...overrides,
+  };
+}
+
 function makeSummary(runId: string, startedAt: string): RunSummary {
   return {
     runId,
@@ -83,6 +131,8 @@ function makeSummary(runId: string, startedAt: string): RunSummary {
     ticketKey: "ENG-101",
     status: "completed",
     queuePosition: null,
+    waitingOn: null,
+    heldSlots: [],
     currentStepId: null,
     stepCount: 4,
     stepsDone: 4,
@@ -164,6 +214,51 @@ describe("applyRunEvent", () => {
     const next = applyRunEvent(makeRun(), makeEvent({ type: "run.queued", queuePosition: 2 }));
     expect(next.status).toBe("queued");
     expect(next.queuePosition).toBe(2);
+  });
+
+  it("keeps the ceiling kind a queued event names", () => {
+    const next = applyRunEvent(
+      makeRun(),
+      makeEvent({ type: "run.queued", queuePosition: 2, waitingOn: "model" }),
+    );
+    expect(next.status).toBe("queued");
+    expect(next.waitingOn).toBe("model");
+  });
+
+  it("keeps the previous ceiling kind when the event omits the key", () => {
+    // A pre-fix producer sends the position only: the kind the run already
+    // reported stays rather than degrading to a guess.
+    const queued = makeRun({ status: "queued", queuePosition: 1, waitingOn: "apply", heldSlots: ["run"] });
+    const next = applyRunEvent(queued, makeEvent({ type: "run.queued", queuePosition: 2 }));
+    expect(next.queuePosition).toBe(2);
+    expect(next.waitingOn).toBe("apply");
+    expect(next.heldSlots).toEqual(["run"]);
+  });
+
+  it("clears the queue state on a terminal status and on a step suspend", () => {
+    const held = makeRun({
+      status: "queued",
+      queuePosition: 1,
+      waitingOn: "model",
+      heldSlots: ["run", "model"],
+    });
+
+    const terminal = applyRunEvent(held, makeEvent({ type: "run.status", status: "completed" }));
+    expect(terminal.queuePosition).toBeNull();
+    expect(terminal.waitingOn).toBeNull();
+    expect(terminal.heldSlots).toEqual([]);
+
+    const suspended = applyRunEvent(
+      held,
+      makeEvent({ type: "run.suspended", stepId: "ai-review", stepState: "awaiting_human" }),
+    );
+    expect(suspended.status).toBe("awaiting_human");
+    expect(suspended.queuePosition).toBeNull();
+    expect(suspended.waitingOn).toBeNull();
+    expect(suspended.heldSlots).toEqual([]);
+    // The source run is never mutated.
+    expect(held.waitingOn).toBe("model");
+    expect(held.heldSlots).toEqual(["run", "model"]);
   });
 
   it("applies terminal statuses without touching the source run", () => {
@@ -248,6 +343,31 @@ describe("applyRunEvent", () => {
     expect(regenerated.steps[2]?.state).toBe("pending");
     expect(regenerated.steps[2]?.regenerations).toBe(1);
   });
+
+  it("carries the signed receipt from the decision event onto the step", () => {
+    const signed = applyRunEvent(
+      makeRun(),
+      makeEvent({
+        type: "run.decision",
+        stepId: "select-pr",
+        action: "proceed",
+        receipt: "rcpt-9",
+      }),
+    );
+    expect(signed.steps[0]).toMatchObject({ state: "done", receipt: "rcpt-9" });
+
+    // An event without a receipt keeps whatever the step already carried.
+    const carried = makeRun({
+      steps: STEP_IDS.map((id) =>
+        makeStep(id, id === "select-pr" ? { receipt: "rcpt-old" } : {}),
+      ),
+    });
+    const unsigned = applyRunEvent(
+      carried,
+      makeEvent({ type: "run.decision", stepId: "select-pr", action: "proceed" }),
+    );
+    expect(unsigned.steps[0]?.receipt).toBe("rcpt-old");
+  });
 });
 
 describe("run snapshots embedded on transition events", () => {
@@ -321,6 +441,195 @@ describe("run snapshots embedded on transition events", () => {
     expect(parseRunSnapshot({ ...base, status: "paused" })).toBeNull();
     expect(parseRunSnapshot({ ...base, steps: "nope" })).toBeNull();
     expect(parseRunSnapshot({ ...base, steps: [{ stepId: "x" }] })).toBeNull();
+  });
+
+  it("sanitizes the queue state a snapshot carries", () => {
+    const parsed = parseRunSnapshot({
+      ...makeRun({ status: "queued", queuePosition: 2 }),
+      waitingOn: "apply",
+      heldSlots: ["run", "apply", 7, null],
+    });
+    expect(parsed?.waitingOn).toBe("apply");
+    // Server content only ever lands as strings.
+    expect(parsed?.heldSlots).toEqual(["run", "apply"]);
+
+    // A pre-fix payload without either key degrades to the neutral shape
+    // rather than leaving the field undefined on a validated type.
+    const legacy = parseRunSnapshot({
+      ...makeRun({ status: "queued", queuePosition: 2 }),
+      waitingOn: undefined,
+      heldSlots: undefined,
+    });
+    expect(legacy?.waitingOn).toBeNull();
+    expect(legacy?.heldSlots).toEqual([]);
+  });
+});
+
+describe("run topology payload", () => {
+  it("parses the N1 payload with satellites, lock, and receipts", () => {
+    const topology = makeTopology({
+      status: "blocked",
+      currentStepId: "ai-review",
+      lock: { target: "acme/app#12", lockedBy: "agent-1" },
+      receipts: {
+        signed: 1,
+        items: [
+          {
+            stepId: "select-pr",
+            receipt: "rcpt-1",
+            actionHash: "hash-1",
+            effectRecorded: false,
+          },
+        ],
+      },
+      steps: STEP_IDS.map((id, index) => ({
+        stepId: id,
+        index,
+        title: id,
+        state: index < 2 ? "done" : index === 2 ? "blocked" : "pending",
+        sideEffecting: id === "complete",
+        integrations: id === "complete" ? ["github"] : [],
+        fields: [],
+        receipt: index === 0 ? "rcpt-1" : null,
+        actionHash: index === 0 ? "hash-1" : null,
+        hasArtifact: index < 2,
+        hasDecision: index === 0,
+        regenerations: index === 1 ? 2 : 0,
+        updatedAt: "2026-09-12T10:05:00Z",
+      })),
+    });
+    const parsed = parseRunTopology(topology);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.runId).toBe("run-1");
+    expect(parsed?.status).toBe("blocked");
+    expect(parsed?.currentStepId).toBe("ai-review");
+    expect(parsed?.lock).toEqual({ target: "acme/app#12", lockedBy: "agent-1" });
+    expect(parsed?.receipts.signed).toBe(1);
+    expect(parsed?.receipts.items[0]).toEqual({
+      stepId: "select-pr",
+      receipt: "rcpt-1",
+      actionHash: "hash-1",
+      effectRecorded: false,
+    });
+    expect(parsed?.steps[0]).toMatchObject({
+      state: "done",
+      hasArtifact: true,
+      hasDecision: true,
+      updatedAt: "2026-09-12T10:05:00Z",
+    });
+    expect(parsed?.steps[1]?.regenerations).toBe(2);
+    expect(parsed?.steps[3]).toMatchObject({
+      sideEffecting: true,
+      integrations: ["github"],
+    });
+  });
+
+  it("drops non-string integrations instead of failing the step", () => {
+    const topology = makeTopology();
+    const parsed = parseRunTopology({
+      ...topology,
+      steps: [{ ...topology.steps[0], integrations: ["github", 7, null, "jira"] }],
+    });
+    expect(parsed?.steps[0]?.integrations).toEqual(["github", "jira"]);
+  });
+
+  it("returns null for malformed payloads and never half-parses", () => {
+    const base = makeTopology();
+    expect(parseRunTopology(null)).toBeNull();
+    expect(parseRunTopology("nope")).toBeNull();
+    expect(parseRunTopology({})).toBeNull();
+    expect(parseRunTopology({ ...base, status: "paused" })).toBeNull();
+    expect(parseRunTopology({ ...base, steps: "nope" })).toBeNull();
+    expect(parseRunTopology({ ...base, steps: [{ stepId: "x" }] })).toBeNull();
+    expect(parseRunTopology({ ...base, receipts: null })).toBeNull();
+    expect(parseRunTopology({ ...base, receipts: { signed: 1, items: "nope" } })).toBeNull();
+    expect(parseRunTopology({ ...base, receipts: { signed: 1, items: [{}] } })).toBeNull();
+    // An unlocked run reports a null lock rather than a half-filled object.
+    expect(parseRunTopology({ ...base, lock: null })?.lock).toBeNull();
+  });
+});
+
+describe("run topology declared fields", () => {
+  it("parses declared lane fields and clamps their max length to the 4000 cap", () => {
+    const base = makeTopology();
+    const parsed = parseRunTopology({
+      ...base,
+      steps: [
+        {
+          ...base.steps[0],
+          fields: [
+            {
+              id: "abn",
+              label: "Australian Business Number (ABN)",
+              kind: "text",
+              required: true,
+              maxLength: 9000,
+              placeholder: "11 digits, e.g. 51 824 753 556",
+              help: "Snap the tax registration.",
+              snapKey: "abn",
+            },
+            {
+              id: "certificate_expiry",
+              label: "Insurance certificate expiry",
+              kind: "date",
+              maxLength: 0,
+              snapKey: "expiry",
+            },
+            { id: "premium", label: "Premium", kind: "number" },
+          ],
+        },
+      ],
+    });
+    expect(parsed?.steps[0]?.fields).toEqual([
+      {
+        id: "abn",
+        label: "Australian Business Number (ABN)",
+        kind: "text",
+        required: true,
+        maxLength: 4000,
+        placeholder: "11 digits, e.g. 51 824 753 556",
+        help: "Snap the tax registration.",
+        snapKey: "abn",
+      },
+      {
+        id: "certificate_expiry",
+        label: "Insurance certificate expiry",
+        kind: "date",
+        required: false,
+        maxLength: 1,
+        placeholder: "",
+        help: "",
+        snapKey: "expiry",
+      },
+      {
+        id: "premium",
+        label: "Premium",
+        kind: "number",
+        required: false,
+        maxLength: 4000,
+        placeholder: "",
+        help: "",
+        snapKey: "",
+      },
+    ]);
+  });
+
+  it("defaults to no fields when the payload predates U7", () => {
+    const parsed = parseRunTopology(makeTopology());
+    expect(parsed?.steps.every((step) => step.fields.length === 0)).toBe(true);
+  });
+
+  it("keeps unknown kinds as text and fails the step on malformed field entries", () => {
+    const base = makeTopology();
+    const withOddKind = parseRunTopology({
+      ...base,
+      steps: [{ ...base.steps[0], fields: [{ id: "x", label: "X", kind: "color" }] }],
+    });
+    expect(withOddKind?.steps[0]?.fields[0]?.kind).toBe("text");
+    expect(
+      parseRunTopology({ ...base, steps: [{ ...base.steps[0], fields: [{ label: "no id" }] }] }),
+    ).toBeNull();
+    expect(parseRunTopology({ ...base, steps: [{ ...base.steps[0], fields: "nope" }] })).toBeNull();
   });
 });
 
@@ -469,6 +778,17 @@ describe("workflowsForTicket", () => {
     ).toEqual(["dependencies"]);
   });
 
+  it("routes fix:/bug signals to the issues lane for any code-ish type", () => {
+    // The SCRUM project has no Bug issue type, so Task tickets filed as bugs
+    // must reach the issues lane through their summary or labels.
+    expect(
+      workflowsForTicket({ issueType: "Task", summary: "Fix: flaky session refresh", labels: [] }),
+    ).toEqual(["issues"]);
+    expect(
+      workflowsForTicket({ issueType: "Task", summary: "Checkout returns 500", labels: ["bug"] }),
+    ).toEqual(["issues"]);
+  });
+
   it("pulls the leave workflow in from time-off keywords", () => {
     expect(
       workflowsForTicket({ issueType: "Task", summary: "Book annual leave for E-1001", labels: [] }),
@@ -567,6 +887,14 @@ describe("workflowsForTicket", () => {
     expect(
       workflowsForTicket({ issueType: "Support", summary: "Customer question", labels: [] }),
     ).toEqual(RUNNABLE_WORKFLOWS.map((workflow) => workflow.id));
+  });
+});
+
+describe("synthetic task keys", () => {
+  it("matches the TASK- pattern the API accepts for ticket keys", () => {
+    for (let i = 0; i < 100; i += 1) {
+      expect(syntheticTaskKey()).toMatch(/^TASK-[1-9][0-9]{8}$/);
+    }
   });
 });
 
