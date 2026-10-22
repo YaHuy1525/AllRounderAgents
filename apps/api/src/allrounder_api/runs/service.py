@@ -974,8 +974,11 @@ class RunService:
         holding a granted slot with no queue entry — sweep-exempt forever.
         The promotions therefore run in a ``finally`` with logging, the
         same save-with-logging-and-promote-anyway discipline as
-        ``_rollback_partial_grant``, and ``_refresh_queue_positions`` heals
-        any run still caught in that window.
+        ``_rollback_partial_grant``. Driving the granted run is this
+        function's job alone: the ``_refresh_queue_positions`` that follows
+        only re-reads FIFO positions and reports a ``queued`` run with no
+        queue entry, it never re-drives one (see that docstring for why the
+        blind re-promote was removed).
         """
         had_record = run.pending_pass is not None
         promoted = await self._release_slots(run)
@@ -1034,14 +1037,27 @@ class RunService:
         )
 
     async def _refresh_queue_positions(self) -> None:
-        """Re-read every queued run's FIFO position — and heal the one state
-        a healthy queue can never contain: ``queued`` with no entry on the
-        kind it waits on. Such a run was granted its slots but never driven
-        (the only producer of that window is a failed save in
-        ``_release_and_promote``), so it would sit holding capacity forever
-        while the sweep exempts queued runs. Re-promote it; ``_promote``
-        re-walks its recorded pass under the run's own lock and is a no-op
-        for a terminal or already-launched run."""
+        """Re-read every ``queued`` run's FIFO position and nothing else.
+
+        A ``queued`` run with no entry on the kind it waits on is an anomaly
+        this refresh reports and does not repair. Reporting is the whole of
+        what is safe here: ``position()`` answers only "is this run on the
+        queue", never "does this run hold a slot" (see ``ceilings.position``
+        on both back-ends), so the ``None`` a granted-but-undriven run reads
+        is the same ``None`` every legitimately promoted run reads in the
+        window between ``release()`` handing over its slot and ``_promote``
+        saving ``status = "running"``. Driving from that state re-walks
+        ``_try_launch`` on a run that is already running: a duplicate Mastra
+        pass, duplicate model spend, a re-stamped heartbeat that hides the
+        very stall the sweeper exists to catch, and a second ``_apply_outcome``
+        releasing from a record whose ``pending_pass`` is already cleared,
+        which gives back only the run slot and leaks the apply and model
+        grants until the registry TTL. ``_promote`` skips terminal runs but
+        not running ones, and ``_run_lock`` is per-process, so a second
+        scanner or a second API process would take that bait. Repairing the
+        real stranded case needs a holder-versus-waiter discriminator the
+        ceilings do not expose today: a design change, not a patch.
+        """
         for active in await self._registry.list_active():
             if active.status != "queued":
                 continue
@@ -1050,7 +1066,9 @@ class RunService:
             kind = waiting if isinstance(waiting, str) else RUN_SLOT
             position = await self._ceilings.position(active.run_id, kind)
             if position is None:
-                await self._promote(active.run_id)
+                self._logger.warning(
+                    "run_queued_without_queue_entry", run_id=active.run_id, kind=kind
+                )
                 continue
             if position != active.queue_position:
                 active.queue_position = position
