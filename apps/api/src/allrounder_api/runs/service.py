@@ -985,16 +985,19 @@ class RunService:
         try:
             if had_record:
                 await self._save(run)
-        except BaseException:
+        except Exception:
             # The cleared grant could not be recorded, but the slots are
             # back, which is what the guaranteed-release constraint asks
-            # for; keep the promotions flowing regardless.
-            self._logger.warning("run_release_record_failed", run_id=run.run_id)
+            # for; keep the promotions flowing regardless. A cancellation
+            # is deliberately NOT swallowed here (the house rule at
+            # ``_drive``): a shutdown or a timeout must still propagate
+            # after the ``finally`` promotions have run.
+            self._logger.exception("run_release_record_failed", run_id=run.run_id)
         finally:
             for run_id in promoted:
                 try:
                     await self._promote(run_id)
-                except BaseException:
+                except Exception:
                     self._logger.exception("run_promotion_failed", run_id=run_id)
         await self._refresh_queue_positions()
 
