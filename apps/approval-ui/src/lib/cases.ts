@@ -1199,7 +1199,9 @@ export function caseHeaderModel(input: CaseHeaderInput): CaseHeaderModel {
           label: `Waiting for ${ceilingPhrase(run)}`,
           detail:
             run.queuePosition === null
-              ? `Queued behind other runs on ${ceilingPhrase(run)}`
+              ? run.waitingOn === null
+                ? "Queued behind other runs"
+                : `Queued behind other runs on ${ceilingPhrase(run)}`
               : `Queue position ${run.queuePosition}`,
           tone: "neutral",
           stepId,

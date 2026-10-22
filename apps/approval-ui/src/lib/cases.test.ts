@@ -597,11 +597,31 @@ describe("case header model", () => {
     );
     expect(model.next).toEqual({
       label: "Waiting for a run slot",
-      detail: "Queued behind other runs on a run slot",
+      detail: "Queued behind other runs",
       tone: "neutral",
       stepId: "select-pr",
       source: "run:run-1:queue",
     });
+  });
+
+  it("names the recorded ceiling in the detail line once the server sent one", () => {
+    // The ceiling only appears when the run's pass actually carries a kind: a
+    // queued run with waitingOn null keeps the plain pre-wave wording instead
+    // of claiming "on a run slot" that nothing recorded.
+    const detail = (overrides: Partial<CaseHeaderRun>) =>
+      caseHeaderModel(
+        headerInput({ lane: "review", run: headerRun({ status: "queued", ...overrides }) }),
+      ).next.detail;
+
+    expect(detail({ queuePosition: null, waitingOn: "model" })).toBe(
+      "Queued behind other runs on a model-call slot",
+    );
+    expect(detail({ queuePosition: null, waitingOn: "apply" })).toBe(
+      "Queued behind other runs on an apply slot",
+    );
+    expect(detail({ queuePosition: null, waitingOn: "run" })).toBe(
+      "Queued behind other runs on a run slot",
+    );
   });
 
   it("flags a blocked run and points at the lock evidence", () => {
