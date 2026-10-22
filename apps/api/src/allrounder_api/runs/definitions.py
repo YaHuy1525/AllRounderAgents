@@ -20,12 +20,18 @@ model-bearing and apply-bearing steps declare them; pure computation steps
 keep the empty default and never queue on a second ceiling.
 
 Step ``risk`` declares the approval-gate band (a ``RISK_BANDS`` anchor,
-validated at import time). Only genuinely irreversible, high-blast actions
-take the top band — under ``policy/risk.yaml``'s definition, an outbound
-write a revert cannot undo: a merge into a shared branch, an ERP or ledger
-posting, an identity revocation or a production containment. Every other
-side effect keeps the default rule in ``service._gate_risk`` (55
-side-effecting, 10 pure).
+validated at import time). Only four shipped steps take the top band, each
+an outbound write a revert cannot undo under ``policy/risk.yaml``'s own term
+lists: ``bills.post`` (a ledger posting, corrected by a second document),
+``vendors.create`` (an ERP master record plus its contact path),
+``onboarding.provision`` (identities and a payroll enrollment created in
+external systems) and ``offboarding.revoke`` (access destroyed; re-issuing is
+a new grant, not a reversal). Naming is not enough — a step only belongs in
+the band if the flow actually performs the irreversible action — so the
+dependency step that opens bump PRs for a human to merge and the security
+step that executes whichever disposition a human approved (close, escalate or
+recommend as often as containment) both fall back to the default rule in
+``service._gate_risk`` (55 side-effecting, 10 pure).
 """
 
 from __future__ import annotations
@@ -92,14 +98,17 @@ DEPENDENCIES_WORKFLOW = WorkflowDefinition(
         ),
         # A failing group asks the model for a repair suggestion.
         StepDefinition(id="validate", title="Validate", slots=(MODEL_SLOT,)),
-        # Merging the bump PRs into the shared base branch is the irreversible
-        # top-band side effect: a revert cannot un-merge a shared branch.
+        # Not the top band: this step opens one PR per group on a bump branch
+        # and the flow's own PR body says "A human merges this pull request;
+        # CI runs on the branch", so the step name overstates it. An open PR a
+        # human merges and can close again is revertible, and neither "merge"
+        # nor "open PR" is in policy/risk.yaml's irreversible or high-blast
+        # term lists, so it keeps the default side-effecting band.
         StepDefinition(
             id="merge",
             title="Merge",
             side_effecting=True,
             integrations=("github",),
-            risk=RISK_IRREVERSIBLE,
         ),
     ),
 )
@@ -282,12 +291,14 @@ SECURITY_WORKFLOW = WorkflowDefinition(
         # Executing the approved disposition (containment or close) is the
         # side effect (idempotent by alert + host). The preview the human
         # reviews is model-written, so this pass is model-bearing too.
-        # Isolating/quarantining a production host is irreversible and
-        # high-blast under policy/risk.yaml's own term lists.
+        # Not the top band: the disposition it executes is chosen by the human
+        # and close/escalate/recommend are dispositions too, while genuinely
+        # high-blast targets are refused before any approval is raised. A
+        # static 90 would rank a routine alert close above a ledger posting,
+        # so this step keeps the default side-effecting band.
         StepDefinition(
             id="contain", title="Contain", side_effecting=True, integrations=("aws",),
             slots=(MODEL_SLOT,),
-            risk=RISK_IRREVERSIBLE,
         ),
     ),
 )
