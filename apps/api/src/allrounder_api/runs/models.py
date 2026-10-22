@@ -297,23 +297,26 @@ class WorkflowRun:
         input_value = raw.get("input")
         finished = raw.get("finishedAt")
         pending_pass = raw.get("pendingPass")
-        started_at = _parse_datetime(raw.get("startedAt"))
         # Additive-serialization discipline with a fail-closed clock: a
         # missing or unparseable ``heartbeatAt`` (including the empty
         # string, which is not ``None``) falls back to ``started_at``, the
         # sweep's original reference point — never to ``_parse_datetime``'s
         # read-time ``now``, which would re-stamp a corrupt record on every
         # read and keep it (and its slots) immune until the registry TTL.
-        # The heartbeat is then clamped so it can never precede ``started_at``
-        # — a corrupt ``startedAt`` falling back to ``now`` beside a valid
-        # old heartbeat must not revive heartbeat-before-start.
-        heartbeat_at = _parse_datetime_or(raw.get("heartbeatAt"), started_at)
-        # Compare aware-to-aware: a corrupt record can pair a naive
-        # ``heartbeatAt`` (an ISO string with no offset) with an aware
-        # ``startedAt`` or the reverse, and the bare ``<`` would raise
-        # ``TypeError`` on every later read of that run. A naive value is
-        # read as UTC so the clamp degrades instead of crashing.
-        if _as_aware(heartbeat_at) < _as_aware(started_at):
+        # Every clock the record carries is normalized to aware at read time
+        # (``_as_aware`` attaches UTC): ISO strings can arrive with and
+        # without an offset, and a naive value surviving into the dataclass
+        # would raise ``TypeError`` later, where an aware clock reads it —
+        # ``service.sweep_expired`` subtracts ``heartbeat_at`` from the
+        # sweep instant, and both the registry and the audit pack sort by
+        # ``started_at``. One corrupt row would abort the reaping of every
+        # other run. The heartbeat is then clamped so it can never precede
+        # ``started_at`` — a corrupt ``startedAt`` falling back to ``now``
+        # beside a valid old heartbeat must not revive
+        # heartbeat-before-start.
+        started_at = _as_aware(_parse_datetime(raw.get("startedAt")))
+        heartbeat_at = _as_aware(_parse_datetime_or(raw.get("heartbeatAt"), started_at))
+        if heartbeat_at < started_at:
             heartbeat_at = started_at
         return cls(
             run_id=str(raw["runId"]),
@@ -337,7 +340,7 @@ class WorkflowRun:
             side_effects=side_effects if isinstance(side_effects, dict) else {},
             started_at=started_at,
             heartbeat_at=heartbeat_at,
-            finished_at=_parse_datetime(finished) if finished else None,
+            finished_at=_as_aware(_parse_datetime(finished)) if finished else None,
             cost_usd_micro=int(raw.get("costUsdMicro", 0) or 0),
             pending_pass=pending_pass if isinstance(pending_pass, dict) else None,
         )
@@ -893,5 +896,10 @@ def _parse_datetime_or(value: object, fallback: datetime) -> datetime:
 
 def _as_aware(value: datetime) -> datetime:
     """Attach UTC to a naive datetime so mixed records compare (ISO strings
-    with and without an offset both parse to valid ``datetime`` objects)."""
+    with and without an offset both parse to valid ``datetime`` objects).
+
+    Applied to every clock at read time in ``WorkflowRun.from_dict``, not just
+    for the clamp comparison: an aware clock downstream (the sweep deadline,
+    the ``started_at`` sorts) subtracts or compares against these values, and
+    one naive survivor raises ``TypeError`` for every run in that pass."""
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
