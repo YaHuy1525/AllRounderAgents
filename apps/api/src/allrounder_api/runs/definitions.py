@@ -26,8 +26,8 @@ lists: ``bills.post`` (a ledger posting, corrected by a second document),
 ``vendors.create`` (an ERP master record plus its contact path),
 ``onboarding.provision`` (identities and a payroll enrollment created in
 external systems) and ``offboarding.revoke`` (access destroyed; re-issuing is
-a new grant, not a reversal). Naming is not enough — a step only belongs in
-the band if the flow actually performs the irreversible action — so the
+a new grant, not a reversal). Naming is not enough: a step only belongs in
+the band if the flow actually performs the irreversible action, so the
 dependency step that opens bump PRs for a human to merge and the security
 step that executes whichever disposition a human approved (close, escalate or
 recommend as often as containment) both fall back to the default rule in

@@ -306,12 +306,12 @@ class WorkflowRun:
         # Every clock the record carries is normalized to aware at read time
         # (``_as_aware`` attaches UTC): ISO strings can arrive with and
         # without an offset, and a naive value surviving into the dataclass
-        # would raise ``TypeError`` later, where an aware clock reads it —
+        # would raise ``TypeError`` later, where an aware clock reads it.
         # ``service.sweep_expired`` subtracts ``heartbeat_at`` from the
         # sweep instant, and both the registry and the audit pack sort by
-        # ``started_at``. One corrupt row would abort the reaping of every
+        # ``started_at``, so one corrupt row would abort the reaping of every
         # other run. The heartbeat is then clamped so it can never precede
-        # ``started_at`` — a corrupt ``startedAt`` falling back to ``now``
+        # ``started_at``: a corrupt ``startedAt`` falling back to ``now``
         # beside a valid old heartbeat must not revive
         # heartbeat-before-start.
         started_at = _as_aware(_parse_datetime(raw.get("startedAt")))
