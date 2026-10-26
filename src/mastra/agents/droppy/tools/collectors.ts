@@ -9,19 +9,11 @@ import type { DroppyConfig } from "../settings.js";
 import { analyseCreative, estimateSales, scoreCriteria, scoreEngagement, totalScore } from "./scoring.js";
 
 /**
- * Layer 1 — bounded collectors.
- *
- * These are the FREE data sources (PLAN §1, bucket F): Meta Ad Library, TikTok
- * Creative Centre, Pinterest Trends, Google Trends, and the supplier catalogues.
- * We call them, we do not rebuild them.
- *
- * Bounded on purpose: AU only, human rate, our own accounts. That is what keeps
- * the project free and legal (PLAN §5), and it is the honest scope. We will
- * never have a 100M-ad index. We do not need one — we run one store, in one
- * category, in one country.
- *
- * Every collector returns normalised rows. Vendor field names live here and
- * nowhere else: the domain model never sees them.
+ * Layer 1, the free data sources we call rather than rebuild (Meta Ad Library,
+ * TikTok Creative Centre, Pinterest Trends, Google Trends, supplier catalogues).
+ * Bounded on purpose to AU, human rate and our own accounts, which is what keeps
+ * the project free and legal. Every collector returns normalised rows, and vendor
+ * field names live here and nowhere else.
  */
 
 /** A raw row from any source, before normalisation. */

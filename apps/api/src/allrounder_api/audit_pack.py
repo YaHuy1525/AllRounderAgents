@@ -1,20 +1,14 @@
 """Audit pack exporter: per client per month and per case, JSON plus PDF.
 
-The pack is built only from the immutable trail: the run archive (unioned with
-the live registry, so runs that have not archived yet still appear), the case
-event ledger, and the approval receipts embedded in step decisions. Nothing is
-recomputed by an engine and no live workflow state is consulted.
+The pack is built only from the immutable trail, which is the run archive unioned
+with the live registry, the case event ledger and the approval receipts embedded in
+step decisions. Nothing is recomputed by an engine.
 
-Every receipt-bearing decision is re-verified: the action hash is recomputed
-from the surviving artifact and the receipt signature is validated with ``now``
-pinned to the decision time (receipts expire one hour after issue, so
-wall-clock validation would always fail). Regeneration decisions carry no
-receipt by design: they are recorded and counted as decisions, never as
-failed receipts.
-
-The case pack (U6) is the per-ticket generalization: one case, all of its
-runs, plus the cited sources and changed files extracted from the artifacts so
-a pack for any lane carries decisions, receipts, citations, diffs, and cost.
+Every receipt-bearing decision is re-verified with ``now`` pinned to the decision
+time, because receipts expire one hour after issue and wall clock validation would
+always fail. Regeneration decisions carry no receipt by design. The case pack is the
+per-ticket generalization, carrying decisions, receipts, citations, diffs and cost
+for any lane.
 """
 
 from __future__ import annotations

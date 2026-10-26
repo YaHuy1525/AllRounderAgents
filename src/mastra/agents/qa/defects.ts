@@ -6,22 +6,11 @@ import {
 } from "./contracts.js";
 
 /**
- * The filing seam. Jira writes stay in the Python plane: the existing transport
- * there owns receipts, the MCP-to-REST degradation and the replay rule, and a
- * second transport in TypeScript would mean two idempotency records for one
- * defect (decision D2 in the plan).
- *
- * What this module owns is the request and the honest report of what happened:
- *
- *   * An approved failure posts `status: "failed"`, which the route answers by
- *     creating the ticket, commenting on the existing one, or reporting a
- *     replay. The route keys on `{storyKey}:{caseId}`, so a nightly suite
- *     cannot produce a ticket avalanche.
- *   * A passing case posts `status: "passed"`, which the route only acts on
- *     when that correlation already has a defect. With no defect it answers
- *     `skipped`, and nothing is written.
- *   * A write that cannot happen is a `failed` receipt, not a thrown run: the
- *     findings stay visible in the close output instead of disappearing.
+ * The filing seam. Jira writes stay in the Python plane, whose transport already
+ * owns receipts, MCP-to-REST degradation and the replay rule; a second transport
+ * here would mean two idempotency records for one defect. This module owns the
+ * request and the honest report: an impossible write yields a `failed` receipt
+ * rather than a thrown run, so findings stay visible in the close output.
  */
 
 const BASE_URL_ENV = "KNOWLEDGE_API_URL";

@@ -5,13 +5,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "@/lib/api";
 import {
   appendUserTurn,
+  assistantHost,
   assistantResource,
   deleteThread,
   endChatTurn,
-  ensureThread,
   initialChatState,
   listThreads,
   loadMessages,
+  openThread,
   renameThread,
   sendChat,
   startAssistantTurn,
@@ -38,6 +39,7 @@ import { openCase, prefillStartFields, startRun, workflowsForTicket } from "@/li
 import { listWorkflows } from "@/lib/workflows";
 
 import { StartRunCard } from "../StartRunCard";
+import { IconSparkles } from "../icons";
 import { Composer } from "./Composer";
 import { ThreadList } from "./ThreadList";
 import { Transcript } from "./Transcript";
@@ -48,7 +50,7 @@ type CompactTicket = ReturnType<typeof compactTickets>[number];
 type StartAttachment = { turnIndex: number; draft: ChatStartDraft };
 
 function turn(role: "user" | "assistant", body: string, error: string | null = null): ChatTurn {
-  return { role, body, toolNotes: [], rows: [], error, stopped: false };
+  return { role, body, toolNotes: [], rows: [], execute: null, error, stopped: false };
 }
 
 function turnsOf(messages: AssistantMessage[]): ChatTurn[] {
@@ -68,6 +70,7 @@ export function ChatShell({
   onOpenRun,
   onOpenTicket,
   onOpenInbox,
+  onExecuteTicket,
   unusable = false,
 }: {
   tickets: CompactTicket[];
@@ -80,6 +83,8 @@ export function ChatShell({
   }) => void;
   onOpenTicket: (ticketKey: string) => void;
   onOpenInbox: () => void;
+  /** Opens the ticket's own run tab from an Execute action the assistant resolved. */
+  onExecuteTicket: (ticket: AssistantTicketRow) => void;
   unusable?: boolean;
 }) {
   const [threads, setThreads] = useState<AssistantThread[]>([]);
@@ -89,6 +94,7 @@ export function ChatShell({
   const [resource, setResource] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [taskBusy, setTaskBusy] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
   const [starts, setStarts] = useState<StartAttachment[]>([]);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -153,22 +159,24 @@ export function ChatShell({
     setDraft("");
     let targetId = threadId;
     if (targetId === null) {
-      const created = await ensureThread(threadTitleFor(message));
-      if (created === null) {
+      const opened = await openThread(threadTitleFor(message));
+      if (!("thread" in opened)) {
+        setOpenError(opened.reason);
         setState((current) => ({
           ...current,
           streaming: false,
           turns: [
             ...current.turns,
             turn("user", message),
-            turn("assistant", "", "The conversation could not be opened on the host."),
+            turn("assistant", "", opened.reason),
           ],
         }));
         return;
       }
-      targetId = created.id;
+      setOpenError(null);
+      targetId = opened.thread.id;
       setThreadId(targetId);
-      setThreads((current) => [created, ...current]);
+      setThreads((current) => [opened.thread, ...current]);
     }
 
     const firstTurn = threadId === null;
@@ -176,6 +184,7 @@ export function ChatShell({
     const next = startAssistantTurn(appendUserTurn(state, message));
     setState(next);
 
+    if (targetId === null) return;
     const controller = new AbortController();
     abortRef.current = controller;
     await sendChat({
@@ -202,6 +211,7 @@ export function ChatShell({
     abortRef.current = null;
     setThreadId(id);
     setStarts([]);
+    setOpenError(null);
     const messages = await loadMessages(id);
     setState({ ...initialChatState(false), turns: turnsOf(messages) });
   }
@@ -211,6 +221,7 @@ export function ChatShell({
     abortRef.current = null;
     setThreadId(null);
     setStarts([]);
+    setOpenError(null);
     setState(initialChatState(resource === null));
     inputRef.current?.focus();
   }
@@ -360,23 +371,57 @@ export function ChatShell({
     return "Ask me anything about your projects, tickets, people, or policy…";
   }, [loading, resource, unusable]);
 
+  const activeTitle = useMemo(() => {
+    return threads.find((thread) => thread.id === threadId)?.title ?? "New chat";
+  }, [threadId, threads]);
+
+  const sidebarNote = useMemo(() => {
+    if (loading) return "Connecting to the assistant host…";
+    if (unusable || resource === null) return "No tenant on this account, so history cannot load.";
+    if (openError !== null) return openError;
+    const host = assistantHost();
+    if (threads.length === 0) return `No conversations yet on ${host}.`;
+    return `${threads.length} conversation${threads.length === 1 ? "" : "s"} on ${host}.`;
+  }, [loading, openError, resource, threads.length, unusable]);
+
   return (
     <div className="chat-shell">
-      <ThreadList
-        threads={threads}
-        selectedId={threadId}
-        busy={state.streaming || taskBusy}
-        onSelect={(id) => void selectThread(id)}
-        onNew={() => void newChat()}
-        onRename={(id, title) => void rename(id, title)}
-        onDelete={(id) => void remove(id)}
-      />
-      <div className="chat-main">
+      <aside className="chat-sidebar">
+        <div className="chat-sidebar-head">
+          <span className="assistant-brand" aria-hidden="true">
+            <IconSparkles />
+          </span>
+          <div className="chat-sidebar-title">
+            <strong>Assistant</strong>
+            <span>Console copilot</span>
+          </div>
+        </div>
+        <ThreadList
+          threads={threads}
+          selectedId={threadId}
+          busy={state.streaming || taskBusy}
+          onSelect={(id) => void selectThread(id)}
+          onNew={() => void newChat()}
+          onRename={(id, title) => void rename(id, title)}
+          onDelete={(id) => void remove(id)}
+        />
+        <p className="chat-sidebar-foot">{sidebarNote}</p>
+      </aside>
+      <section className="chat-main">
+        <header className="chat-topbar">
+          <h2>{activeTitle}</h2>
+          <span>{state.streaming ? "Answering…" : "History is kept per account"}</span>
+        </header>
         <Transcript
           state={state}
           busy={taskBusy || state.streaming}
           onOpenTicket={onOpenTicket}
           onLaunch={(row) => void launch(row)}
+          onExecute={(row) => onExecuteTicket(row)}
+          onSuggest={(text) => {
+            setDraft(text);
+            inputRef.current?.focus();
+          }}
         />
         {starts.map((attachment) => (
           <div key={attachment.turnIndex} className="chat-start-slot">
@@ -393,11 +438,12 @@ export function ChatShell({
           streaming={state.streaming}
           disabled={resource === null || loading}
           placeholder={placeholder}
+          inputRef={inputRef}
           onChange={setDraft}
           onSubmit={() => void submit()}
           onStop={stop}
         />
-      </div>
+      </section>
     </div>
   );
 }

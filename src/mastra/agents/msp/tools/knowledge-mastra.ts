@@ -27,29 +27,10 @@ export interface MastraFirstMspKnowledgeOptions {
 }
 
 /**
- * Mastra-primary knowledge seam for the msp draft step (upgrade plan P4):
- * retrieval runs against the Mastra-owned `msp_runbooks` index first, and
- * the platform API hybrid path (`HttpMspKnowledge`) is the fallback. It is
- * the msp mirror of the HR-help pilot, welded to the same isolation rule:
- * the run's tenant plus client partition the index through the metadata
- * filter `{ tenantId, domain: "msp:<clientRef>" }`, exactly how the HTTP
- * arm partitions `msp:<clientRef>`, so one client's runbooks never ground
- * another client's reply.
- *
- * Honest about the corpus gap: `msp_runbooks` has no repo-owned seed yet,
- * so the index usually does not exist. The first `listIndexes` answer is
- * memoized forever — a missing index demotes this arm to a delegate with no
- * repeated probing, and the lane keeps the HTTP behavior it has today.
- * An empty or failed Mastra search (including a client partition with no
- * chunks) also delegates, because an ungrounded draft escalates either way
- * and the hybrid arm may still know the answer.
- *
- * Passages must satisfy `MspPassageSchema`: scores clamp into [0, 1], text
- * caps at 2 000 chars, and a row the contract cannot parse is dropped, not
- * trusted — the same partial-trust rule the HTTP arm applies. When a
- * reranker is configured (COHERE_API_KEY), the vector arm over-fetches 2k
- * candidates and reranks them down to the limit; a reranker failure keeps
- * the vector order.
+ * Mastra-first knowledge seam for the msp draft step, falling back to the
+ * platform API hybrid arm. Partitioning by `{ tenantId, domain: "msp:<clientRef>" }`
+ * keeps one client's runbooks out of another's reply; the `listIndexes` probe is
+ * memoized, empty or failed searches delegate, and unparseable rows are dropped.
  */
 export class MastraFirstMspKnowledge implements MspKnowledge {
   private readonly indexName: string;

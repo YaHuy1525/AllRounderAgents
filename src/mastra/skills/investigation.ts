@@ -1,14 +1,9 @@
 import { createSkill } from "@mastra/core/skills";
 
 /**
- * Root-cause investigation skill for the coding lane.
- *
- * Adapts the guidance in the official Mastra `understand-issue` skill (trace
- * code history and architecture to diagnose a defect) into an inline,
- * in-memory skill. The agent loads it on demand through the `skill` and
- * `skill_read` tools, so it shapes *how* the investigator reasons without
- * widening its contract: the investigator still returns cited RCA JSON and
- * never proposes a patch.
+ * Root-cause investigation skill for the coding lane, adapting the official Mastra
+ * `understand-issue` guidance into an inline skill. It shapes how the investigator
+ * reasons without widening its contract: still cited RCA JSON, never a patch.
  */
 export const issueInvestigationSkill = createSkill({
   name: "issue-investigation",

@@ -22,7 +22,13 @@ import {
 } from "@/lib/cases";
 import type { Approval } from "@/lib/models";
 import { DECIDE_HINT } from "@/lib/roles";
-import { listRuns, type RunDetail, type RunSummary } from "@/lib/runs";
+import {
+  RUNNABLE_WORKFLOWS,
+  listRuns,
+  workflowsForTicket,
+  type RunDetail,
+  type RunSummary,
+} from "@/lib/runs";
 
 import {
   IconCheck,
@@ -175,6 +181,19 @@ export function TicketTab({
         : inferLane({ summary: issue.summary, labels: issue.labels }),
     [record, issue.summary, issue.labels],
   );
+  // The launcher offers only this ticket's own family of lanes, so a tech
+  // ticket never defaults to a pull request review it has nothing to review,
+  // and an HR ticket never offers the code lanes. Same rule the new-tab picker
+  // applies, read from the ticket already in hand.
+  const workflowOptions = useMemo(() => {
+    const supported = workflowsForTicket({
+      issueType: issue.issue_type,
+      summary: issue.summary,
+      labels: issue.labels,
+    });
+    return RUNNABLE_WORKFLOWS.filter((item) => supported.includes(item.id));
+  }, [issue.issue_type, issue.summary, issue.labels]);
+
   const steps = useMemo(() => stepsForLane(lane), [lane]);
   const states = useMemo(() => stepStates(steps, events, hasRun), [steps, events, hasRun]);
 
@@ -388,6 +407,7 @@ export function TicketTab({
             <StartRunCard
               issue={issue}
               caseId={caseState.status === "ready" ? caseState.record.id : null}
+              workflowOptions={workflowOptions}
               onStarted={() => {
                 void refreshRuns();
                 setCaseTick((tick) => tick + 1);

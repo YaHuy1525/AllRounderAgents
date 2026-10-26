@@ -7,15 +7,10 @@ import { fieldProvenance, missingStartFields, type ChatStartDraft } from "@/lib/
 import { IconPlus } from "./icons";
 
 /**
- * Confirmable start card for the assistant rail. It renders exactly the
- * fields `GET /workflows` publishes for the drafted workflow — the same list
- * `POST /runs` validates — so the rail cannot collect a shape the server does
- * not accept, and nothing starts until the human presses Start.
- *
- * A prefill answer arrives after the card is mounted, so it replaces the
- * draft rather than the component. Values therefore follow the draft only for
- * fields the operator has not touched yet, and a field shows the record it
- * came from only while it still holds the value that record proved.
+ * Confirmable start card for the assistant rail. It renders exactly the fields
+ * `GET /workflows` publishes, which is the list `POST /runs` validates, so the rail
+ * cannot collect a shape the server rejects. A prefill answer replaces the draft
+ * rather than the component, so untouched fields follow it and touched ones do not.
  */
 export function StartRunCard({
   draft,

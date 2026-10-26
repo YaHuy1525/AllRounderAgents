@@ -7,17 +7,10 @@ import {
 } from "./ledger.js";
 
 /**
- * The M4 ledger: vendor bills land in Xero as ACCPAY bills in DRAFT status.
- * A draft is the bounded blast radius — Xero assigns the real bill number on
- * approval there, and a draft can always be deleted, while the flow still
- * holds the human receipt that authorized the posting.
- *
- * Posting is idempotent by the flow's ledger key (the xero.post policy's
- * `ledgerKey`): a repeated key replays the recorded result instead of
- * creating a second draft. Xero has no native dedupe for draft bills, so the
- * effect map on the run plus this map are the replay guards. The invoice is
- * stamped with the vendor's bill number as its reference so a human can match
- * the draft against the email that produced it.
+ * The M4 ledger: vendor bills land in Xero as ACCPAY bills in DRAFT status, which
+ * is the bounded blast radius — a draft can always be deleted, and the flow still
+ * holds the human receipt that authorized it. Posting replays on the xero.post
+ * policy's `ledgerKey`, because Xero has no native dedupe for draft bills.
  */
 
 export type XeroFetch = typeof fetch;

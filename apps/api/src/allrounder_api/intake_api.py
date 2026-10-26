@@ -2,17 +2,11 @@
 
 """Email intake: one inbound mail becomes one MSP or bills run.
 
-The MSP and bills lanes' front door. A forwarder (or a smoke script) POSTs an
-inbound email here; the route normalizes it into the exact input shape the
-flow validates, derives the client or vendor reference and a deterministic
-ticket key, and starts an ``msp`` or ``bills`` run — which parks on its first
-checkpoint, because both flows treat every step as human-reviewed.
-
-Determinism: the same delivery always normalizes to the same message id,
-client/vendor ref, ticket key and case id, so a replay (or a retry after a
-lost response) is claimed by the dedupe store instead of doubling the case.
-The case row is written before the run starts, because the run's
-``run_started`` case event hangs off it.
+The route normalizes the mail into the input shape the flow validates, derives a
+deterministic message id, client/vendor ref, ticket key and case id, and writes the
+case row before starting the run, because the ``run_started`` event hangs off it. Both
+flows park on their first checkpoint, and a replayed delivery is claimed by the dedupe
+store instead of doubling the case.
 """
 
 from __future__ import annotations

@@ -2,21 +2,9 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
 /**
- * Read-only web search for the coding agents (Path B tool loop).
- *
- * Mastra's built-in `webSearchTool` is provider-gated to OpenAI/Anthropic/
- * Google/xAI native server-side search, which the OpenRouter DeepSeek model
- * this lane routes to does not expose. So this is a normal callable tool: the
- * model invokes it as a function and it returns ranked snippets backed by the
- * Tavily search API (built for LLM agents). Because it is a plain function
- * tool, it works with any tool-calling model.
- *
- * Web search is optional infrastructure. The coding agents always attach this
- * tool, so each one stays a plain `new Agent({ id, name, instructions, model,
- * tools })` per the Mastra template, and {@link webSearchEnabled} gates only
- * the network call: with no `TAVILY_API_KEY` the tool returns an empty result
- * set instead of reaching Tavily, so an unconfigured deployment degrades to no
- * results rather than breaking on a missing dependency.
+ * Read-only Tavily web search as a plain function tool, because the built-in
+ * `webSearchTool` needs a provider the lane's model does not expose. With no
+ * `TAVILY_API_KEY` it returns an empty result set rather than throwing.
  */
 
 /** The Tavily search endpoint (POST, bearer auth). */

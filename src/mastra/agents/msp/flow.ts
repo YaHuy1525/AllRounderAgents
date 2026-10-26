@@ -278,15 +278,11 @@ export interface MspFlowDeps {
 }
 
 /**
- * Mastra `mspFlow`: the managed-service-provider lane as named, suspendable
- * workflow steps (intake -> ticket -> draft -> approve -> send). The client
- * email is normalized at intake, the ticket is created behind the desk seam
- * exactly once per case, the reply is drafted from knowledge with the support
- * escalation ladder (empty retrieval, stale evidence, unsupported claim, thin
- * draft), a service-desk tech approves it, and the send goes out through the
- * mail seam with the desk comment as its receipt. Both side-effecting steps
- * execute only on a decision backed by a signed receipt and stay idempotent —
- * the ticket by its correlation token, the send by `(caseId, ticketKey)`.
+ * Mastra `mspFlow`: intake -> ticket -> draft -> approve -> send. The ticket is
+ * created exactly once per case, the draft carries the support escalation ladder
+ * (empty retrieval, stale evidence, unsupported claim, thin draft), and both
+ * side-effecting steps run only on a signed receipt — the ticket idempotent by
+ * its correlation token, the send by `(caseId, ticketKey)`.
  */
 export function createMspFlow(deps: MspFlowDeps) {
   const desk = deps.desk;

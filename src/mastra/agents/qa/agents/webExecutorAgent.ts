@@ -4,15 +4,10 @@ import { codingBrowser } from "../../../shared/browser.js";
 import { DEFAULT_AGENT_MODEL_CONFIG } from "../../../shared/model.js";
 
 /**
- * The only child that touches a running app, and the only one the delegation
- * gate refuses until a human has approved the case set. It drives the shared
- * coding browser and holds no other tools, so there is nothing here that can
- * write to a ticket, a ledger, or a filesystem.
- *
- * The browser arrives through Mastra's `browser` config, which is what attaches
- * the provider's page tools. When `AGENT_BROWSER_ENABLED` is not set the key is
- * absent, so the agent still builds and the run degrades to a blocked
- * execution instead of a crash.
+ * The only child that touches a running app, and the only one the delegation gate
+ * refuses before the case set is approved. The browser arrives through Mastra's
+ * `browser` config; without `AGENT_BROWSER_ENABLED` the key is absent, so the
+ * agent still builds and the run degrades to a blocked execution.
  */
 const browser = codingBrowser();
 

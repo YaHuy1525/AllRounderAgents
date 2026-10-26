@@ -2,15 +2,11 @@ import { api } from "./api";
 import type { RunDecision } from "./runs";
 
 /**
- * Data pills (N3): the console-side half of the `{{ref}}` token protocol.
- *
- * The API serves the picker catalog (earlier outputs of the run, path
- * addressed) from `GET /runs/{id}/pills`; this module parses it, turns plain
- * text fields into token-aware fields (insert, remove, re-map) and answers
- * the one question that must never fail silently: does every ref a draft
- * carries still exist in the catalog? Resolution itself happens at the API
- * boundary when the decision is recorded, so a receipt is always bound to
- * concrete values, never to tokens.
+ * Data pills, the console-side half of the `{{ref}}` token protocol. The API serves
+ * the picker catalog from `GET /runs/{id}/pills`; this module parses it, edits tokens
+ * and answers the one question that must never fail silently: does every ref a draft
+ * carries still exist? Resolution happens at the API boundary, so a receipt is bound
+ * to concrete values.
  */
 
 export type RunPillKind = "text" | "number" | "boolean" | "citation";

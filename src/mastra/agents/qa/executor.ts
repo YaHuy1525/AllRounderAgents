@@ -17,14 +17,11 @@ import {
 import { qaDelegation } from "./squad.js";
 
 /**
- * The execution seam. The flow never touches a browser directly: it asks an
- * executor to drive an approved set and reports what came back. That keeps the
- * honest-degrade path testable with no Playwright, no model key and no server.
- *
- * Availability is decided before the first case, from facts rather than from a
- * model's opinion: the browser must be enabled and the target's storage state
- * must exist. When either is missing the run still reaches a verdict — every
- * case is `blocked` with the reason — instead of pretending it ran.
+ * The execution seam: the flow asks an executor to drive an approved set and
+ * report what came back, so the honest-degrade path is testable with no
+ * Playwright, model key or server. Availability is decided from facts before the
+ * first case, and a missing browser or storage state yields `blocked` cases with
+ * the reason rather than a pretend run.
  */
 
 export interface QaExecuteBrief {

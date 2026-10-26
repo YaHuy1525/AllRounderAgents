@@ -1,44 +1,12 @@
 """Built-in workflow definitions.
 
-Each entry names its Mastra counterpart (``mastra_workflow``) and the exact,
-ordered step ids the flow must emit — the run service snapshots this list
-when a run starts, so the stepper, decisions, and receipts all line up.
-Later PRs append their workflows here.
-
-Step ``integrations`` are display-only provider ids (github, okta, slack,
-...): the flow graph renders them as satellites next to each step and they
-never influence permissions — ``side_effect_scope`` remains the single
-governance source for what a side-effecting step may act on.
-
-Step ``fields`` (U7) are lane-declared custom inputs the console renders on
-the step surface — configured here, not in the UI. Their values ride the
-normal edit decision, so the receipt gate applies unchanged.
-
-Step ``slots`` name the extra ceiling slots (besides ``run``) a drive pass
-that may compute the step must hold — see ``ceilings.SLOT_ORDER``. Only
-model-bearing and apply-bearing steps declare them; pure computation steps
-keep the empty default and never queue on a second ceiling.
-
-Step ``risk`` declares the approval-gate band (a ``RISK_BANDS`` anchor,
-validated at import time). Only four shipped steps take the top band, each
-an outbound write a revert cannot undo under ``policy/risk.yaml``'s own term
-lists: ``bills.post`` (a ledger posting, corrected by a second document),
-``vendors.create`` (an ERP master record plus its contact path),
-``onboarding.provision`` (identities and a payroll enrollment created in
-external systems) and ``offboarding.revoke`` (access destroyed; re-issuing is
-a new grant, not a reversal). Naming is not enough: a step only belongs in
-the band if the flow actually performs the irreversible action, so the
-dependency step that opens bump PRs for a human to merge and the security
-step that executes whichever disposition a human approved (close, escalate or
-recommend as often as containment) both fall back to the default rule in
-``service._gate_risk`` (55 side-effecting, 10 pure).
-
-Workflow ``start_fields`` publish the run input each flow's Zod
-``InputSchema`` already enforces: what a run needs before its first step can
-move. ``GET /workflows`` serves them and ``POST /runs`` refuses an
-incomplete start, so a missing ``employeeId`` is a 422 naming the field
-instead of a failure inside the drive loop. Fields the server derives from
-the ticket itself (``ticketKey``, the candidate list) are not listed.
+Each entry names its Mastra counterpart (``mastra_workflow``) and the ordered step ids
+the flow must emit, which the run service snapshots at start. Step ``integrations`` are
+display-only provider ids and ``slots`` name the extra ceiling slots a step bearing a
+model or an apply must hold. Step ``risk`` is validated at import time, and only the
+four irreversible outbound writes take the top band (``bills.post``, ``vendors.create``,
+``onboarding.provision``, ``offboarding.revoke``). Workflow ``start_fields`` publish the
+input each Zod ``InputSchema`` already enforces, so an incomplete start is a 422.
 """
 
 from __future__ import annotations

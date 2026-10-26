@@ -1,27 +1,7 @@
-// Combined tool-result guard Processor (coding-lane MCPClient redesign).
-//
-// The coding agents now call the discovered GitHub MCP tools directly, so every
-// repository file, PR body and search hit flows back as untrusted model input
-// with none of the guarantees the retired wrapper tools used to hold. Per
-// https://mastra.ai/docs/agents/processors ("tool results are untrusted model
-// input"), this Processor inspects each tool result BEFORE it enters the model
-// context and re-enforces the three invariants the wrappers carried:
-//
-//   1. Repository allowlist — a repo-scoped read against a repository outside
-//      `GITHUB_REPOSITORY_ALLOWLIST` (or with no allowlist configured) is denied
-//      and never returns content. Fail closed, same vocabulary as the flow's
-//      `RepositoryPolicyError`.
-//   2. Read size cap — an oversized result is truncated, restoring the 8 000-char
-//      budget the retired `read_file` tool enforced.
-//   3. Injection annotation — instruction-override / jailbreak phrasing in repo
-//      or web text is flagged so the model reads the result as data, not
-//      directives. Deterministic (no model call); the LLM-backed
-//      `PromptInjectionDetector` handles the input lane separately.
-//
-// All three are non-tripwire: the result is replaced in place and the loop
-// continues, so `generateContractOutput` still parses and the flow degrades
-// exactly as it did with the wrapper tools. Non-repo, non-matching results pass
-// through untouched.
+// Inspects every coding-lane tool result before it enters the model context
+// (MCP results are untrusted input) and re-enforces the retired wrappers'
+// invariants: repository allowlist, an 8 000-char cap, and deterministic
+// injection annotation. Results are replaced in place, never as a tripwire.
 
 import type { MessageList } from "@mastra/core/agent/message-list";
 import type { ProcessToolResultArgs, Processor } from "@mastra/core/processors";

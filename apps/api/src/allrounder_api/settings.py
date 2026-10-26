@@ -125,22 +125,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_run_time_relationships(self) -> "Settings":
-        """Fail at startup on run-time settings that contradict each other.
+        """Reject run-time settings that contradict each other.
 
-        Three relationships, each computed against a reaper that now runs by
-        default:
-
-        * the deprecated ``RUNS_RECEIPT_TTL_SECONDS`` still means the token
-          TTL (its historical meaning), so it is mapped onto
-          ``runs_approval_token_ttl_seconds`` and a startup warning tells the
-          operator about ``RUNS_RECEIPT_RECORD_TTL_SECONDS``;
-        * ``runs_max_seconds`` may not be shorter than the in-flight Mastra
-          pass timeout it can reap — a healthy pass inside its own timeout
-          must never be reaped for being alive;
-        * ``runs_sweep_interval_seconds`` may not exceed ``runs_max_seconds``,
-          or a stalled run would keep its slots for several budgets before
-          the first sweep looks at it (``0`` disables the sweep and stays
-          legal).
+        The deprecated ``RUNS_RECEIPT_TTL_SECONDS`` keeps its historical meaning
+        (the token TTL) and is mapped onto ``runs_approval_token_ttl_seconds``.
+        ``runs_max_seconds`` may not be shorter than the in-flight Mastra timeout
+        it can reap, and ``runs_sweep_interval_seconds`` may not exceed
+        ``runs_max_seconds`` unless it is ``0`` (sweep disabled).
         """
         if self.runs_receipt_ttl_seconds is not None:
             if "runs_approval_token_ttl_seconds" not in self.model_fields_set:

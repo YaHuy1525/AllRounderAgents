@@ -181,14 +181,10 @@ export function githubPullEvents(runs: ReadonlyArray<TimelineRun>): TimelineEntr
 }
 
 /**
- * Merge the case's event trail with every run's milestones (start, finish,
- * decisions, touched steps) and the GitHub references their artifacts carry
- * into one chronological list — oldest first, matching how the sequence
- * stream reads. A decision replaces its step row with the decision's own
- * clock; a run id scopes the row ids so a ticket's several runs never clash
- * (an id-less run keeps the legacy unscoped ids). Run SSE events carry no
- * timestamps, so they stay in the raw stream. The sort is stable, so
- * same-timestamp entries keep insertion order.
+ * Merge the case's event trail with every run's milestones and the GitHub references
+ * their artifacts carry into one oldest-first list. A run id scopes the row ids so a
+ * ticket's runs never clash; run SSE events carry no timestamps and stay in the raw
+ * stream; the sort is stable, so equal timestamps keep insertion order.
  */
 export function mergeTimeline(input: {
   caseEvents: readonly CaseEvent[];

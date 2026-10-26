@@ -1,26 +1,13 @@
 """The run service: owns every run's lifecycle and the Mastra bridge.
 
-Driving model — restart/resume with a decision envelope:
-
-* Every Mastra pass receives ``{runId, input, decisions, artifacts, effects}``.
-  A step with a proceed/edit decision fast-forwards using the reviewed
-  artifact (never recomputing LLM output); a regenerate marker recomputes and
-  suspends for fresh review; a step without a decision computes its artifact
-  and suspends — the run parks in ``awaiting_human``.
-* The service resumes the suspended Mastra run for forward decisions and
-  restarts it for Back (downstream state is invalidated and re-derived).
-* Proceed/Edit decisions are backed by single-use HMAC receipts bound to
-  ``(approvalId, runId, caseId, action, scope)`` and recorded under
-  ``(runId, stepId, actionHash)`` so a replay returns the original record and
-  never duplicates a side effect. Side-effecting steps carry their own
-  ``workflow:step`` scope (e.g. ``security:contain``) and the receipt is
-  re-verified right before the run is driven — the executor never acts on an
-  unverified token (defense in depth).
-* Ceiling slots are held only while a pass is in flight; queued runs are
-  promoted FIFO and always know their visible position. Every pass acquires
-  its kinds in the fixed global order ``run -> apply -> model`` and releases
-  in the strict reverse, so the three spec ceilings (concurrent runs,
-  patch-apply executors, model calls) can never hold-and-wait into deadlock.
+Every pass receives ``{runId, input, decisions, artifacts, effects}``. A proceed or
+edit decision fast-forwards on the reviewed artifact, a regenerate marker recomputes
+and suspends, and a step without a decision computes and parks in ``awaiting_human``.
+Proceed and edit need a single-use HMAC receipt bound to
+``(approvalId, runId, caseId, action, scope)`` and keyed under
+``(runId, stepId, actionHash)``, so a replay returns the original record. Ceiling slots
+are held only while a pass is in flight, acquired ``run -> apply -> model`` and released
+in strict reverse, which keeps the three ceilings from deadlocking.
 """
 
 from __future__ import annotations
@@ -485,26 +472,12 @@ class RunService:
 
     def _gate_risk(self, run: WorkflowRun, step_id: str) -> int | None:
         """Risk band stamped on a run-gate approval, from the step's declared
-        governance — never re-derived here, and never raising.
+        governance.
 
-        This is a declared *static step band*, not the dispatcher's computed
-        action score: the dispatcher scores each planned action's text at
-        pre-flight (``policy/risk.yaml`` triage/preflight math), while the run
-        plane reads the band the shipped definition declares (or the default
-        rule below). The two share the same scale without ever being
-        reconciled for the same action — that reconciliation is a follow-up.
-
-        A step that declares an explicit band (one of ``RISK_BANDS``,
-        validated at import time in ``StepDefinition.__post_init__``) uses
-        it verbatim — currently the irreversible, high-blast side effects
-        annotated ``risk=RISK_IRREVERSIBLE`` (90) in ``definitions.py``.
-        Otherwise the default rule applies: a side-effecting
-        gate is ``single_risk`` (55) and a pure one ``benign`` (10) — the
-        ``policy/risk.yaml`` scores the approval queue sorts on. Anything the
-        definition cannot answer leaves the gate unranked (``None``, sorts
-        last) rather than inventing a band: a workflow with no shipped
-        definition, and a step id absent from it — which is what a run
-        persisted before a step rename looks like when resumed after.
+        This is the declared static band, not the dispatcher's computed action
+        score. A step declaring ``RISK_BANDS`` uses it verbatim, otherwise a
+        side-effecting gate is 55 and a pure one is 10. An unanswerable definition
+        leaves the gate unranked (``None``, sorts last) rather than inventing a band.
         """
         definition = self._definition_or_none(run)
         if definition is None:
@@ -643,20 +616,14 @@ class RunService:
         return [kind for kind in SLOT_ORDER if kind == RUN_SLOT or kind in needed]
 
     async def _try_launch(self, run: WorkflowRun) -> bool:
-        """Grab the ceiling slots the pending pass needs; True means drive now.
+        """Grab the ceiling slots the pending pass needs, True means drive now.
 
-        Kinds are acquired cumulatively in the fixed global order
-        ``run -> apply -> model`` (``SLOT_ORDER``) and a denial stops the
-        walk: the run keeps every earlier kind it was granted and queues on
-        the denying kind (per-kind FIFO is authoritative — an already
-        queued run keeps its place). Release is always the strict reverse;
-        one shared order for every holder is what prevents a hold-and-wait
-        deadlock across the three ceilings.
-
-        A grant the walk cannot finish recording is given straight back: the
-        release set is derived from the persisted ``pending_pass``, so an
-        unpersisted prefix would leak ``apply``/``model`` for the whole
-        registry TTL (no acquire without a guaranteed release).
+        Kinds are acquired in the fixed global order and a denial stops the walk,
+        so the run keeps what it was granted and queues on the denying kind.
+        Release is always the strict reverse, one shared order for every holder,
+        which is what prevents a hold-and-wait deadlock. A grant the walk cannot
+        record is given straight back, because release derives from the persisted
+        ``pending_pass``.
         """
         granted: list[str] = []
         record = dict(run.pending_pass or {})
@@ -705,12 +672,11 @@ class RunService:
     ) -> None:
         """Best-effort undo of an acquire walk that raised mid-way.
 
-        Releases the queue entry (if the walk was denied) plus the granted
-        prefix in the strict reverse order, then keeps the slots flowing to the
-        runs those releases promoted. Any secondary failure is logged, never
-        raised: the caller must still see the original error. A cancellation is
-        the one exception, and it travels only after every promoted run has
-        been driven, exactly as in ``_release_and_promote``.
+        Releases the queue entry (if the walk was denied) and the granted prefix in
+        strict reverse order, then keeps the slots flowing to the runs those releases
+        promoted. A secondary failure is logged, never raised, so the caller still
+        sees the original error. A cancellation travels only after every promoted run
+        has been driven.
         """
         if not granted and waiting_on is None:
             return
@@ -953,15 +919,11 @@ class RunService:
         return kinds
 
     async def _release_slots(self, run: WorkflowRun) -> list[str]:
-        """Give back every kind this run's pass held (or queued on).
+        """Give back every kind this run's pass held or queued on.
 
-        Walks ``_release_order`` (strict reverse of the acquisition order) and
-        returns the ids each release promoted, deduplicated and in freeing
-        order. No promotion is driven from here: a run must finish letting go
-        of all three ceilings before another run starts using them, otherwise
-        a finished pass keeps an apply slot and a run slot claimed for the
-        whole duration of someone else's pass and the caps stop meaning
-        anything.
+        Returns the ids each release promoted, in freeing order. No promotion is
+        driven from here, because a run must let go of all three ceilings before
+        another run starts using them.
         """
         promoted: dict[str, None] = {}
         for kind in self._release_order(run):
@@ -972,30 +934,14 @@ class RunService:
         return list(promoted)
 
     async def _release_and_promote(self, run: WorkflowRun) -> None:
-        """Release every kind this run's pass held (or queued on), reverse
-        order, then re-drive each promoted run's recorded pass. This is the
-        single seam the suspend, completion, failure and cancel/timeout
-        paths share — no exit path may give back only part of the set.
+        """Release every kind this pass held, then re-drive each promoted run.
 
-        A failed record save must never strand a promoted run: the slots
-        are already back and the queue entry already removed, so skipping
-        the promotions here would leave the promoted run ``queued`` while
-        holding a granted slot with no queue entry — sweep-exempt forever.
-        The promotions therefore run in a ``finally`` with logging, the
-        same save-with-logging-and-promote-anyway discipline as
-        ``_rollback_partial_grant``. Driving the granted run is this
-        function's job alone: the ``_refresh_queue_positions`` that follows
-        only re-reads FIFO positions and reports a ``queued`` run with no
-        queue entry, it never re-drives one (see that docstring for why the
-        blind re-promote was removed).
-
-        Every promotion is attempted before a cancellation propagates: a
-        ``CancelledError`` that lands on one run's promote path is recorded,
-        the loop drives the remaining granted runs, and the caller then sees
-        the cancellation. A run stranded by that mid-loop cancellation is one
-        of the cases the PR2 holder-versus-waiter discriminator will repair,
-        because ``position()`` cannot tell a run that already holds a granted
-        slot from one still queued for it.
+        This is the single seam the suspend, completion, failure, cancel and
+        timeout paths share, so no exit path may give back only part of the set.
+        Promotions run in a ``finally`` with logging, because the slots are
+        already back and the queue entry already removed, so skipping them would
+        leave a run ``queued`` while holding a slot and sweep-exempt forever.
+        Every promotion is attempted before a cancellation propagates.
         """
         had_record = run.pending_pass is not None
         promoted = await self._release_slots(run)
@@ -1026,17 +972,13 @@ class RunService:
         await self._refresh_queue_positions()
 
     async def _promote(self, run_id: str) -> None:
-        """A run that just received a slot on one kind finishes the ordered
-        acquisition (later kinds, or queues again) and re-drives its recorded
-        pass — a mid-flow promotion resumes the step it paused at, it never
-        restarts the run.
+        """A run that just received a slot finishes the ordered acquisition and
+        re-drives its recorded pass, so a mid-flow promotion resumes the step it
+        paused at rather than restarting the run.
 
-        The reload and the re-walk run under the run's own lock (the same one
-        ``start``, ``decide`` and ``cancel`` take) so a cancel can never land
-        between them and have its terminal record overwritten by the walk's
-        ``status = "running"`` save. The pass itself is driven outside the
-        lock, like every other caller, so a cancel is never blocked behind an
-        in-flight Mastra call.
+        The reload and the re-walk run under the run's own lock, so a cancel can
+        never land between them. The pass itself is driven outside the lock, so a
+        cancel is never blocked behind an in-flight Mastra call.
         """
         async with self._run_lock(run_id):
             try:
@@ -1066,24 +1008,13 @@ class RunService:
     async def _refresh_queue_positions(self) -> None:
         """Re-read every ``queued`` run's FIFO position and nothing else.
 
-        A ``queued`` run with no entry on the kind it waits on is an anomaly
-        this refresh reports and does not repair. Reporting is the whole of
-        what is safe here: ``position()`` answers only "is this run on the
-        queue", never "does this run hold a slot" (see ``ceilings.position``
-        on both back-ends), so the ``None`` a granted-but-undriven run reads
-        is the same ``None`` every legitimately promoted run reads in the
-        window between ``release()`` handing over its slot and ``_promote``
-        saving ``status = "running"``. Driving from that state re-walks
-        ``_try_launch`` on a run that is already running: a duplicate Mastra
-        pass, duplicate model spend, a re-stamped heartbeat that hides the
-        very stall the sweeper exists to catch, and a second ``_apply_outcome``
-        releasing from a record whose ``pending_pass`` is already cleared,
-        which gives back only the run slot and leaks the apply and model
-        grants until the registry TTL. ``_promote`` skips terminal runs but
-        not running ones, and ``_run_lock`` is per-process, so a second
-        scanner or a second API process would take that bait. Repairing the
-        real stranded case needs a holder-versus-waiter discriminator the
-        ceilings do not expose today: a design change, not a patch.
+        A ``queued`` run with no queue entry is reported, never repaired.
+        ``position()`` answers whether a run is on the queue, not whether it holds
+        a slot, so a granted run and a promoted one read the same ``None`` in the
+        window between ``release()`` and ``_promote`` saving ``status``. Driving
+        from that state would run a duplicate Mastra pass and leak the apply and
+        model grants. Repairing the real stranded case needs a holder versus
+        waiter discriminator that the ceilings do not expose.
         """
         for active in await self._registry.list_active():
             if active.status != "queued":
@@ -1108,15 +1039,10 @@ class RunService:
     async def sweep_expired(self, now: datetime | None = None) -> list[str]:
         """Timeout stalled passes and unblock runs whose lock has expired.
 
-        Only runs actively consuming compute (``running``) are timed out,
-        and the deadline is measured from ``heartbeat_at`` — the last
-        serving-plane progress event (pass launch, step suspension,
-        decision) — never from ``started_at``: a run that keeps advancing
-        through steps is never reaped for total elapsed time, while a run
-        that stops advancing is bounded within one sweep interval of the
-        budget. Parked runs (a human, a lock) keep their receipts and are
-        never auto-approved; ``queued`` runs wait on a ceiling FIFO queue
-        and are exempt (see the branch below).
+        Only ``running`` runs are timed out, measured from ``heartbeat_at`` rather
+        than ``started_at``, so a run that keeps advancing is never reaped for
+        total elapsed time. Parked runs keep their receipts and are never
+        auto-approved, and ``queued`` runs are exempt.
         """
         moment = now or self._clock()
         affected: list[str] = []

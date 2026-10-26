@@ -2,27 +2,10 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
 /**
- * Read-only console tools for the chat assistant: what a run still needs,
- * who a person is, and which tickets really exist in the tenant's projects.
- *
- * The start-field contract, the employee directory, and the lane keyword
- * vocabulary all live in the Python serving plane
- * (`WorkflowDefinition.start_fields`, `fixtures/hr_directory.json`,
- * `ticket_search.KEYWORD_LANE_RULES`), so these tools do not re-declare any
- * of them. They call `POST /agent-tools/start-fields`,
- * `POST /agent-tools/employees`, and `POST /agent-tools/tickets` over the
- * same shared service bridge the knowledge routes use. A second declaration
- * in TypeScript would be a second answer to "what does this workflow need"
- * or "which ticket is an HR one", which is exactly the drift the published
- * contracts removed.
- *
- * None of the tools writes. Starting a run stays the console's confirm
- * button, which posts `/runs` with the user's credential: a model-initiated
- * start would be a writer with no receipt and no human behind it.
- *
- * The tenant is never a tool argument. It arrives on the request context that
- * the serving plane sets per turn, so no sentence in a prompt can point the
- * directory, the search, or the board at another tenant.
+ * Read-only console tools for the assistant: what a run needs, who a person
+ * is, and which tickets exist. All three call the Python serving plane, so no
+ * contract is re-declared here, nothing writes, and the tenant comes from the
+ * request context rather than from a tool argument.
  */
 
 /** Environment names shared with the knowledge bridge (`/knowledge/search`). */
@@ -102,6 +85,13 @@ const TICKETS_OUTPUT_SCHEMA = z.object({
   error: z.string().optional(),
   count: z.number().optional(),
   tickets: z.array(TICKET_SCHEMA).optional(),
+});
+
+/** One resolved ticket for an execute request; absent when the key matches none. */
+const EXECUTE_OUTPUT_SCHEMA = z.object({
+  ok: z.boolean(),
+  error: z.string().optional(),
+  ticket: TICKET_SCHEMA.optional(),
 });
 
 type ToolResult<T> = T & { ok: boolean; error?: string };
@@ -284,11 +274,56 @@ export function consolePrefillTools(options: ConsoleToolOptions) {
     },
   });
 
+  const executeTicket = createTool({
+    id: "execute_ticket",
+    description:
+      "Resolve one ticket by its exact Jira key (for example `SCRUM-10`) so the console can open that ticket's run tab. "
+      + "Call it when the user says to execute, run, or open a named ticket. "
+      + "It reads the ticket and reports the workflow lanes its own text matches (an HR ticket comes back with its HR lanes), "
+      + "so the console can offer only those lanes. It never starts anything: the run begins on the confirm button in the tab. "
+      + "If the key matches no ticket on this tenant's board, say so and do not invent one.",
+    inputSchema: z.object({
+      key: z
+        .string()
+        .min(2)
+        .max(40)
+        .describe("The ticket's exact Jira key, such as `SCRUM-10` or `HR-12`."),
+    }),
+    outputSchema: EXECUTE_OUTPUT_SCHEMA,
+    execute: async ({ key }, context) => {
+      const tenantId = readTenant(context.requestContext);
+      if (tenantId === undefined) {
+        return { ok: false, error: "this turn carries no tenant, so no ticket can be read" };
+      }
+      const clean = key.trim().toUpperCase();
+      if (!/^[A-Z][A-Z0-9_]{0,19}-[1-9][0-9]{0,9}$/.test(clean)) {
+        return { ok: false, error: `"${key}" is not a valid Jira ticket key` };
+      }
+      const answer = await post(
+        "/agent-tools/tickets",
+        { tenantId, key: clean },
+        context.abortSignal,
+      );
+      if (!answer.ok) return { ok: false, error: answer.error };
+      const record = answer.payload as { ok?: unknown; tickets?: unknown };
+      if (record.ok === false) {
+        return { ok: false, error: "the console could not read that ticket" };
+      }
+      const tickets = Array.isArray(record.tickets) ? record.tickets : [];
+      const first = tickets[0];
+      if (first === undefined) {
+        return { ok: true, error: `no ticket ${clean} is on this tenant's board` };
+      }
+      return { ok: true, ticket: first as z.infer<typeof TICKET_SCHEMA> };
+    },
+  });
+
   // Keys equal the tool ids, which is how Mastra records them in the tools map.
   return {
     resolve_start_fields: resolveStartFields,
     lookup_employee: lookupEmployee,
     list_tickets: listTickets,
+    execute_ticket: executeTicket,
   };
 }
 

@@ -8,14 +8,10 @@ import { issueInvestigationSkill } from "./investigation.js";
 import { systemDesignSkill } from "./system-design.js";
 
 /**
- * Coding-lane skills, staged per role.
- *
- * Each bundle is attached to one agent through its `skills` config, which makes
- * the agent auto-receive the `skill`, `skill_read`, and `skill_search` tools so
- * it can discover and load the guidance on demand. Content adapts the official
- * Mastra skill suite where a domain matched (understand-issue, react/tailwind
- * best-practices, api-design, code-review) and authors system-design and
- * event-driven fresh, since no official skill covered them.
+ * Coding-lane skills, staged per role. Each bundle is attached through an agent's
+ * `skills` config, which adds the `skill`, `skill_read` and `skill_search` tools so
+ * guidance loads on demand. Content adapts the official Mastra suite where a domain
+ * matched, and system-design and event-driven are authored fresh.
  */
 
 /** Investigator: research and root-cause reasoning only. */

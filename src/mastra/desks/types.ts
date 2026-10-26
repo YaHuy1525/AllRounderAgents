@@ -2,13 +2,9 @@ import { z } from "zod";
 
 /**
  * The desk seam: one provider-neutral interface every ticket-system adapter
- * implements (MSP plan section 5). The MSP flow talks only to this surface,
- * so Jira Cloud is the first implementation and HaloPSA, ConnectWise or
- * Autotask arrive later as adapters, not a refactor. Method names mirror the
- * provider-neutral `desk.*` policy family in policy/tools.yaml:
- * createTicket -> desk.create-ticket, addComment -> desk.comment,
- * setStatus -> desk.transition, attachEvidence -> desk.attach and
- * readTicket -> desk.read.
+ * implements, so Jira Cloud is the first implementation and HaloPSA or
+ * ConnectWise arrive later as adapters. Method names mirror the `desk.*` policy
+ * family in policy/tools.yaml (createTicket -> desk.create-ticket, and so on).
  */
 
 /** What a desk can do; the flow degrades (and records the fallback) when a

@@ -1,15 +1,10 @@
 """Read-only tool routes for the Mastra console agent.
 
-The chat agent runs in the Mastra plane, so tenant data reaches it only through
-this surface. The shared service token is the only credential it accepts, which
-is the same bridge ``/knowledge/search`` and ``/msp/vendors/lookup`` use: no
-console session can call these routes, and nothing here writes.
-
-That is deliberate. The agent may look a person up, may resolve the values a
-run needs, and may list the tenant's lane-matched tickets, but starting a run
-stays the human's confirm in the console, which calls ``POST /runs`` with a
-user credential. A model that could start a run itself would be a second
-writer with no receipt.
+The shared service token is the only credential accepted, the same bridge
+``/knowledge/search`` and ``/msp/vendors/lookup`` use, so no console session can reach
+these routes. The agent may look a person up, resolve start values and list
+lane-matched tickets, but starting a run stays the human's confirm in the console: a
+model that could start one would be a second writer with no receipt.
 """
 
 from __future__ import annotations
@@ -56,6 +51,7 @@ class AgentTicketsAsk(ApiModel):
     tenant_id: str = Field(min_length=1, max_length=100)
     workflows: list[str] = Field(default_factory=list, max_length=8)
     text: str = Field(default="", max_length=200)
+    key: str | None = Field(default=None, pattern=JIRA_TICKET_KEY_PATTERN)
     max_results: int = Field(default=30, ge=1, le=MAX_TICKETS)
 
     @field_validator("workflows")
@@ -157,10 +153,10 @@ def build_agent_tools_router(
         """
 
         _authorize(authorization)
-        if not payload.workflows and payload.text.strip() == "":
+        if not payload.workflows and payload.text.strip() == "" and payload.key is None:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
-                "a ticket query needs workflows or text",
+                "a ticket query needs workflows, text, or a key",
             )
         projects = tenant_project_allowlist.get(payload.tenant_id, [])
         if not projects:
@@ -177,6 +173,7 @@ def build_agent_tools_router(
                 projects,
                 workflows=payload.workflows,
                 text=payload.text,
+                key=payload.key or "",
                 limit=payload.max_results,
             )
         except (httpx.HTTPError, json.JSONDecodeError, OSError, ValueError):

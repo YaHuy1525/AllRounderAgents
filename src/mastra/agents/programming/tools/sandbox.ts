@@ -1,18 +1,9 @@
 /**
- * Per-run sandbox provisioner for the sandboxed git lanes, behind one provider
- * flag: `docker` (default) boots a local container, `e2b` boots an E2B cloud
- * VM. Either way one sandbox == one run == one machine holding a real git
- * checkout pinned at the run's `sourceSha` (the Docker template pins it at
- * build time via `ref`; the E2B template tracks the default-branch head, so
- * the checkout is re-pinned at runtime with a fetch/checkout). All editing,
- * validation and committing happens inside this machine; run state only
- * carries the change manifest.
- *
- * Credentials: cloning uses the build-time secret path above; pushing uses a
- * repo-scoped, short-TTL token handed to git through an env-conditional
- * `http.extraheader` (`GIT_PUSH_TOKEN`), which never lands in the remote URL,
- * `.git/config`, argv, or logs. The overlay key is cleared on teardown.
- * Nothing here ever logs a token value.
+ * Per-run sandbox provisioner behind one provider flag: `docker` (default) boots
+ * a local container, `e2b` a cloud VM. One sandbox == one run == one machine at
+ * the run's `sourceSha`, and run state only carries the change manifest. Pushing
+ * uses a short-TTL repo-scoped token through an env-conditional
+ * `http.extraheader`, so no token ever reaches the remote URL, argv or logs.
  */
 import { execFileSync } from "node:child_process";
 

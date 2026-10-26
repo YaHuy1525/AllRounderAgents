@@ -10,14 +10,10 @@ import {
 } from "./seams.js";
 
 /**
- * Memory-backed `CaseHistory` for hosts with persistent Mastra storage
- * (plan §5.1): case records live as structured messages in one tenant-scoped
- * thread. Exact lookup reads the thread; similar-case recall asks Memory
- * (vector search when an embedder is configured, message history otherwise)
- * and rescores locally with the same weights as the fixture implementation.
- *
- * Never used in tests or CI — `createSecurityFlow` defaults to the fixture
- * `MemoryCaseHistory`; only the host injects this implementation.
+ * Memory-backed `CaseHistory` for hosts with persistent Mastra storage: case
+ * records live as structured messages in one tenant-scoped thread, and
+ * similar-case recall asks Memory then rescores locally. Tests and CI stay on the
+ * fixture implementation; only the host injects this one.
  */
 
 const DEFAULT_RESOURCE_ID = "security-cases";

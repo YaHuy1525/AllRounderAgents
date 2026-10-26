@@ -13,26 +13,11 @@ import type {
 import { fixtureFile } from "./fixtures.js";
 
 /**
- * Mastra-native knowledge plane. One PgVector store on the instance `vectors`
- * key, one ingest path, one embedder. Seeding follows the Mastra RAG
- * tutorial: `MDocument.fromMarkdown(...).chunk({ strategy: "recursive" })`
- * at natural boundaries (512 chars, 50 overlap), chunk text kept at
- * `metadata.text` so retrieval results can be reranked, deterministic ids,
- * and governance fields (`title`, `reviewed`, `staleAfter`, `stale`,
- * `tenantId`, `domain`, `canonical`) parsed at ingest into metadata.
- * Idempotency: each source's vectors are deleted by `sourceId` filter before
- * re-upsert, so re-seeding replaces rather than duplicates.
- *
- * Consequences of the MDocument-for-everything decision: passages are chunk
- * windows, not paragraphs, so citations carry a `chunk-N` span instead of a
- * character range, and the `Reviewed:` header no longer survives inside
- * passage text — it lives in metadata instead.
- *
- * Embeddings read the same OpenAI-compatible environment block the Python
- * service pins (`EMBEDDING_*` falling back to `MODEL_*`), so Mastra vectors
- * stay comparable with production ones. The HR pilot retriever degrades to
- * the injected baseline on any failure; the lane never goes dark because the
- * vector path did.
+ * The Mastra-native knowledge plane: one PgVector store, one ingest path, one
+ * embedder. Chunks are recursive MDocument splits and re-seeding deletes by
+ * `sourceId` first, so it replaces rather than duplicates. Passages are chunk
+ * windows, so citations carry a `chunk-N` span. Embeddings read the same
+ * `EMBEDDING_*`/`MODEL_*` block the Python service pins.
  */
 
 const DEFAULT_INDEX_NAME = "hr_policy";
@@ -322,14 +307,10 @@ export async function ingestMarkdownCorpus(
 }
 
 /**
- * HR-help `HrPolicyRetriever` over the Mastra-owned `hr_policy` index. First
- * use seeds the index from the company handbook corpus through the shared
- * MDocument ingest; later retrievals go straight to cosine top-k. When a
- * reranker is attached (P4), cosine over-fetches `2k` candidates and the
- * cross-encoder reorders them down to `k` — rerank happens on the retrieved
- * results, never as a second database pass. Any vector failure degrades to
- * the injected baseline retriever (the Python hybrid or the on-disk lexical
- * one); a reranker failure keeps the cosine order.
+ * HR-help `HrPolicyRetriever` over the Mastra-owned `hr_policy` index. First use
+ * seeds it from the company handbook corpus; later retrievals go straight to
+ * cosine top-k, with an attached reranker over-fetching 2k candidates rather than
+ * making a second pass. Any vector failure degrades to the injected baseline.
  */
 export class MastraRagHrPolicyRetriever implements HrPolicyRetriever {
   private readonly indexName: string;

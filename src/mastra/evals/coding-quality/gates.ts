@@ -3,15 +3,11 @@ import { createScorer, notScorable } from "@mastra/core/evals";
 import type { CodingOutput, CodingSnapshot } from "./snapshot.ts";
 
 /**
- * Deterministic coding-quality gates (ported from
- * `allrounder_api.judging.coding_deterministic_outcomes`). Coverage, evidence
- * grounding, and the validator verdict are facts recorded on the artifact, so
- * they are enforced mechanically and never sent to a judge. A failure on any of
- * these forces the case to fail regardless of the judge score.
- *
- * Each gate is its own registered `createScorer` so the number lands in
- * `mastra_scorers` and Studio can resolve it, exactly like the coding-lane
- * scorers in `src/mastra/shared/scorers.ts`.
+ * Deterministic coding-quality gates, ported from
+ * `allrounder_api.judging.coding_deterministic_outcomes`: coverage, evidence
+ * grounding and the validator verdict are facts on the artifact, so a failure on
+ * any forces the case to fail regardless of the judge. Each is its own
+ * `createScorer` so the number lands in `mastra_scorers` and Studio can resolve it.
  */
 
 export type GateId = "all_criteria_covered" | "coverage_evidence_resolves" | "validation_passed";

@@ -1,23 +1,14 @@
 """Coding-lane benchmark read-model.
 
-A pure, dependency-light aggregation over the durable ``run_archive`` mirror,
-mirroring the ``metrics.py`` style (no LLM, no clocks beyond the timestamp).
-It answers what HULA measured but we never reported: a per-step approval
-funnel (``approvals / (approvals + retries + stops)``) and a lane pass rate
-paired with cost-per-pass, derived entirely from data we already persist.
+A pure aggregation over the durable ``run_archive`` mirror in the ``metrics.py``
+style, so the numbers survive a console restart. It answers a per-step approval
+funnel (``approvals / (approvals + retries + stops)``) and a lane pass rate paired
+with cost per pass. Same snapshot in, same document out, with counts and ratios
+only.
 
-Numbers survive a console restart because the model reads the archived
-terminal runs, not the in-process Prometheus counters. Same archive snapshot
-in, same document out: only counts and ratios, never averages across lopsided
-runs.
-
-Decision mapping (the crux, applied identically everywhere):
-    approvals  = proceed + edit   (both move the run forward past the gate)
-    retries    = regenerate
-    stops      = abort
-    revisits   = back             (reported separately, out of the rate)
-    excluded   = retry_lock       (infra heal, not a human judgment)
-    gated step = any archived step carrying a non-null decision
+Decision mapping: ``approvals`` are proceed and edit, ``retries`` are regenerate,
+``stops`` are abort, ``revisits`` are back (reported apart from the rate), and
+``retry_lock`` is excluded as an infra heal rather than a human judgment.
 """
 
 from __future__ import annotations

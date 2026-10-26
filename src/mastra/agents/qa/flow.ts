@@ -187,20 +187,9 @@ export interface QaFlowDeps {
  *   intake -> analyse -> design -> approve-cases -> execute -> assess
  *          -> approve-defects -> file-defects -> close
  *
- * Every step is an interactive checkpoint, matching the platform's run model
- * (the API records one decision per step). Two of them are real gates — the
- * case set and the findings — and two are writes: `execute` drives the approved
- * cases, `file-defects` performs the governed Jira writes.
- *
- * What makes the lane honest is where the answers come from:
- *
- *   * Coverage is a pure function, so approval cannot mean "probably covered".
- *   * Execution availability is an environment fact, so a missing browser
- *     produces `blocked` results and a visible reason, never a fake pass.
- *   * The verdict is computed from the observed results, so a defect exists only
- *     where something actually failed.
- *   * Filing is keyed on `{storyKey}:{caseId}` in the Python plane, so a re-run
- *     comments instead of filing a twin.
+ * A missing browser yields `blocked` rather than a fake pass, the verdict comes
+ * only from observed results, and filing keys on `{storyKey}:{caseId}` so a re-run
+ * comments instead of filing a twin.
  */
 export function createQaFlow(deps: QaFlowDeps = {}) {
   const model = deps.model ?? createQaSquadModel();

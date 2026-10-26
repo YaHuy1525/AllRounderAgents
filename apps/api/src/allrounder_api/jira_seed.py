@@ -1,17 +1,12 @@
 """Create workflow test tickets in the configured Jira project.
 
-Idempotent: every ticket is deduped with an exact JQL summary search, so
-re-runs skip what already exists. The set covers two test cases per console
-workflow (PR Review, Issue Resolution, Feature Implementation, Dependency
-Update, Accessibility Audit, Vendor Onboarding, Leave Request, New-Hire
-Onboarding, Employee Offboarding, Candidate Screening, HR Help), plus the
-two security-lane alerts and the coding-lane refresh
-batch anchored to the open Draft PRs. The MSP and Bills lanes start from
-email intake instead of Jira tickets, so the demo scripts seed those two,
-not this one.
+Idempotent, because every ticket is deduped with an exact JQL summary search, so a
+re-run skips what already exists. The set covers two test cases per console
+workflow plus the security-lane alerts and the coding-lane refresh batch anchored
+to open Draft PRs. The MSP and Bills lanes start from email intake, so the demo
+scripts seed those two instead.
 
-``--match`` seeds only the tickets whose summary or labels contain the given
-text.
+``--match`` seeds only the tickets whose summary or labels contain the given text.
 """
 
 from __future__ import annotations
@@ -1064,142 +1059,6 @@ TICKETS: tuple[TicketSpec, ...] = (
             "when the run returns the provisioning order from the checklist, calls "
             "out the background-check prerequisite (references-and-background-checks.md), "
             "and does not grant hr-console before the first-day review."
-        ),
-    },
-    # -- Finance lane: the pinned phase3 reconciliation exceptions ---------
-    {
-        "summary": "Finance: amount mismatch on INV-2 blocks the period close",
-        "labels": ["finance", "invoice", "reconcile", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Finance Reconciliation. fixtures/phase3_finance.json "
-            "pins the expected exceptions for the period: an amount_mismatch on "
-            "externalRef INV-2 owned by the gl specialist, alongside the matched "
-            "ledger and bank rows for account 1000.\n\n"
-            "Start the run with the period close for the fixture ledger. Done when "
-            "the run isolates INV-2 as an amount mismatch rather than an unmatched "
-            "line, reports both sides of the difference, and leaves the journal "
-            "write to a human approval gate."
-        ),
-    },
-    {
-        "summary": "Finance: PAY-1 has a ledger entry with no bank counterpart",
-        "labels": ["finance", "ledger", "reconcile", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Finance Reconciliation. The pinned exceptions "
-            "list an unmatched_ledger on externalRef PAY-1 for the gl specialist: "
-            "a payroll journal line the bank feed never carried.\n\n"
-            "Start the run with the same period fixture. Done when the run classifies "
-            "PAY-1 as ledger-side-only (not a variance), separates it from the INV-2 "
-            "amount mismatch, and proposes the follow-up question to payroll rather "
-            "than adjusting the journal."
-        ),
-    },
-    {
-        "summary": "Finance: unmatched bank deposit DEP-9 needs treasury tracing",
-        "labels": ["finance", "bank", "treasury", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Finance Reconciliation. The third pinned "
-            "exception is an unmatched_bank on externalRef DEP-9 owned by the "
-            "treasury specialist: money arrived with no journal line behind it.\n\n"
-            "Start the run with the same period fixture. Done when the run routes "
-            "DEP-9 to treasury, states that an untraced deposit cannot be booked as "
-            "revenue on the run's own authority, and asks the human to identify the "
-            "payer before any posting."
-        ),
-    },
-    {
-        "summary": "Finance: month-end variance report across the fixture ledger",
-        "labels": ["finance", "variance", "reconciliation", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Finance Reconciliation. The fixture period holds "
-            "three ledger rows and three bank rows in USD against account 1000, with "
-            "exactly three pinned exceptions, so a correct variance report must sum "
-            "to the difference those three rows create.\n\n"
-            "Start the run asking for the period variance summary. Done when the run "
-            "reports matched totals, lists the three exceptions with their owner "
-            "specialist, and keeps the arithmetic deterministic (no model-invented "
-            "figures in the totals)."
-        ),
-    },
-    {
-        "summary": "Finance: expense claim above the travel policy ceiling",
-        "labels": ["finance", "expense", "audit", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case that pairs the finance and handbook planes. "
-            "expenses-and-travel.md is seeded in hr:policy and sets the claim rules "
-            "and ceilings; the finance lane decides what gets posted.\n\n"
-            "Start the run with a claim for a Lisbon-to-Austin trip where the flight "
-            "class and one undocumented dinner exceed the ceiling. Done when the run "
-            "cites the policy ceiling it checked, splits the approvable part from the "
-            "exception, and holds the undocumented item for human review instead of "
-            "rejecting the whole claim."
-        ),
-    },
-    {
-        "summary": "Finance: assemble the audit pack for the period close",
-        "labels": ["finance", "audit", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Finance Reconciliation with the audit-pack path. "
-            "The close has three unresolved exceptions (INV-2, PAY-1, DEP-9) and the "
-            "quarterly audit freeze lands 2027-03-29.\n\n"
-            "Start the run asking for the evidence pack behind this period's close. "
-            "Done when the pack carries each exception with both sides of the "
-            "comparison, the run log that produced the classification, and the "
-            "approval receipts, so an auditor can retrace every number without a "
-            "live model call."
-        ),
-    },
-    # -- Support lane -------------------------------------------------------
-    {
-        "summary": "Support: customer cannot log in after the identity migration",
-        "labels": ["support", "customer", "login", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Support Triage. A customer reports that after "
-            "the identity provider change their account password reset link loops "
-            "back to the login page, and they cannot reach the account screen.\n\n"
-            "Start the run with that customer description. Done when the run "
-            "classifies the ticket into the support lane, asks for the account "
-            "identifier before touching anything, proposes read-only diagnosis steps, "
-            "and does not reset or merge an account without approval."
-        ),
-    },
-    {
-        "summary": "Support: duplicate charge refund request on one account",
-        "labels": ["support", "customer", "refund", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Support Triage. A customer was billed twice for "
-            "the same subscription month and wants the second charge refunded.\n\n"
-            "Start the run with the refund request. Done when the run separates the "
-            "verification step (both transactions, same account, same period) from "
-            "the money movement, drafts the customer reply, and stops at the "
-            "approval gate because a refund is an irreversible write."
-        ),
-    },
-    # -- Marketing lane (absent from the current board spread) --------------
-    {
-        "summary": "Marketing: Q4 launch newsletter copy review before send",
-        "labels": ["marketing", "newsletter", "campaign", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Marketing Draft. The launch newsletter copy for "
-            "the Q4 campaign needs a review pass against the brand voice and the "
-            "send date; no campaign calendar exists in the store yet, so the run has "
-            "to work from the ticket body alone.\n\n"
-            "Start the run with the draft in the ticket. Done when the run classifies "
-            "into marketing, returns concrete edits rather than generic praise, and "
-            "leaves the send to a human because publishing is an outbound write."
-        ),
-    },
-    {
-        "summary": "Marketing: brand refresh landing page for the product launch",
-        "labels": ["marketing", "brand", "launch", "copy", "sim", "workflow-test"],
-        "description": (
-            "Workflow test case for Marketing Draft. A launch landing page needs "
-            "headline, sub-headline and call-to-action copy in two tones so the team "
-            "can pick one.\n\n"
-            "Start the run with the product brief in the ticket. Done when the run "
-            "produces both tone variants with the reason each fits, keeps claims "
-            "non-fabricated (no invented pricing or customer counts), and asks for "
-            "approval before anything goes live."
         ),
     },
     # -- DevOps lane --------------------------------------------------------

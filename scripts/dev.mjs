@@ -14,9 +14,10 @@
 // Start Redis (for example: docker compose up -d redis) before running this
 // script to get the shared Redis backend instead.
 //
-// If a Mastra host already answers on its port (a separate `npm run dev:mastra`
-// terminal or the Compose stack), `dev` and `dev:backend` reuse it and skip
-// starting a second one, which would crash on the occupied port.
+// If a Mastra host for this project already answers on its port (a separate
+// `npm run dev:mastra` terminal or the Compose stack), `dev` and `dev:backend`
+// reuse it and skip starting a second one. A host that answers but is not this
+// project's does not count as reuse; see mastraHostRole below.
 //
 // The API needs its Python environment. If a local venv exists, this script
 // uses its interpreter directly; otherwise it falls back to a `python` already
@@ -71,7 +72,39 @@ function portIsReachable(host, port) {
 
 const redisTarget = parseRedisTarget(process.env.REDIS_URL);
 const MASTRA_PORT = Number(process.env.MASTRA_PORT ?? 4111);
-const mastraAlreadyUp = await portIsReachable("localhost", MASTRA_PORT);
+
+// An open port is not proof it is our host. Another project's dev server on
+// 4111 passed the plain TCP probe below, so this launcher reused an app with no
+// console-assistant agent, and the chat failed a long way from the reason. Ask
+// the responder who it is, and move to the next free port when it is somebody
+// else. A 401 or 403 counts as ours: the agent list is auth-protected.
+async function mastraHostRole(port) {
+  if (!(await portIsReachable("localhost", port))) return "free";
+  try {
+    const response = await fetch(`http://localhost:${port}/api/agents`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (response.status === 401 || response.status === 403) return "ours";
+    return (await response.text()).includes("console-assistant") ? "ours" : "foreign";
+  } catch {
+    return "foreign";
+  }
+}
+
+async function firstFreePort(start, span) {
+  for (let candidate = start; candidate <= start + span; candidate += 1) {
+    if (!(await portIsReachable("localhost", candidate))) return candidate;
+  }
+  return null;
+}
+
+const preferredRole = await mastraHostRole(MASTRA_PORT);
+let mastraPort = MASTRA_PORT;
+let reuseMastra = preferredRole === "ours";
+if (preferredRole === "foreign") {
+  const alternate = await firstFreePort(MASTRA_PORT + 1, 20);
+  if (alternate !== null) mastraPort = alternate;
+}
 
 // Environment for the API child. Two host-development corrections layered on
 // top of .env (pydantic-settings lets the process environment win over the
@@ -84,12 +117,20 @@ const mastraAlreadyUp = await portIsReachable("localhost", MASTRA_PORT);
 //    with no containers. Terminal runs still archive to Postgres, so run
 //    history survives a reload.
 const redisReachable = await portIsReachable(redisTarget.host, redisTarget.port);
+const mastraOrigin = `http://localhost:${mastraPort}`;
 const apiEnv = {
   ...process.env,
-  MASTRA_BASE_URL: process.env.MASTRA_BASE_URL ?? "http://localhost:4111",
+  MASTRA_BASE_URL: process.env.MASTRA_BASE_URL ?? mastraOrigin,
   ...(process.env.RUNS_BACKEND
     ? {}
     : { RUNS_BACKEND: redisReachable ? "redis" : "memory" }),
+};
+// The browser talks to the Mastra host directly, so it has to be told the same
+// resolved origin. next.config.ts defaults to 4111, which is wrong whenever
+// this launcher had to step off that port.
+const uiEnv = {
+  ...process.env,
+  NEXT_PUBLIC_MASTRA_URL: process.env.NEXT_PUBLIC_MASTRA_URL ?? mastraOrigin,
 };
 
 // Each entry: label, group membership, the URL to print, the executable and
@@ -119,18 +160,22 @@ const services = [
     name: "mastra",
     group: "backend",
     color: "\x1b[35m",
-    port: MASTRA_PORT,
+    port: mastraPort,
+    // mastra dev reads PORT (its own default is 4111), so the resolved port
+    // travels to the child instead of being a printed suggestion only.
+    env: { ...process.env, PORT: String(mastraPort) },
     // npm is a .cmd shim on Windows, which spawn() rejects unless it runs
     // through a shell, so every service is launched with shell: true below.
     command: "npm",
     args: ["run", "dev:mastra"],
-    skipIfPortUp: mastraAlreadyUp,
+    skipIfPortUp: reuseMastra,
   },
   {
     name: "ui",
     group: "frontend",
     color: "\x1b[32m",
     port: 5173,
+    env: uiEnv,
     command: "npm",
     args: ["run", "dev", "-w", "@allrounder/approval-ui"],
   },
@@ -139,6 +184,15 @@ const services = [
 const selected = services.filter(
   (service) => groupArg === "all" || service.group === groupArg,
 );
+
+if (preferredRole === "foreign") {
+  process.stdout.write(
+    `\x1b[33mnote\x1b[0m http://localhost:${MASTRA_PORT} answers, but it is not this project's Mastra host (no console-assistant agent). ` +
+      (mastraPort === MASTRA_PORT
+        ? "No free port was found nearby, so the host will fail to bind. Stop that server or set MASTRA_PORT.\n"
+        : `Binding this project's host to http://localhost:${mastraPort} and pointing the API and UI there.\n`),
+  );
+}
 
 const children = [];
 const started = [];

@@ -5,24 +5,9 @@ import { appliesToTags, type CriterionSpec, type Rubric } from "./rubric.ts";
 import type { CodingSnapshot } from "./snapshot.ts";
 
 /**
- * The rubric-driven LLM judge set for coding-quality. Built entirely from
- * `evals/judge/rubrics/coding-quality.json`: every `score` and `noul` criterion
- * becomes a `createScorer().analyze()` judge, so criteria stay data-driven and
- * no verdict logic is hardcoded here.
- *
- * Design note (a deliberate deviation from the plan text): the plan named
- * `createClassifierScorer` for the ordinal `score` criteria. That primitive
- * requires constructing a configured `Classifier` object per rubric, which is
- * heavier and couples the judge to a second framework surface. `createScorer`
- * with an `.analyze()` step is the canonical LLM-as-judge primitive, expresses
- * both binary (`noul`) and graded (`score`) dimensions, and keeps the whole set
- * generated from one rubric. The ordinal `levels` are embedded in the prompt and
- * the judge returns a graded 0..1 value.
- *
- * Offline safety: these scorers only reach the model when a judge is configured.
- * When no judge model is present the runner registers just the deterministic
- * gates, so the coverage-gate veto is still provable in CI and the LLM judge is
- * never a merge gate.
+ * Coding-quality judges generated from `evals/judge/rubrics/coding-quality.json`,
+ * so no verdict logic is hardcoded. They register only when a judge model is
+ * configured, which keeps the deterministic gates the only merge gate.
  */
 
 const JUDGE_INSTRUCTIONS =

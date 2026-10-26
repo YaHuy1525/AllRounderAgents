@@ -1,22 +1,7 @@
-// Reusable GitHub MCP client (coding-lane MCPClient redesign).
-//
-// One `MCPClient` speaks the hosted GitHub MCP server over Streamable HTTP,
-// exactly as https://mastra.ai/docs/connections/mcp documents it. Its
-// discovered tools (`github_<name>`) are wired statically onto the coding
-// agents so the model sees the real GitHub tool catalog and decides which to
-// call, instead of the retired hand-written backend that hardcoded tool names.
-//
-// Governance carried by the client config itself (both are the docs' Security
-// + Tool-approval options):
-//   * `requireToolApproval` gates every mutating tool pre-execution (Option B):
-//     the agent can *see* push/PR tools but they suspend for a human rather than
-//     auto-execute, so the deterministic Draft-PR writer stays the only path
-//     that actually opens a pull request.
-//   * `allowedHosts` pins outbound contact to the configured server host.
-//
-// The client is constructed only when a token exists. With no credentials it is
-// `undefined` and discovery resolves an empty map, so tests and the dev
-// fallback never open a socket.
+// One MCPClient over the hosted GitHub MCP server (Streamable HTTP), built only
+// when a token exists so tests never open a socket. `requireToolApproval` gates
+// mutating tools, which keeps the deterministic Draft-PR writer the only path
+// that opens a pull request, and `allowedHosts` pins outbound contact.
 
 import { MCPClient } from "@mastra/mcp";
 

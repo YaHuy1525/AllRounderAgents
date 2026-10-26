@@ -16,16 +16,10 @@ import {
 import { coverageGaps } from "./coverage.js";
 
 /**
- * The verdict, computed from what the executor observed. Pure and model-free:
- * the same execution artifact must always produce the same verdict, so a
- * verdict in a report can be re-derived and argued with.
- *
- * Two rules carry the honesty of the lane:
- *
- *   * A requirement is verified only by a case that passed. Coverage at design
- *     time says a case exists; a verdict says one was observed working.
- *   * Only `failed` becomes a defect. `blocked` and `not_run` are honest
- *     non-answers — a missing browser must not produce a ticket avalanche.
+ * The verdict, computed from what the executor observed: pure and model-free, so
+ * the same artifact always yields the same verdict and a report can be re-derived
+ * and argued with. A requirement is verified only by a case that passed, and only
+ * `failed` becomes a defect — `blocked` and `not_run` must not file a ticket.
  */
 
 /** Evidence references are capped so a ticket body stays readable. */

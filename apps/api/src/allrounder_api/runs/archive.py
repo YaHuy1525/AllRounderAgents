@@ -1,11 +1,9 @@
 """Best-effort Postgres mirror of terminal runs.
 
-Redis keeps runs hot for a bounded TTL; the archive is the durable mirror so
-``GET /runs?scope=history`` can still serve a run long after its Redis record
-expired. Writes fire on terminal transitions only (completed, failed,
-cancelled) — the moment a run's record stops changing. The archive never
-raises into the run lifecycle: every write and read swallows its own failure
-and logs, the same discipline the case-event trail follows.
+Redis keeps runs hot for a bounded TTL, so once a record expires the archive is what
+``GET /runs?scope=history`` reads. Writes fire on terminal transitions only, and the
+archive never raises into the run lifecycle: every read and write swallows its own
+failure and logs.
 """
 
 from __future__ import annotations

@@ -152,23 +152,10 @@ function tracingEnabled(): boolean {
 }
 
 /**
- * Persistent Mastra storage when `DATABASE_URL` is set, in-memory otherwise
- * (tests, CI, local machines without Postgres). Persistence is what lets
- * suspended runs survive a host restart and the case index outlive a single
- * process (plan §5.1).
- *
- * Metrics rule from the docs: Studio's metrics panel requires an
- * observability domain whose `getFeatures()` includes `"metrics"`. The
- * classic `PostgresStore` stores traces but cannot serve metric queries
- * ("Metrics are not available with your current storage") and cannot list
- * scores, so the production store is `PostgresStoreVNext`: the normal
- * Postgres domains plus the vNext observability domain (metrics, logs,
- * scores, trace queries). Its `observability` connection intentionally
- * shares the primary pool config for this low-volume deployment; the server
- * logs one warning per boot about the shared connection, which is expected.
- * The `DATABASE_URL`-free fallback is `InMemoryStore`, whose built-in
- * observability domain is metrics-capable too, so tests and credential-free
- * dev runs stay entirely in-process. DuckDB is no longer part of the stack.
+ * `DATABASE_URL` selects `PostgresStoreVNext`, whose vNext observability domain
+ * is what the Studio metrics panel needs (plain `PostgresStore` cannot serve
+ * metrics or list scores). Without it, `InMemoryStore` keeps tests in process.
+ * Only the persistent store lets suspended runs survive a host restart.
  */
 function buildMastraStorage(): MastraCompositeStore {
   const connectionString = process.env.DATABASE_URL;
@@ -222,21 +209,11 @@ function buildSecurityCaseHistory(memory: Memory): CaseHistory {
 }
 
 /**
- * `coding`, `review`, `issues`, `features`, `dependencies` and `accessibility`
- * are optional on purpose: all six need live GitHub credentials/policy, so
- * they register only when a host (e.g. the API layer) injects them. Finance
- * always runs on the safe in-memory ledger default, vendors always runs on
- * the in-memory vendor registry, and leave/onboarding/offboarding/screening
- * always run on the fixture-backed employee directory and ATS plus their
- * in-memory registries while HR help runs on the fixture policy corpus and
- * its in-memory answer registry (the HR lanes make no network calls). The
- * security lane always runs on the fixture seams, with the case history
- * upgraded to Mastra Memory whenever `DATABASE_URL` is set (§5.1). The MSP
- * lane always runs on the in-memory desk and mailbox, with the host upgrading
- * to the Jira Cloud adapter and the on-disk outbox when the JIRA_* and MAIL_*
- * variables are set. Bills always runs on the in-memory ledger default (the
- * host injects the Xero ledger and the platform vendor registry), and the
- * post step is receipt-gated either way.
+ * The GitHub lanes (coding, review, issues, features, dependencies,
+ * accessibility) register only when the host injects their deps, because each
+ * needs live credentials and policy. Every other lane always registers on
+ * in-memory or fixture defaults, so the instance boots offline, and the bills
+ * post step stays receipt gated either way.
  */
 export function createAllRounderMastra(
   deps: {
@@ -382,18 +359,11 @@ export function createAllRounderMastra(
       ...(cors === undefined ? {} : { cors }),
     },
     storage,
-    // Native Mastra observability, opt-in via `MASTRA_OBSERVABILITY=true`
-    // (off by default so the vitest suites and ordinary runs pay nothing; the
-    // key must be absent rather than undefined). `MastraStorageExporter`
-    // writes trace/log/metric/score events into the observability domain of
-    // the store above (Postgres vNext when `DATABASE_URL` is set, in-memory
-    // otherwise), which Mastra Studio reads back — no external collector and
-    // no side-car database. `MODEL_CHUNK` spans are dropped as pure
-    // noise, the sensitive-data filter stays on for the SOC/HR lanes' PII, and
-    // the run/tenant context keys are lifted onto spans so a
-    // suspended-then-resumed run stitches under one `runId`. Cost authority
-    // stays with `run_archive`; this is the developer diagnostic view, not the
-    // billing source of truth.
+    // Native Mastra observability, opt-in via `MASTRA_OBSERVABILITY=true` (the
+    // key must be absent rather than undefined). Traces, logs, metrics and scores
+    // go into the store's observability domain for Studio, so no external
+    // collector is needed; `MODEL_CHUNK` spans are dropped, the sensitive-data
+    // filter stays on for SOC/HR PII, and cost authority remains `run_archive`.
     ...(tracingEnabled()
       ? {
           observability: new Observability({

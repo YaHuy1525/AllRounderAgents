@@ -26,21 +26,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Knowledge-base retriever for the HR help lane: the same citation
- * discipline as the fixture corpus (source id, character span, score, stale
- * flag), but served by the platform API's hybrid retrieval
- * (`POST /knowledge/search`, shared bearer token) instead of keyword overlap
- * over files on disk. The tenant plus the `hr:policy` partition map onto the
- * store scope, so one tenant's handbook never grounds another tenant's
- * answer.
- *
- * Two failure modes are deliberately different. A service that answers with
- * no passages is the truth about the corpus, so it is returned as such and
- * the lane reports the empty retrieval for a human to fix the corpus. A
- * service that cannot be reached or answers with a passage the contract
- * cannot parse is an outage, so it falls back to the on-disk corpus when one
- * is supplied and the answer keeps its citations; without a fallback the lane
- * sees an empty retrieval, because partial trust is worse than a human review.
+ * HR policy retriever served by the platform API's hybrid retrieval, keeping the
+ * fixture corpus's citation discipline. Tenant plus the `hr:policy` partition
+ * scope the store, so one tenant's handbook never grounds another's answer.
+ * No passages is the truth about the corpus and is reported as such; an outage
+ * or an unparseable passage falls back to the on-disk corpus, because partial
+ * trust is worse than a human review.
  */
 export class HttpHrPolicyRetriever implements HrPolicyRetriever {
   private readonly baseUrl: string;

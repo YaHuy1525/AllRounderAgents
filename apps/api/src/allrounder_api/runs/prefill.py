@@ -1,21 +1,13 @@
 """Deterministic start-field prefill: fill only what a record can prove.
 
-The console asks the human for the values it cannot obtain, and asks the
-directory for the ones it can. Every suggestion carries the record it came
-from, because a filled field the user cannot trace is worse than an empty one:
-a wrong employee id starts a leave request against the wrong person, and no
-chat reply should be able to do that quietly.
+Every suggestion carries the record it came from, because a filled field the user
+cannot trace is worse than an empty one, and a wrong employee id starts a leave
+request against the wrong person.
 
-What is never suggested, on purpose:
-
-* ``date``, ``number`` and ``text`` fields, which the flow derives or the user
-  owns;
-* enum values, which would be a guess about intent;
-* a second employee, when two directory rows match, because the tie is exactly
-  the case where a human must choose.
-
-The catalog's ``WorkflowDefinition.start_fields`` stays the only declaration of
-what a workflow needs, so this module adds no second contract to keep in sync.
+Never suggested on purpose: ``date``, ``number`` and ``text`` fields, enum values
+(a guess about intent), and a second employee when two directory rows match, since
+that tie is exactly where a human must choose. ``WorkflowDefinition.start_fields``
+stays the only declaration of what a workflow needs.
 """
 
 from __future__ import annotations

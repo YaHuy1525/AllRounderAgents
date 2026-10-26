@@ -138,6 +138,18 @@ def test_search_requires_workflows_or_text() -> None:
         search_lane_tickets(_transport(), ["HR"])
 
 
+def test_search_by_key_returns_one_ticket_with_its_lanes() -> None:
+    # One key, no lanes and no needle: the guard accepts it, and the row still
+    # reports every lane its own text tripped so the console can limit the tab.
+    found = search_lane_tickets(_transport(), ["HR", "SCRUM"], key="sec-1")
+    assert [ticket.key for ticket in found] == ["SEC-1"]
+    assert found[0].matched == ("security",)
+
+
+def test_search_by_key_misses_answer_empty_rather_than_error() -> None:
+    assert search_lane_tickets(_transport(), ["HR", "SCRUM"], key="HR-404") == []
+
+
 def test_search_honours_the_result_limit() -> None:
     found = search_lane_tickets(
         _transport(), ["HR", "SCRUM"], text="", workflows=["leave"], limit=0
@@ -189,6 +201,38 @@ def test_agent_door_unknown_tenant_answers_empty_not_error() -> None:
 def test_agent_door_refuses_a_query_with_neither_workflows_nor_text() -> None:
     response = _agent_app().post(
         "/agent-tools/tickets", headers=AGENT_HEADERS, json={"tenantId": "t1"}
+    )
+    assert response.status_code == 422
+
+
+def test_agent_door_resolves_one_ticket_from_just_a_key() -> None:
+    # The execute path: one key in, one row out, with the lanes the row matched.
+    response = _agent_app().post(
+        "/agent-tools/tickets",
+        headers=AGENT_HEADERS,
+        json={"tenantId": "t1", "key": "HR-1"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert [row["key"] for row in body["tickets"]] == ["HR-1"]
+    assert body["tickets"][0]["matchedWorkflows"] == ["leave"]
+
+
+def test_agent_door_key_miss_answers_empty() -> None:
+    response = _agent_app().post(
+        "/agent-tools/tickets",
+        headers=AGENT_HEADERS,
+        json={"tenantId": "t1", "key": "HR-404"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "count": 0, "tickets": []}
+
+
+def test_agent_door_rejects_a_malformed_key() -> None:
+    response = _agent_app().post(
+        "/agent-tools/tickets",
+        headers=AGENT_HEADERS,
+        json={"tenantId": "t1", "key": "not a key"},
     )
     assert response.status_code == 422
 

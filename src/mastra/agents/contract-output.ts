@@ -4,20 +4,11 @@ import type { z } from "zod";
 import { DEFAULT_AGENT_MODEL, estimateCostMicro } from "../shared/model.js";
 
 /**
- * Shared plumbing every lane's model factory uses to turn an agent reply into
- * a contract-valid output object. Phase 7.1 moved this onto Mastra's native
- * structured output: `agent.generate(prompt, { structuredOutput: { schema } })`
- * runs the tool loop and returns a schema-shaped `result.object`, so the
- * hand-rolled fence/balance regex JSON scraping (`extractJson`) and the
- * text-parse helper are gone. We still validate `result.object` through the
- * lane's own zod schema with `safeParse`, because the runtime contract is
- * stricter than the JSON schema the model is steered with — `.strict()` extra
- * keys, `.min(1)` non-empty arrays, and empty-string paths are exactly what
- * free-tier models trip when the inspected context is thin, and the AI-SDK
- * schema conversion does not carry those bounds. A first violation earns the
- * model exactly one bounded re-ask with the aggregated detail fed back; a
- * second violation still surfaces loudly (mirrors the implementation
- * validators' single-repair philosophy).
+ * Shared plumbing every lane's model factory uses to get a contract-valid output
+ * object from Mastra's native `structuredOutput`. The lane's zod schema is still
+ * enforced with `safeParse`, because the AI-SDK conversion drops `.strict()`
+ * extra keys, `.min(1)` arrays and empty-string paths, which thin context trips
+ * on. One violation earns a bounded re-ask, a second surfaces loudly.
  */
 
 /**
@@ -106,14 +97,10 @@ function reportUsage(
 }
 
 /**
- * Generate through the agent's native structured output and validate the
- * returned object against the contract schema, re-asking once with the
- * violation detail fed back when the first answer breaks the contract.
- * `options` carries the per-call reasoning tier (model id) so planning,
- * investigation, and the critic can spend the higher tier while mechanical
- * repair spends less. The absent-option discipline is unchanged: conditional
- * spreads keep absent keys genuinely absent, which `exactOptionalPropertyTypes`
- * requires of Mastra's generate-options shape.
+ * Generates through the agent's native structured output and validates the object
+ * against the contract schema, re-asking once with the violation detail fed back.
+ * `options` carries the per-call reasoning tier; conditional spreads keep absent
+ * keys genuinely absent, as `exactOptionalPropertyTypes` requires.
  */
 export async function generateContractOutput<T extends object>(
   agent: Agent,

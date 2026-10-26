@@ -4,9 +4,15 @@ import { useEffect, useRef } from "react";
 
 import type { AssistantTicketRow, ChatState } from "@/lib/assistant";
 
-import { IconFileText } from "../icons";
+import { IconFileText, IconSparkles } from "../icons";
 import { Markdown } from "../Markdown";
 import { TicketPickerCard } from "./TicketPickerCard";
+
+const SUGGESTIONS = [
+  "What is waiting on me right now?",
+  "Summarise the highest risk open ticket.",
+  "Which runs are parked at a checkpoint?",
+];
 
 /**
  * Renders the reducer's state and nothing else: no fetching, no formatting
@@ -18,11 +24,15 @@ export function Transcript({
   busy,
   onOpenTicket,
   onLaunch,
+  onExecute,
+  onSuggest,
 }: {
   state: ChatState;
   busy: boolean;
   onOpenTicket: (ticketKey: string) => void;
   onLaunch: (row: AssistantTicketRow) => void;
+  onExecute: (row: AssistantTicketRow) => void;
+  onSuggest: (text: string) => void;
 }) {
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -34,7 +44,20 @@ export function Transcript({
   return (
     <div id="chat-log" className="chat-log" aria-live="polite" ref={logRef}>
       {state.turns.length === 0 ? (
-        <p className="chat-hint">Ask anything about this console. Every conversation keeps its history.</p>
+        <div className="chat-empty">
+          <span className="chat-empty-mark" aria-hidden="true">
+            <IconSparkles />
+          </span>
+          <h2>What would you like to work on?</h2>
+          <p className="chat-hint">Ask anything about this console. Every conversation keeps its history.</p>
+          <div className="chat-suggestions">
+            {SUGGESTIONS.map((text) => (
+              <button key={text} type="button" onClick={() => onSuggest(text)}>
+                {text}
+              </button>
+            ))}
+          </div>
+        </div>
       ) : (
         state.turns.map((turn, index) => (
           <article key={`${index}-${turn.role}`} className={`chat-row chat-${turn.role} anim-fade-up`}>
@@ -45,6 +68,21 @@ export function Transcript({
             {turn.role === "assistant" && (
               <TicketPickerCard rows={turn.rows} busy={busy} onOpen={onOpenTicket} onLaunch={onLaunch} />
             )}
+            {turn.role === "assistant" && turn.execute !== null && ((ticket) => (
+              <div className="chat-execute">
+                <button
+                  type="button"
+                  className="chat-execute-btn"
+                  disabled={busy}
+                  onClick={() => onExecute(ticket)}
+                >
+                  {`Execute ${ticket.key}`}
+                </button>
+                <span className="chat-execute-hint">
+                  {`Opens ${ticket.key} in its run tab with only its matched workflows selectable.`}
+                </span>
+              </div>
+            ))(turn.execute)}
             {turn.stopped && <p className="chat-stopped">Stopped.</p>}
             {turn.error !== null && (
               <p className="chat-error" role="alert">

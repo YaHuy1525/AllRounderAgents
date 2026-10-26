@@ -34,9 +34,21 @@ function workflowCopy(id: string, fallbackTitle: string): { label: string; descr
 }
 
 /**
- * Catalog of every runnable workflow: step counts, the systems each workflow
- * touches, and the two actions the console offers — open the flow graph or
- * start a run (which opens the new-tab start flow with this workflow
+ * The catalog page mirrors the launcher, so it lists only the lanes the console
+ * offers and in the catalog's own order (tech lanes first, then HR). The server
+ * publishes more workflows than this board starts, and a run already in the
+ * store still renders under its own name.
+ */
+function launchableWorkflows(definitions: WorkflowDefinition[]): WorkflowDefinition[] {
+  return RUNNABLE_WORKFLOWS.flatMap((entry) =>
+    definitions.filter((definition) => definition.id === entry.id),
+  );
+}
+
+/**
+ * Catalog of the workflows this console can start: step counts, the systems
+ * each workflow touches, and the two actions the console offers — open the flow
+ * graph or start a run (which opens the new-tab start flow with this workflow
  * preselected).
  */
 export function WorkflowCatalogView({
@@ -74,8 +86,8 @@ export function WorkflowCatalogView({
         <p className="eyebrow">Workflows</p>
         <h2>Workflow catalog</h2>
         <p className="panel-note">
-          Every runnable workflow with its step count, the systems it talks to, and a link into
-          the full flow graph.
+          Every workflow this board can start, with its step count, the systems it talks to, and a
+          link into the full flow graph.
         </p>
       </div>
 
@@ -112,7 +124,7 @@ export function WorkflowCatalogView({
 
       {state.phase === "ready" && (
         <div className="workflow-grid">
-          {state.workflows.map((definition) => {
+          {launchableWorkflows(state.workflows).map((definition) => {
             const { label, description } = workflowCopy(definition.id, definition.title);
             const providers = workflowIntegrations(definition.steps);
             const sideEffecting = definition.steps.filter((step) => step.sideEffecting).length;

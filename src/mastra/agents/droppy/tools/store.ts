@@ -12,17 +12,10 @@ import type {
 import type { DroppyConfig } from "../settings.js";
 
 /**
- * The local index (Layer 2).
- *
- * One data model, not three. The three research tools each keep their own copy
- * of this; we keep one, and the three scorers read from it.
- *
- * This is an in-memory store with a persistence seam. In production it backs
- * onto Supabase (the platform already runs it); the interface is the same, so
- * the swap is a single implementation change and no caller moves.
- *
- * Every write is idempotent on its natural key — ADR: replaying an event twice
- * must produce one state change.
+ * Layer 2, the local index: one data model shared by the three scorers instead of
+ * a copy each. In-memory behind a persistence seam that backs onto Supabase in
+ * production, so the swap is one implementation change. Every write is idempotent
+ * on its natural key, because replaying an event twice must produce one change.
  */
 export interface DroppyStore {
   upsertAd(observation: AdObservation): void;

@@ -1,14 +1,10 @@
 import { z } from "zod";
 
 /**
- * Droppy domain model.
- *
- * One data model for the whole store. Vendor field names never appear here —
- * they live in the collector layer and normalise into these shapes.
- *
- * The three research tools (Minea, PipiADS, Kalodata) are three scoring
- * engines over the SAME index. That is the whole point of the teardown: one
- * collector layer, one index, three scorers.
+ * Droppy domain model. One data model for the whole store; vendor field names
+ * live in the collector layer and normalise into these shapes. The three research
+ * tools are three scoring engines over the same index: one collector layer, one
+ * index, three scorers.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────

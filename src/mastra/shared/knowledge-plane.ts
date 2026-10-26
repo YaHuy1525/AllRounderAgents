@@ -11,20 +11,11 @@ import {
 } from "./rag.js";
 
 /**
- * The Mastra-native knowledge plane (upgrade plan P3): the single place that
- * decides which vector indexes exist, which tool searches each one, and which
- * corpus seeds it. One list drives all three, so adding a knowledge source is
- * one entry here — no second registry to keep in sync inside an agent file.
- *
- * The plane is opt-in through `MASTRA_RAG_PILOT`, the flag that already turns
- * the HR-help pilot on: while the Python hybrid retriever is the production
- * path, the Mastra indexes must not answer for any lane by accident. When the
- * parity run (P5) clears, the flag stops being the gate and this module keeps
- * reading `DATABASE_URL` plus the `EMBEDDING_*`/`MODEL_*` block alone.
- *
- * An index with no seeded corpus contributes neither a tool nor a seed run, so
- * a declared-but-unfilled source can never hand an agent an empty index that
- * errors on the first query.
+ * The one place that decides which vector indexes exist, which tool searches
+ * each, and which corpus seeds it, so adding a source is one entry. Opt-in
+ * through `MASTRA_RAG_PILOT` while the Python hybrid retriever stays the
+ * production path. An index with no seeded corpus contributes neither a tool nor
+ * a seed run, so an empty index never errors on first query.
  */
 
 /** The tool shape the factory returns when the plane is wired. */

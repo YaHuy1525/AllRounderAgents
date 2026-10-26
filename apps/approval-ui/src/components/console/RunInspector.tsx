@@ -55,26 +55,10 @@ import {
 } from "./icons";
 
 /**
- * The run inspector wraps the run surface in five lenses:
- *
- * - Graph: the workflow graph with the live run overlay (node states, the
- *   active pulse, executed-path edges, recorded-effect chips, receipt dots,
- *   lock/queue badges) and a step drawer reusing the single-step display
- *   pattern. The frame's satellites come from the N1 topology, with the
- *   catalog as fallback.
- * - Form: the existing RunPanel rail experience, unchanged (kept mounted so
- *   its stream, drafts, and the History selector survive lens switches).
- * - Data: the full-run JSON, the side-effects ledger, and a steps table with
- *   the artifact → decision → receipt lineage.
- * - Timeline: the sequence-ordered SSE event history plus a by-time case/run
- *   merge, with jump-to-step and a JSON download (the trace-download analog).
- * - Logs: the same stream behind facet filter chips, with a cost/duration
- *   footer.
- *
- * Mounted two ways: embedded in `TicketTab` (issue + runs provided; the Form
- * lens is the full decision experience) and standalone as a `run` tab
- * (fetches the run itself; Form still works because RunPanel only keys on the
- * ticket key, which the run carries).
+ * The run inspector wraps the run surface in five lenses — Graph (workflow overlay
+ * plus step drawer), Form (the RunPanel rail, kept mounted so its stream and drafts
+ * survive lens switches), Data (JSON, effects ledger, step lineage), Timeline and
+ * Logs. It mounts embedded in `TicketTab` or standalone as a run tab.
  */
 
 const GraphCanvas = dynamic(() => import("./graph/GraphCanvas"), {

@@ -1,14 +1,10 @@
-"""Cross-domain spawn (Nexus pattern): a support ticket that exposes a
-product defect files a linked bug ticket with its evidence trail.
+"""Cross-domain spawn: a support ticket exposing a product defect files a linked bug.
 
-The planner is deterministic and policy-driven (``policy/risk.yaml`` →
-``spawn``): a matching ticket produces a stable correlation id, so the create
-is idempotent and a replayed webhook can never file the same bug twice.
-
-Audit-first: raw customer text is not copied into the spawned ticket — the
-description carries the source key, matched signals and the (clause-cited,
-redacted) routing rationale, so a mask applied to the rationale names the
-clause that caused it.
+The planner is deterministic and driven by ``policy/risk.yaml`` (``spawn``), and a
+matching ticket produces a stable correlation id, so the create is idempotent and a
+replayed webhook cannot file the same bug twice. Raw customer text is never copied
+into the spawned ticket: the description carries the source key, matched signals and
+the clause-cited redacted rationale.
 """
 
 from __future__ import annotations

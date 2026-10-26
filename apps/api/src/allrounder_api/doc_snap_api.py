@@ -2,15 +2,11 @@
 
 """U7 doc-snap API: snap a paper document into an editable draft.
 
-``POST /cases/{case_id}/doc-snaps`` reads one base64-encoded document and
-lands a *draft* on the case trail: extracted canonical fields plus the
-auto-check flags (ABN checksum, expiry window, duplicate of an earlier snap
-on the same case). Nothing here touches a run — turning a draft's values
-into a change still goes through the normal edit decision and its receipt
-gate, so "snap never posts" holds at the API boundary. ``GET`` lists the
-drafts the case already holds. Console view roles may list; agent/approver/
-admin may snap, and a case outside the caller's tenant answers 404 like any
-other console read.
+``POST /cases/{case_id}/doc-snaps`` lands a draft on the case trail with the extracted
+fields and check flags, and ``GET`` lists the drafts the case holds. Nothing here
+touches a run: turning a draft into a change still goes through the edit decision and
+its receipt gate, so snap never posts. View roles may list, and only
+agent/approver/admin may snap.
 """
 
 from __future__ import annotations

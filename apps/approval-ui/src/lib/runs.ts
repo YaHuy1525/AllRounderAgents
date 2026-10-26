@@ -112,7 +112,11 @@ export type RunDecisionResult = {
   replayed: boolean;
 };
 
-/** Workflows the console can start today (later PRs extend this list). */
+/**
+ * Workflows the console can start: the tech lanes and the HR lanes. The SOC and
+ * vendor lanes exist on the server, but this board is scoped to engineering and
+ * people work, so they are not offered here. See `workflowsForTicket`.
+ */
 export const RUNNABLE_WORKFLOWS: ReadonlyArray<{
   id: string;
   label: string;
@@ -144,11 +148,6 @@ export const RUNNABLE_WORKFLOWS: ReadonlyArray<{
     description: "Crawl the routes, fix the violations, re-scan, and open the fix PR.",
   },
   {
-    id: "vendors",
-    label: "Vendor Onboarding",
-    description: "Collect documents, verify the checks, score risk, approve, and create the record.",
-  },
-  {
     id: "leave",
     label: "Leave Request",
     description: "Intake the request, run the working-day policy check, approve, and book the leave entry.",
@@ -173,14 +172,64 @@ export const RUNNABLE_WORKFLOWS: ReadonlyArray<{
     label: "HR Help",
     description: "Intake the employee question, retrieve the policy passages, draft a cited answer, approve it, and record the answer.",
   },
-  {
-    id: "security",
-    label: "SOC Alert Triage",
-    description: "Ingest the alert, triage it with ATT&CK mapping, investigate with cited evidence, decide and approve the disposition, then contain — containment is idempotent.",
-  },
 ];
 
-/** Keyword signals that pull in their workflow even when the Jira type is generic. */
+/** Which family a launchable lane belongs to: engineering work or people work. */
+export type WorkflowGroup = "tech" | "hr";
+
+export const WORKFLOW_GROUPS: Readonly<Record<string, WorkflowGroup>> = {
+  review: "tech",
+  issues: "tech",
+  features: "tech",
+  dependencies: "tech",
+  accessibility: "tech",
+  leave: "hr",
+  onboarding: "hr",
+  offboarding: "hr",
+  screening: "hr",
+  "hr-help": "hr",
+};
+
+/**
+ * Names for server workflows the console does not offer as launch options.
+ * Past runs still appear in the runs, approvals, inbox, and observability
+ * views, so their lanes keep a readable label beside the catalog rather than
+ * inside it.
+ */
+const UNLAUNCHED_WORKFLOW_LABELS: Readonly<Record<string, string>> = {
+  vendors: "Vendor Onboarding",
+  security: "SOC Alert Triage",
+};
+
+/** True when the console offers this workflow as a startable lane. */
+export function isLaunchableWorkflow(id: string): boolean {
+  return RUNNABLE_WORKFLOWS.some((item) => item.id === id);
+}
+
+/**
+ * The family a ticket belongs to. The majority wins, and a tie keeps the
+ * family of the first matched lane so the order of the rule table stays
+ * meaningful.
+ */
+function dominantWorkflowGroup(ids: readonly string[]): WorkflowGroup {
+  let tech = 0;
+  let hr = 0;
+  for (const id of ids) {
+    if (WORKFLOW_GROUPS[id] === "hr") hr += 1;
+    else tech += 1;
+  }
+  if (tech === hr) return WORKFLOW_GROUPS[ids[0] ?? ""] ?? "tech";
+  return tech > hr ? "tech" : "hr";
+}
+
+/**
+ * Keyword signals that pull in their workflow even when the Jira type is generic.
+ * This is the shared lane vocabulary the server's ticket search ports, and it is
+ * pinned against `KEYWORD_LANE_RULES` by test_ticket_search.py. It deliberately
+ * keeps lanes the console does not offer (security, vendors) so board and chat
+ * filtering stay aligned with the server. Launchability is decided separately by
+ * `RUNNABLE_WORKFLOWS`.
+ */
 const KEYWORD_WORKFLOW_RULES: ReadonlyArray<{ id: string; tokens: readonly string[] }> = [
   // The SCRUM project has no Bug issue type, so the type fallback below can
   // never reach the issues lane from the board — summary/label keywords must.
@@ -286,12 +335,16 @@ export function matchWorkflowsFromText(text: string): string[] {
 }
 
 /**
- * Workflows supported for a ticket, most relevant first. An explicit keyword
- * match wins outright: an HR question filed as a Task must not inherit the
- * code lanes, so keyword-matched tickets get exactly their matched workflows.
- * Only keyword-free tickets fall through to the Jira type rules (bugs
- * resolve, stories and tasks implement, every code-ish type can be reviewed),
- * and unknown tickets fall back to the full catalog.
+ * Workflows supported for a ticket, most relevant first, and never across
+ * families. A tech ticket offers only the tech lanes and an HR ticket only the
+ * HR lanes, so an HR question filed as a Task cannot inherit the code lanes and
+ * a code task cannot offer the leave workflow. Lanes the console does not offer
+ * are dropped before the family is chosen.
+ *
+ * An explicit keyword match wins outright. Only keyword-free tickets fall
+ * through to the Jira type rules (bugs resolve, stories and tasks implement,
+ * every code-ish type can be reviewed), and unknown tickets fall back to the
+ * whole launchable catalog.
  */
 export function workflowsForTicket(ticket: {
   issueType: string;
@@ -301,24 +354,34 @@ export function workflowsForTicket(ticket: {
   const type = ticket.issueType.trim().toLowerCase();
   const supported: string[] = [];
   const add = (id: string): void => {
-    if (!supported.includes(id)) supported.push(id);
+    if (isLaunchableWorkflow(id) && !supported.includes(id)) supported.push(id);
   };
 
-  for (const id of matchWorkflowsFromText(`${ticket.summary} ${ticket.labels.join(" ")}`)) {
-    add(id);
+  const matched = matchWorkflowsFromText(`${ticket.summary} ${ticket.labels.join(" ")}`).filter(
+    (id) => isLaunchableWorkflow(id),
+  );
+  if (matched.length > 0) {
+    const group = dominantWorkflowGroup(matched);
+    for (const id of matched) {
+      if (WORKFLOW_GROUPS[id] === group) add(id);
+    }
+    return supported;
   }
-  if (supported.length === 0) {
-    if (type === "bug") add("issues");
-    if (CODE_TICKET_TYPES.has(type) && type !== "bug") add("features");
-    if (CODE_TICKET_TYPES.has(type)) add("review");
-  }
+
+  if (type === "bug") add("issues");
+  if (CODE_TICKET_TYPES.has(type) && type !== "bug") add("features");
+  if (CODE_TICKET_TYPES.has(type)) add("review");
 
   return supported.length > 0 ? supported : RUNNABLE_WORKFLOWS.map((item) => item.id);
 }
 
 /** Console label for a workflow id (falls back to the raw id). */
 export function workflowLabel(id: string): string {
-  return RUNNABLE_WORKFLOWS.find((item) => item.id === id)?.label ?? id;
+  return (
+    RUNNABLE_WORKFLOWS.find((item) => item.id === id)?.label ??
+    UNLAUNCHED_WORKFLOW_LABELS[id] ??
+    id
+  );
 }
 
 /**

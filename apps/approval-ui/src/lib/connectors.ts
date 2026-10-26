@@ -1,17 +1,11 @@
 import { ApiError, api, apiUrl, sessionHeaders } from "./api";
 
 /**
- * Connector registry + vault client (N2): Settings -> Connections.
- *
- * The catalog (provider, scope, class, description) comes from the API, which
- * serves it from the reviewed `policy/tools.yaml`; this module adds the
- * per-tenant connection state and the display-only overlay that lets a
- * connected connector claim the satellite badge of the generic channel it
- * backs. Connecting registers a credential only — execution permissions stay
- * in the tool matrix, so a connection never adds an execution path to a run.
- *
- * Secrets are write-only: they travel up on connect and only a last-four hint
- * ever comes back.
+ * Connector registry + vault client (Settings -> Connections). The catalog comes
+ * from the API, which serves it from the reviewed `policy/tools.yaml`; this module
+ * adds per-tenant connection state and a display-only badge overlay. Connecting
+ * registers a credential only — permissions stay in the tool matrix, so a
+ * connection never adds an execution path. Secrets are write-only.
  */
 
 /** ApprovalClass mirror (policy.py): strongest posture across a provider's tools. */

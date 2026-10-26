@@ -3,14 +3,10 @@ import { Agent } from "@mastra/core/agent";
 import { DEFAULT_AGENT_MODEL } from "../../shared/model.js";
 
 /**
- * The "Diagnose -> suggest upgrades" half of the LLMOps loop, as a registered,
- * Studio-visible agent. It is strictly read-only: it consumes an
- * experiment-results summary (per coding target, per scorer: mean score, pass
- * rate, and the failing items with their reasons) and proposes concrete,
- * human-applied upgrades. It never edits a prompt, config, or model, and never
- * re-runs anything — a person reviews the recommendations and applies them at
- * the Gate, exactly like the reference loop. Registering it under `agents` is
- * what makes it callable from Studio and over `POST /api/agents/llmops-upgrade-advisor/generate`.
+ * The "diagnose -> suggest upgrades" half of the LLMOps loop, registered so it is
+ * callable from Studio and over the generate route. Strictly read-only: it reads
+ * an experiment-results summary and proposes human-applied upgrades, never editing
+ * a prompt, config or model, and never re-running anything.
  */
 const instructions = `<identity>
 You are the LLMOps Upgrade Advisor for AllRounder. You read the outcome of coding-agent experiments and recommend the smallest, safest change that would raise the measured score. You advise; you never apply, edit, deploy, or re-run — a human makes every change at the release gate.

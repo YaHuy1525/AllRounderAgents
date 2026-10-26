@@ -689,15 +689,10 @@ class PostgresRepositories:
     async def open(self) -> None:
         """Open the pool, then run the migration deploy gate.
 
-        The check is contained the way ``PostgresRunArchive.open`` contains its
-        own connection: this pool is built with ``min_size=0, open=False``, so
-        before the check existed ``open()`` never touched the database, and an
-        unreachable one degraded per request instead of blocking boot. A check
-        that cannot run logs ``approval_risk_column_check_failed`` with the
-        exception info and startup finishes; a check that runs and finds no
-        column logs ``approval_risk_column_missing`` at critical. Neither
-        outcome blocks startup, because an operator mid rollout has to be able
-        to reach the health endpoint to apply the migration.
+        The pool is built with ``min_size=0, open=False``, so an unreachable database
+        degrades per request instead of blocking boot. Neither check outcome blocks
+        startup, because an operator mid rollout has to reach the health endpoint to
+        apply the migration.
         """
         await self.pool.open()
         try:
@@ -706,16 +701,12 @@ class PostgresRepositories:
             get_logger().exception("approval_risk_column_check_failed")
 
     async def _check_approval_risk_column(self) -> None:
-        """Deploy gate for the risk-ordered approval queue (PR1 T4).
+        """Deploy gate for the risk-ordered approval queue.
 
-        ``create_approval`` inserts ``risk``, so on a database that has not
-        applied the migration every approval write fails — not just the list
-        read. One query when the Postgres repositories open (never per
-        request, never on the in-memory path), logging a fatal-level message
-        that names the migration file. Loud, not blocking: an operator mid
-        rollout can still reach the health endpoint to run it, and
-        ``open`` contains any error this query raises so a dead database
-        cannot turn that message into a boot failure.
+        ``create_approval`` inserts ``risk``, so on a database without the migration
+        every approval write fails, not just the list read. One query runs when the
+        repositories open, and ``open`` contains any error it raises so a dead
+        database cannot turn the message into a boot failure.
         """
         async with self.pool.connection() as connection:
             cursor = await connection.execute(

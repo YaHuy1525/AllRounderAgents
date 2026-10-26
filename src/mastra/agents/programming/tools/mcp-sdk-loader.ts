@@ -1,15 +1,8 @@
 /**
- * Runtime loader for the MCP TypeScript SDK.
- *
- * The Mastra dev bundler rewrites static imports of third-party packages into
- * specifiers rebuilt with the OS path separator — on Windows the emitted
- * bundle contains `@modelcontextprotocol/sdk\client\index.js`, which Node
- * rejects (`ERR_INVALID_MODULE_SPECIFIER`). Loading the SDK's CJS build
- * through `createRequire` keeps the specifier inside a plain string that the
- * bundler never rewrites, so resolution happens against the real node_modules
- * at runtime no matter where the bundle is executed from. Each value export
- * carries a same-named type export (constructor type) so callers can keep
- * using the SDK names in type positions.
+ * Loads the MCP TypeScript SDK through `createRequire` instead of a static import,
+ * because the dev bundler rewrites package specifiers with the OS path separator
+ * (on Windows `@modelcontextprotocol/sdk\client\index.js` fails with
+ * `ERR_INVALID_MODULE_SPECIFIER`). Each value export carries a same-named type.
  */
 import { createRequire } from "node:module";
 

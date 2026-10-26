@@ -1,17 +1,16 @@
 "use client";
 
 import { compactTickets } from "@/lib/board";
+import type { AssistantTicketRow } from "@/lib/assistant";
 
 import { ChatShell } from "./chat/ChatShell";
-import { IconSparkles } from "./icons";
 
 type CompactTicket = ReturnType<typeof compactTickets>[number];
 
 /**
- * The always-visible assistant rail. It is now a frame: the header and the
- * conversation itself. All routing, all answer generation, and all tenancy
- * live behind `ChatShell` and the host it talks to — the panel no longer knows
- * what a message means.
+ * The Assistant is a tab, not a rail: this wrapper only gives the conversation
+ * a full-height frame. History, the transcript, and the composer all live in
+ * `ChatShell`, and everything the assistant knows arrives from the host.
  */
 export function AssistantPanel({
   tickets,
@@ -19,6 +18,7 @@ export function AssistantPanel({
   onOpenRun,
   onOpenTicket,
   onOpenInbox,
+  onExecuteTicket,
 }: {
   tickets: CompactTicket[];
   selectedKey?: string;
@@ -30,25 +30,18 @@ export function AssistantPanel({
   }) => void;
   onOpenTicket: (ticketKey: string) => void;
   onOpenInbox: () => void;
+  onExecuteTicket: (ticket: AssistantTicketRow) => void;
 }) {
   return (
-    <aside className="assistant-panel">
-      <header className="assistant-header">
-        <span className="assistant-brand" aria-hidden="true">
-          <IconSparkles />
-        </span>
-        <div>
-          <h2>Welcome</h2>
-          <p>What would you like to work on?</p>
-        </div>
-      </header>
+    <div className="assistant-panel">
       <ChatShell
         tickets={tickets}
         selectedKey={selectedKey}
         onOpenRun={onOpenRun}
         onOpenTicket={onOpenTicket}
         onOpenInbox={onOpenInbox}
+        onExecuteTicket={onExecuteTicket}
       />
-    </aside>
+    </div>
   );
 }

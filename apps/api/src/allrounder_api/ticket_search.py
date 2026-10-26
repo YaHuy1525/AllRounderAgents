@@ -1,15 +1,10 @@
 """Lane-filtered ticket search behind the chat's "list all HR tickets".
 
-The console already decides which workflows a ticket supports from its summary
-and labels (``KEYWORD_WORKFLOW_RULES`` in apps/approval-ui/src/lib/runs.ts).
-This module is the server-side port of that vocabulary so both doors, the
-agent tool and the UI list, answer from one rule set instead of two.
-``test_ticket_search.py`` pins the port against the TS source: an edited token
-that is not mirrored here fails CI, exactly like the console tool id pin.
-
-Nothing here writes and nothing here authenticates. Each caller passes the
-tenant's already-allowlisted projects, so a query can never widen the view
-beyond what the session (or the service-bridged agent turn) is allowed to see.
+The rule vocabulary is a port of ``KEYWORD_WORKFLOW_RULES`` in
+apps/approval-ui/src/lib/runs.ts, so the agent tool and the UI list answer from one
+rule set, and ``test_ticket_search.py`` fails CI when the two drift. Nothing here
+writes or authenticates, and each caller passes the tenant's allowlisted projects, so
+a query can never widen the view.
 """
 
 from __future__ import annotations
@@ -108,28 +103,34 @@ def search_lane_tickets(
     *,
     workflows: Sequence[str] = (),
     text: str = "",
+    key: str = "",
     per_project: int = 100,
     limit: int = MAX_TICKETS,
 ) -> list[LaneTicket]:
     """Tickets across ``projects`` that match any lane in ``workflows``.
 
     A non-empty ``workflows`` keeps only tickets whose matched lanes intersect
-    it; ``text`` is a case-insensitive substring over summary plus labels. At
-    least one of the two must be given: an unfiltered listing would dump whole
-    projects into a chat answer. Jira's per-project order (rank, then updated)
-    is preserved, and keys are deduplicated across projects.
+    it; ``text`` is a case-insensitive substring over summary plus labels; ``key``
+    is an exact Jira ticket key, so a caller can resolve one ticket (for example
+    ``SCRUM-10``) and read the lanes its own text matches. At least one of the
+    three must be given: an unfiltered listing would dump whole projects into a
+    chat answer. Jira's per-project order (rank, then updated) is preserved, and
+    keys are deduplicated across projects.
     """
 
     wanted = set(workflows)
     needle = text.strip().lower()
-    if not wanted and needle == "":
-        raise ValueError("a ticket query needs workflows or text")
+    wanted_key = key.strip().upper()
+    if not wanted and needle == "" and wanted_key == "":
+        raise ValueError("a ticket query needs workflows, text, or a key")
     found: list[LaneTicket] = []
     seen: set[str] = set()
     for project in projects:
         if len(found) >= limit:
             break
         for issue in reader.search_issues(project, min(per_project, MAX_TICKETS)):
+            if wanted_key != "" and issue.key.upper() != wanted_key:
+                continue
             haystack = f"{issue.summary} {' '.join(issue.labels)}"
             matched = match_workflows_from_text(haystack)
             if wanted and wanted.isdisjoint(matched):

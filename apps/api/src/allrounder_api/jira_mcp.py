@@ -1,24 +1,15 @@
 """Atlassian Rovo MCP transport for the Jira board and tool protocols.
 
-McpJiraTransport implements the existing JiraTransport (comment/transition)
-and JiraIssueReader (search_issues/list_boards/search_board_issues) protocols
-over the official Atlassian Rovo MCP server instead of the Jira REST API:
+``McpJiraTransport`` implements the existing ``JiraTransport`` and
+``JiraIssueReader`` protocols over the official Rovo MCP server, using a headless
+``Authorization: Basic`` header (the org admin must enable API token access). Board
+listing stays on read only REST GETs, because the Rovo server is issue-centric and
+exposes no agile board tools.
 
-- comment/transition/search go through the MCP tools
-  addOrEditJiraIssueComment / transitionJiraIssue / searchJiraIssuesUsingJql
-  with a headless ``Authorization: Basic base64(email:api_token)`` header
-  (the org admin must enable API-token MCP access on the site);
-- board listing stays on read-only REST GETs (HttpJiraTransport) because the
-  Rovo server is issue-centric and exposes no agile-board tools.
-
-MCP-first with a documented REST fallback: when the first MCP call fails or
-times out (for example the org has not enabled API-token MCP access), the
-transport logs a warning and serves every later Jira operation from the REST
-paths for the rest of the process.
-
-The official ``mcp`` Python SDK is asyncio-only, so the transport owns a
-dedicated event-loop thread and sync callers (FastAPI worker threads) bridge
-with ``run_coroutine_threadsafe`` - the call-site signatures stay unchanged.
+The fallback is per process: when the first MCP call fails or times out, the
+transport logs a warning and serves every later operation over REST. The ``mcp``
+SDK is asyncio only, so the transport owns a dedicated loop thread and sync callers
+bridge with ``run_coroutine_threadsafe``.
 """
 
 from __future__ import annotations

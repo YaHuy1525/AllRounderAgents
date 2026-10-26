@@ -68,36 +68,11 @@ import { MemoryMailSender } from "./mail/memory.js";
 import { OutboxMailSender } from "./mail/outbox.js";
 
 /**
- * Host wiring for `mastra dev`: the coding, review, issues, features,
- * dependency and accessibility flows need a repository allowlist; coding runs
- * over an MCP-backed session (GITHUB_ACCESS=mcp, default; the hosted GitHub
- * MCP server authenticates with a bearer PAT from GITHUB_MCP_TOKEN, falling
- * back to GITHUB_TOKEN) or REST credentials (GITHUB_ACCESS=rest with
- * GITHUB_TOKEN), while review, issues, features, dependencies and
- * accessibility always use the REST API with GITHUB_TOKEN (the dependency
- * scan additionally reads the npm registry over HTTPS, and the accessibility
- * audit talks to the self-hosted axe-runner at AXE_AUDIT_URL). The effective
- * repository policy is GITHUB_REPOSITORY_ALLOWLIST plus every repository the
- * REST token can see, discovered once at startup; discovery failures degrade
- * to the allowlist. Each flow registers only when its prerequisites are
- * configured (see the GITHUB_* block in .env.example). The MSP lane always
- * registers: it talks to the Jira Cloud desk when JIRA_BASE_URL, JIRA_EMAIL,
- * JIRA_API_TOKEN and JIRA_PROJECT_KEY are set, or to the HaloPSA desk when
- * HALO_BASE_URL, HALO_CLIENT_ID and HALO_CLIENT_SECRET are set instead
- * (Jira wins when both are configured; see buildMspDeps), writes replies to
- * the outbox at MAIL_OUTBOX_DIR (MAIL_FROM names the sending mailbox) and
- * otherwise keeps the in-memory desk and mailbox defaults. The bills lane
- * always registers too: it posts draft bills to Xero when the XERO_* variables are
- * set, keeps the in-memory ledger otherwise, and reads the vendor registry
- * over the platform service bridge. Without the GitHub block the instance
- * still boots with the finance and vendors flows, matching the documented
- * optional-flow contract in `createAllRounderMastra`. The HR help lane grounds
- * answers on the `hr:policy` knowledge partition through the same service
- * bridge once HR_KB_TENANT names the tenant that owns it (see
- * buildHrHelpDeps), with the company handbook `fixtures/company/hr_policy`
- * as its outage fallback. The Mastra-native knowledge plane (the console
- * assistant's search tools) is seeded from the same handbook at startup while
- * `MASTRA_RAG_PILOT=true` wires it.
+ * Host wiring: each lane flow registers only when its own prerequisites are
+ * set (see the GITHUB_* and XERO_* blocks in .env.example), the MSP and bills
+ * lanes always register with in-memory fallbacks, and the GitHub repository
+ * policy is the allowlist plus whatever the token can see. Without the GitHub
+ * block the instance still boots with finance and vendors.
  */
 function readStringArrayEnv(name: string): string[] | undefined {
   const raw = process.env[name];
@@ -220,14 +195,11 @@ const discoveredRepositories = await discoverTokenRepositories(
 );
 
 /**
- * Rollout flag for the sandbox-git migration: SANDBOX_GIT_LANES is a csv of
- * lane tokens (coding,issues,features,a11y,deps). A listed lane gets the
- * per-run Docker sandbox backend and manifest-based state; any other lane keeps
- * the MCP push_files path. The migration is now the default: an UNSET flag
- * enables all five PR lanes. Rolling back is explicit — set SANDBOX_GIT_LANES
- * to an empty value to force every lane onto push_files. Independently, a host
- * with no reachable Docker daemon downgrades all lanes to the flag-off path
- * below, so a run never fails purely because the sandbox provider is absent.
+ * Rollout flag for the sandbox-git migration: a csv of lane tokens
+ * (coding,issues,features,a11y,deps). A listed lane gets the per-run Docker sandbox
+ * and manifest state, any other lane keeps `push_files`. An unset flag enables all
+ * five and an empty value forces every lane back; a host with no Docker daemon
+ * downgrades regardless, so a run never fails for lack of a sandbox.
  */
 const ALL_SANDBOX_LANES = "coding,issues,features,a11y,deps";
 const sandboxLanes = new Set(
@@ -532,17 +504,11 @@ if (accessibility === undefined) {
 }
 
 /**
- * MSP lane wiring: the Jira Cloud adapter replaces the in-memory desk only
- * when all four JIRA_* values are present; otherwise the HaloPSA adapter
- * takes the desk when HALO_BASE_URL, HALO_CLIENT_ID and HALO_CLIENT_SECRET
- * are set, with HALO_TENANT, HALO_SCOPE, HALO_TICKET_TYPE_ID,
- * HALO_DEFAULT_CLIENT_ID and HALO_CLIENT_IDS as optional refinements. Jira
- * wins when both desks are configured; a half-configured block warns instead
- * of silently demoting. Replies land as .eml files in MAIL_OUTBOX_DIR when
- * that is set. With KNOWLEDGE_API_URL and KNOWLEDGE_SERVICE_TOKEN set,
- * drafts ground on the platform knowledge API; otherwise the lane drafts
- * from nothing and each draft escalates for a human edit. The memory
- * defaults are the M1 sandbox.
+ * MSP lane wiring: the Jira Cloud adapter needs all four JIRA_* values, otherwise
+ * HaloPSA takes the desk when its base URL and client credentials are set (Jira
+ * wins when both are configured, and a half-configured block warns rather than
+ * silently demoting). Replies land in MAIL_OUTBOX_DIR when set; without the
+ * knowledge bridge, drafts escalate for a human edit.
  */
 function buildMspDeps(): MspFlowDeps {
   const baseUrl = process.env.JIRA_BASE_URL?.trim();
@@ -665,14 +631,11 @@ function buildMspDeps(): MspFlowDeps {
 const msp = buildMspDeps();
 
 /**
- * Bills lane wiring: the Xero ledger replaces the memory ledger when
- * XERO_CLIENT_ID, XERO_CLIENT_SECRET and XERO_TENANT_ID are all present (a
- * half-configured block warns instead of silently demoting), with
- * XERO_ACCOUNT_CODE optionally stamping every posted line. The vendor
- * registry reads the platform API over the shared service bridge
- * (KNOWLEDGE_API_URL plus KNOWLEDGE_SERVICE_TOKEN, the same token the
- * knowledge routes verify); without it the registry is absent and every bill
- * escalates as vendor_unverified. The memory defaults are the M4 sandbox.
+ * Bills lane wiring: the Xero ledger replaces the memory ledger when all three
+ * XERO_* values are present (a half-configured block warns instead of silently
+ * demoting). The vendor registry reads the platform API over the shared service
+ * bridge; without it every bill escalates as `vendor_unverified`. The memory
+ * defaults are the M4 sandbox.
  */
 function buildBillsDeps(): BillsFlowDeps {
   const clientId = process.env.XERO_CLIENT_ID?.trim();
@@ -722,24 +685,11 @@ function buildBillsDeps(): BillsFlowDeps {
 const bills = buildBillsDeps();
 
 /**
- * HR help lane wiring: with KNOWLEDGE_API_URL, KNOWLEDGE_SERVICE_TOKEN and
- * HR_KB_TENANT set, answers ground on the tenant's `hr:policy` knowledge
- * partition through the platform API's hybrid retrieval (pgvector plus the
- * Postgres lexical arm, fused). The fallback for an unreachable service is
- * the on-disk company handbook (`fixtures/company/hr_policy` — the very
- * files the seeder ingests), so an outage never answers from the golden
- * fixture corpus, which quotes different numbers. Without the trio the lane
- * keeps the fixture retriever, so the flow, its citations and its tests run
- * exactly as before. Seed the partition with `scripts/hr-kb-seed.py`.
- *
- * `MASTRA_RAG_PILOT=true` opts the lane into the Mastra-native upgrade: the
- * baseline above becomes the fallback and a Mastra-owned pgvector index
- * (`hr_policy`, never the Python-owned `kb_chunks`) answers first, seeded
- * from the company handbook corpus through the shared MDocument ingest and
- * embedded through the pinned `EMBEDDING_*`/`MODEL_*` block. Needs
- * `DATABASE_URL` plus an embedding key; without either the pilot stays off
- * and the chain below is returned untouched. Any pilot failure degrades to
- * the baseline, so the lane never goes dark because the experiment did.
+ * HR help wiring: with `KNOWLEDGE_API_URL`, `KNOWLEDGE_SERVICE_TOKEN` and
+ * `HR_KB_TENANT` set, answers ground on the tenant's `hr:policy` partition and
+ * fall back to the on-disk handbook, never to the golden fixtures, which quote
+ * different numbers. Without the trio the fixture retriever stays. The
+ * `MASTRA_RAG_PILOT` path answers first and degrades to the baseline.
  */
 function buildHrHelpDeps(): HrHelpFlowDeps {
   const registry = new MemoryHrHelpRegistry();

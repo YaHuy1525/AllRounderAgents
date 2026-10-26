@@ -366,14 +366,11 @@ export function createCodingAgentModel(options: {
 }
 
 /**
- * Mastra `codingFlow`: the coding lane as named, suspendable workflow steps
- * (load-context -> investigate -> strict-rca -> plan-surgical-patch ->
- * preflight -> patch -> validate -> draft-pr -> evidence-close).
- *
- * Destructive-path patches suspend at `preflight` for a signed human
- * approval; nothing is written to GitHub before an approved resume with a
- * receipt. All policy checks and validators stay deterministic — the model
- * is injected (`deps.model`), defaulting to the scripted OpenRouter agents.
+ * Mastra `codingFlow`: load-context -> investigate -> strict-rca ->
+ * plan-surgical-patch -> preflight -> patch -> validate -> draft-pr ->
+ * evidence-close. Destructive-path patches suspend at `preflight` for a signed
+ * approval, so nothing reaches GitHub without a receipt, and every policy check
+ * and validator stays deterministic.
  */
 export function createCodingFlow(deps: CodingFlowDeps) {
   const { github } = deps;

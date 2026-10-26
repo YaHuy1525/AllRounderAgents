@@ -2,12 +2,9 @@
 
 """Read-only workflow catalog: the static run definitions, served for the UI.
 
-The run lane renders every workflow as a node graph; this endpoint hands the
-console the same definitions the service snapshots at run start (steps, order,
-side-effecting flags, display-only integration satellites), so the graph and
-the live stepper can never disagree. ``startFields`` publish what a run needs
-before step one — the console's start card renders them and ``POST /runs``
-rejects a start that leaves a required one empty.
+It hands the console the same definitions the service snapshots at run start, so the
+graph and the live stepper cannot disagree. ``startFields`` publish what a run needs
+before step one, and ``POST /runs`` rejects a start that leaves a required one empty.
 """
 
 from __future__ import annotations

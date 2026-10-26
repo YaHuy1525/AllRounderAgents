@@ -1,16 +1,10 @@
 """Employee directory for start-field prefill.
 
-The HR lanes read people through the TypeScript ``EmployeeDirectory`` seam,
-which is fixture-backed. The serving plane needs the same records to fill a
-start field the user did not type, so this module declares the same read
-surface in Python and reads the same ``fixtures/hr_directory.json``. One
-fixture, two readers: the sandbox stays consistent, and a real HRIS connector
-replaces ``FixtureEmployeeDirectory`` without touching a caller.
-
-The fixture holds one simulated company, so it answers the same rows for
-whatever tenant asks. The seam keeps the read surface -- id, name, department --
-so swapping in a per-tenant HRIS source is a change inside this module rather
-than a change at every call site.
+The serving plane fills start fields the user did not type from the same
+``fixtures/hr_directory.json`` the TypeScript ``EmployeeDirectory`` seam reads, so the
+sandbox stays consistent. The fixture holds one simulated company and answers the same
+rows for any tenant, so a real HRIS connector is a change inside this module rather
+than at every call site.
 """
 
 from __future__ import annotations

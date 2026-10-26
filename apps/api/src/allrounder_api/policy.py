@@ -1,11 +1,9 @@
-"""Versioned governance policy: loader for ``policy/risk.yaml`` and
-``policy/tools.yaml`` (Master Plan Phase 5 — one risk/approval/audit model).
+"""Versioned governance policy: loaders for ``policy/risk.yaml`` and ``tools.yaml``.
 
-The YAML files are the single source for the deterministic thresholds the
-dispatcher enforces, the sensitive-ticket markers that force human approval,
-the cross-domain spawn rule and the tool permission matrix. Loading validates
-the whole document, so a malformed policy fails closed at startup instead of
-silently drifting from the tests in ``apps/api/tests/test_governance.py``.
+The YAML files are the single source for the deterministic thresholds the dispatcher
+enforces, the sensitive markers that force human approval, the spawn rule and the tool
+permission matrix. Loading validates the whole document, so a malformed policy fails
+closed at startup.
 """
 
 from __future__ import annotations

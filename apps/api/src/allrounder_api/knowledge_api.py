@@ -2,13 +2,10 @@
 
 """Service-to-service knowledge search.
 
-The Mastra host grounds the MSP draft step through this route: it posts a
-tenant, a domain (``msp:<clientRef>`` for the MSP lane) and the query, and
-receives the hybrid-retrieval passages with their citations. The route is
-mounted only when a retriever and a service token are configured, and it
-accepts one credential: the shared ``KNOWLEDGE_SERVICE_TOKEN`` bearer, so no
-console role can reach it. Retrieval is read-only (``knowledge.retrieve`` in
-policy/tools.yaml) and an empty scope is a normal outcome, never an error.
+The Mastra host grounds the MSP draft step here by posting a tenant, a domain
+(``msp:<clientRef>`` for the MSP lane) and the query. The route mounts only when a
+retriever and a service token are configured, accepts that shared bearer alone, and
+treats an empty scope as a normal outcome rather than an error.
 """
 
 from __future__ import annotations

@@ -1,6 +1,7 @@
 import { apiUrl } from "@/lib/api";
 import type { Workspace } from "@/lib/models";
 import type { JiraPrefs, UiPrefs } from "@/lib/prefs";
+import { RUNNABLE_WORKFLOWS } from "@/lib/runs";
 
 import { ConnectionsSection } from "./ConnectionsSection";
 import { GithubAccountsSection } from "./GithubAccountsSection";
@@ -28,11 +29,17 @@ const REFRESH_OPTIONS = [
   { value: 120, label: "Every 2 minutes" },
 ];
 
-const LANES = [
-  { id: "support", name: "Support", blurb: "Retrieval, draft, validation, approval gate, send." },
-  { id: "coding", name: "Coding", blurb: "Investigate, RCA, surgical patch, preflight, PR close." },
-  { id: "finance", name: "Finance", blurb: "Reconcile, exceptions, RCA, fan-out, audit, post." },
-];
+/**
+ * Lane config reads straight from the launch catalog, so this panel can never
+ * name a lane the console cannot start. The support, coding and finance lanes
+ * were dropped with the workflows themselves, and a hand-written copy here
+ * would have gone stale the same way.
+ */
+const LANES = RUNNABLE_WORKFLOWS.map((workflow) => ({
+  id: workflow.id,
+  name: workflow.label,
+  blurb: workflow.description,
+}));
 
 /**
  * Settings panel. App config and notification prefs are local-only and

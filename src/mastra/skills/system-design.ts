@@ -1,14 +1,10 @@
 import { createSkill } from "@mastra/core/skills";
 
 /**
- * System design skill for the coding lane.
- *
- * There is no matching skill in the official Mastra suite, so this is authored
- * fresh from standard architecture practice. It shapes how the actor reasons
- * about boundaries, data flow, failure, and trade-offs before it writes a
- * patch, and it keeps the smallest-scope discipline of the lane: design here
- * means choosing the right structure for the change, not redesigning the
- * system around it.
+ * System design skill for the coding lane, authored fresh because the official
+ * Mastra suite has no match. It shapes how the actor reasons about boundaries,
+ * data flow, failure and trade-offs, and keeps the smallest-scope discipline:
+ * choosing the right structure for the change, not redesigning the system.
  */
 export const systemDesignSkill = createSkill({
   name: "system-design",

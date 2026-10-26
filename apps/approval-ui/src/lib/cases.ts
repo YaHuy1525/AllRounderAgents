@@ -424,28 +424,9 @@ const HR_HELP_SEND_STEP: LaneStep = {
 };
 
 /**
- * Lane step sequences, mirrored from the Mastra workflows in src/mastra:
- * support runs intake -> retrieval -> draft -> validation -> gate -> send,
- * coding adds an environment selection stage, finance reconciles before
- * its audit and gate, the review lane follows the `review` run definition
- * (select-pr -> review-options -> ai-review -> complete), the issues lane
- * follows the `issues` run definition (issue-selection -> analysis ->
- * implementation -> complete), the features lane follows the `features`
- * run definition (feature-selection -> scope-design -> implementation ->
- * complete), and the dependencies lane follows the `dependencies` run
- * definition (scan -> group -> apply -> validate -> merge). The accessibility
- * lane follows the `accessibility` run definition (crawl -> violations ->
- * fix -> re-scan), the vendors lane follows the `vendors` run definition
- * (collect -> verify -> risk-score -> approve -> create), the leave lane
- * follows the `leave` run definition (intake -> policy-check -> approve ->
- * apply), and the onboarding lane follows the `onboarding` run definition
- * (collect -> verify -> risk-score -> approve -> provision). The offboarding
- * lane follows the `offboarding` run definition (intake -> access-audit ->
- * approve -> revoke -> attest), the screening lane follows the
- * `screening` run definition (requisition -> screen -> shortlist ->
- * schedule), and the hr-help lane follows the `hr-help` run definition
- * (intake -> retrieve -> draft -> approve -> send). Lanes only ever
- * render the steps they actually have.
+ * Lane step sequences, mirrored from the Mastra workflows and the API run
+ * definitions. A lane only ever renders the steps it actually has, and the table
+ * below is the single source — the definitions are not restated here.
  */
 export const LANE_STEPS: Record<LaneId, LaneStep[]> = {
   generic: [INPUT_STEP, RETRIEVE_STEP, PLAN_STEP, EXECUTE_STEP, RESULTS_STEP],

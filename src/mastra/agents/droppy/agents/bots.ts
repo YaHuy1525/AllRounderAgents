@@ -4,13 +4,8 @@ import type { DroppyConfig } from "../settings.js";
 import type { DroppyStore } from "../tools/store.js";
 
 /**
- * The nine Droppy bots.
- *
- * They run on our services, not on vendor APIs. Shopify is the channel and is
- * called as a channel — see ADR 0001.
- *
- * Each agent is thin: it reads the index, applies its rules, and emits a
- * domain event. No bot talks to another bot (ADR 0002) — they communicate only
+ * The nine Droppy bots, each thin: it reads the index, applies its rules and
+ * emits a domain event. No bot talks to another bot — they communicate only
  * through the bus, which is what makes any single bot killable.
  */
 

@@ -233,15 +233,11 @@ export interface BillsFlowDeps {
 }
 
 /**
- * Mastra `billsFlow`: the vendor-bill lane as named, suspendable workflow
- * steps (intake -> extract -> approve -> post). The vendor email is normalized
- * at intake, the bill is extracted by the model step and cross-checked
- * against the vendor registry (unregistered sender, changed remittance bank
- * details, unreadable or incomplete bills all escalate to the human), a
- * bookkeeper approves it, and the post creates the draft bill through the
- * ledger seam (Xero ACCPAY in DRAFT status in M4). The post side effect
- * executes only on a decision backed by a signed receipt and stays idempotent
- * by the flow's ledger key, `bills-post:{caseId}:{ticketKey}`.
+ * Mastra `billsFlow`: intake -> extract -> approve -> post. The extract step
+ * cross-checks the bill against the vendor registry (unregistered sender, changed
+ * bank details and unreadable bills escalate to a human), and the post creates
+ * one Xero ACCPAY draft only on a signed receipt, idempotent by
+ * `bills-post:{caseId}:{ticketKey}`.
  */
 export function createBillsFlow(deps: BillsFlowDeps) {
   const ledger = deps.ledger;

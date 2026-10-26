@@ -96,6 +96,7 @@ EXPECTED_TOOLS: dict[str, tuple[str, str, str | None]] = {
     "console.resolve_start_fields": ("read-only", "workflow-start-fields", None),
     "console.lookup_employee": ("read-only", "employee-directory", None),
     "console.list_tickets": ("read-only", "jira-projects", None),
+    "console.execute_ticket": ("read-only", "jira-projects", None),
     # QA squad writes (the qa lane): both act only on a human forward decision
     # at their gate, and both key their replay (caseSetHash, correlationId).
     "qa.cases-write": ("approval", "qa-cases", "caseSetHash"),
@@ -407,7 +408,12 @@ def test_the_console_agent_tools_are_declared_read_only() -> None:
     if not source.is_file():
         pytest.skip("the Mastra source tree is not present in this checkout")
     ids = set(re.findall(r'id: "([a-z_]+)"', source.read_text(encoding="utf-8")))
-    assert ids == {"resolve_start_fields", "lookup_employee", "list_tickets"}
+    assert ids == {
+        "resolve_start_fields",
+        "lookup_employee",
+        "list_tickets",
+        "execute_ticket",
+    }
     matrix = default_tool_matrix()
     for tool_id in ids:
         declared = matrix.get(f"console.{tool_id}")

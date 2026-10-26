@@ -13,21 +13,11 @@ import {
 } from "./contracts.js";
 
 /**
- * The delegation gate, and the reason this squad is safe to hand a model.
- *
- * Supervisor-first has one honest weakness: the supervisor decides the
- * sequence. Every blocking condition therefore lives in code the model cannot
- * argue with, not in an instruction it can talk itself past.
- *
- *   * A phase may only reach the children that phase is for.
- *   * The executor cannot be delegated to before a human approved a case set.
- *   * A hook that throws fails the delegation instead of continuing, because
- *     Mastra's default is to warn and carry on.
- *   * A failed delegation bails the loop and returns a curated sentence rather
- *     than forwarding a provider message to the model.
- *
- * `primitiveId` is the child's agent id: Mastra builds the delegation context
- * with `primitiveId: agent.id`, not the key it was registered under.
+ * The delegation gate. Because the supervisor picks the sequence, every blocking
+ * condition lives in code rather than in an instruction: phases only reach their
+ * own children, the executor needs an approved case set first, a throwing hook
+ * fails the delegation (Mastra's default is to warn and carry on), and a failure
+ * returns a curated sentence. `primitiveId` is the child's agent id, not its key.
  */
 
 /** Which phase of a run is running. */

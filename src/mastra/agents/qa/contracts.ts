@@ -1,17 +1,11 @@
 import { z } from "zod";
 
 /**
- * Named steps of the Mastra qa flow. Ids match the API run definition
- * (`runs/definitions.py` QA_WORKFLOW) so the stepper, decisions, and receipts
- * line up across the two planes.
- *
- * Nine steps, two human gates, two side-effecting exits: `intake` resolves the
- * start, `analyse` and `design` are the model phases, `approve-cases` is the
- * first gate, `execute` drives the approved set, `assess` computes the verdict
- * from what it observed, `approve-defects` is the second gate, `file-defects`
- * performs the governed Jira writes, and `close` assembles the evidence pack.
- * The Python definition must list exactly what this flow emits, so both sides
- * change in the same commit.
+ * Named steps of the Mastra qa flow. Ids match the Python run definition
+ * (`runs/definitions.py` QA_WORKFLOW), so the stepper, decisions and receipts line
+ * up across the two planes; both sides change in the same commit. Nine steps with
+ * two human gates (`approve-cases`, `approve-defects`) and two side-effecting
+ * exits (`execute` drives the cases, `file-defects` writes to Jira).
  */
 export const QA_FLOW_STEPS = [
   "intake",

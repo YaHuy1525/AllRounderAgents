@@ -11,6 +11,7 @@ export type TabKind =
   | "workflow"
   | "run"
   | "observability"
+  | "assistant"
   | "new";
 
 const TAB_KINDS: readonly string[] = [
@@ -26,6 +27,7 @@ const TAB_KINDS: readonly string[] = [
   "workflow",
   "run",
   "observability",
+  "assistant",
   "new",
 ];
 
@@ -125,7 +127,8 @@ export type SingletonKind =
   | "settings"
   | "account"
   | "runs"
-  | "observability";
+  | "observability"
+  | "assistant";
 
 const SINGLETON_TITLES: Record<SingletonKind, string> = {
   approvals: "Approvals",
@@ -136,6 +139,7 @@ const SINGLETON_TITLES: Record<SingletonKind, string> = {
   account: "Account",
   runs: "Runs",
   observability: "Observability",
+  assistant: "Assistant",
 };
 
 export function openSingletonTab(

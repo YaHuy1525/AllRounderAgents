@@ -1,21 +1,7 @@
-// GitHub MCP backend for the deterministic reader/writer (coding-lane MCPClient
-// redesign, Option R).
-//
-// The flow's governance (GitHubSourceReader / GitHubWriter behind the approval
-// receipt) speaks the host-agnostic `GitHubBackend` interface, and the coding
-// agents' read tools speak the narrower `RepoReadBackend` slice. This module
-// maps those operations onto the SHARED `MCPClient` from `mcp-client.ts`: each
-// operation resolves the discovered `github_<name>` tool and calls it
-// programmatically, then normalizes the result into the same shapes the flow
-// expects.
-//
-// What changed from the retired hand-written layer: there is no bespoke SDK
-// session, no hardcoded `callTool` plumbing and no `requiredTools` assertion —
-// tool discovery (`listTools()`) is the single source of which tools exist, so
-// the check-run reader picks whichever variant the server actually exposes and
-// code search degrades when it does not. Payload-shape tolerance (structured
-// content vs resource blocks vs JSON text, base64 vs plain) is preserved: the
-// hosted GitHub MCP server build varies, so the same defensive parsers remain.
+// Maps `GitHubBackend` / `RepoReadBackend` onto the shared MCP client's
+// discovered `github_<name>` tools. Tool discovery is the only source of which
+// tools exist, so callers degrade instead of asserting, and the payload parsers
+// stay tolerant because the hosted server build varies.
 
 import {
   StaleSourceError,
@@ -210,15 +196,10 @@ function toolData(result: McpToolResult): unknown {
 }
 
 /**
- * Maps the host-agnostic GitHub operations onto the shared MCPClient's
- * discovered tools. Ref/CAS conflicts raised by the server map to
- * `StaleSourceError`, matching the flow's stale_source escalation, and
- * authorization failures stay typed as `GitHubMcpError` with the server message.
- *
- * Tool availability is read from the discovered map rather than asserted
- * against a hardcoded list: `checkRuns` uses whichever check reader the server
- * exposes, and `searchCode` degrades to no hits when the build lacks the tool —
- * a read-only research path must never fail the loop.
+ * Maps the host-agnostic GitHub operations onto the shared MCPClient's discovered
+ * tools. Ref/CAS conflicts map to `StaleSourceError`, and tool availability is
+ * read from the discovered map rather than asserted, so `searchCode` degrades to
+ * no hits instead of failing the loop when the server build lacks the tool.
  */
 export class McpClientGitHubBackend implements GitHubBackend, ReviewBackend {
   private readonly listTools: ToolMapProvider;

@@ -65,16 +65,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Vendor registry over the platform API's service-to-service lookup route
- * (`POST /msp/vendors/lookup`, shared bearer token; the same bridge the
- * knowledge seam uses). The tenant scopes the lookup and the sender address
- * is the key inside it.
- *
- * Every failure degrades to `null` instead of an exception: an unreachable or
- * unconfigured registry must surface as the lane's `vendor_unverified`
- * escalation, where a human sees it, rather than fail the extract step. A
- * response the VendorRecord contract cannot parse is treated as no match at
- * all, because partial trust is worse than a human review.
+ * Vendor registry over the platform API's service-to-service lookup route. The
+ * tenant scopes the lookup and the sender address is the key inside it. Every
+ * failure degrades to `null` so the lane's `vendor_unverified` escalation stays
+ * the one place a human sees it, and an unparseable response counts as no match.
  */
 export class HttpVendorRegistry implements VendorRegistry {
   private readonly baseUrl: string;

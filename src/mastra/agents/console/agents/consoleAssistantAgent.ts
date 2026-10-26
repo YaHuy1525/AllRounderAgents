@@ -6,30 +6,11 @@ import { knowledgeTools } from "../../../shared/knowledge-plane.js";
 import { CONSOLE_ASSISTANT_MODEL_CONFIG } from "../../../shared/model.js";
 
 /**
- * The approval-console chat assistant: the one conversational agent the browser
- * streams from. It answers any operator or employee question in ordinary
- * sentences across every lane the console covers, including the coding lanes,
- * so a ChatGPT-style thread "which things look stuck around here?" is a
- * legitimate first message rather than a string that has to match a regex.
- *
- * Retrieval is agent-driven, not pre-retrieved. The agent picks the index and
- * the metadata filter itself, calls the knowledge-plane tools one per question,
- * and cites every policy claim as `sourceId:span`. It also carries the
- * read-only console tools (`resolve_start_fields`, `lookup_employee`,
- * `list_tickets`), which read the workflow start contract, the employee
- * directory, and the tenant's lane-matched tickets through the serving plane's
- * shared service bridge. All are reads: the assistant may say what a run needs,
- * who a person is, and which tickets exist, but starting the run stays the
- * operator's confirm button, so no reply here can write.
- *
- * Each tool family is empty unless its wiring is present — the knowledge plane
- * behind `MASTRA_RAG_PILOT` plus the vector settings, the console tools behind
- * `KNOWLEDGE_API_URL` and `KNOWLEDGE_SERVICE_TOKEN`. That is why the tool rules
- * tell the model to say so instead of answering from memory: an ungrounded
- * policy answer, or an invented employee id, is worse than an admitted gap.
- *
- * The model comes from the `CHAT_MODEL` seam in `shared/model.ts`, so swapping
- * the conversational tier is an env edit and never a code review.
+ * The console chat assistant: one agent over every lane, streaming to the
+ * browser. It retrieves on its own and cites `sourceId:span`, and it carries
+ * the read-only console tools. Both tool families stay empty unless their env
+ * is wired, so it must report a gap rather than answer from memory. Nothing
+ * here writes, because only the operator's confirm button starts a run.
  */
 const tools = { ...knowledgeTools(), ...consoleToolsFromEnv() };
 
@@ -49,10 +30,11 @@ You are the single AllRounder approval-console assistant. One voice for the whol
 1. For any question about company policy, entitlements, benefits, leave, conduct, or internal procedure, call a knowledge search tool before answering. When more than one is available, pick the index whose description covers the question; a cross-domain question may need one call per index.
 2. Ask each search for 3-4 results, not dozens. Refine the query in a second call if the first misses; only build a metadata filter when the question is explicitly about governance (for example canonical-only, or excluding stale documents).
 3. When the user asks which tickets exist, or asks to see a lane's work (for example "list all HR tickets"), call the list_tickets tool with the lane ids it names, or with the user's own words as a search needle. The board snapshot in the console context only shows the cards on screen, so never answer a listing question from it. Quote the keys and summaries exactly as returned.
-4. When the user wants to start a run, or asks what a run needs, call the resolve_start_fields tool with the workflow id and the user's own words. Report the filled fields with the source it names, and list the missing ones as questions. Never fill a missing field yourself.
-5. When the user names a colleague, call the lookup_employee tool before answering who they are, which department they are in, or who approves them. Quote only the org facts it returns.
-6. Never say a run was started, queued, or approved: you cannot do that, and the card's confirm button is the only writer. Close a launch intent by pointing at the confirm step.
-7. If a tool is unavailable in this build, or returns nothing above the score floor, or answers with an error, say plainly what is missing and answer only the part you can support. Never substitute remembered or generic policy.
+4. When the user names one ticket to execute, run, or open (for example "execute SCRUM-10"), call the execute_ticket tool with that exact key. It reads the ticket and the workflow lanes its own text matches, and the console turns that result into an Execute button that opens the ticket's run tab. Quote the key and summary it returns, name the lane, and never claim the run started: the operator confirms inside the tab. If the key matches no ticket, say so plainly.
+5. When the user wants to start a run, or asks what a run needs, call the resolve_start_fields tool with the workflow id and the user's own words. Report the filled fields with the source it names, and list the missing ones as questions. Never fill a missing field yourself.
+6. When the user names a colleague, call the lookup_employee tool before answering who they are, which department they are in, or who approves them. Quote only the org facts it returns.
+7. Never say a run was started, queued, or approved: you cannot do that, and the card's confirm button is the only writer. Close a launch intent by pointing at the confirm step.
+8. If a tool is unavailable in this build, or returns nothing above the score floor, or answers with an error, say plainly what is missing and answer only the part you can support. Never substitute remembered or generic policy.
 </tool_rules>
 
 <grounding_rules>

@@ -12,14 +12,10 @@ import {
 } from "../contracts.js";
 
 /**
- * Tool seams for the security lane. Every seam is a protocol with a
- * fixture-backed in-memory implementation (the HR-lane `EmployeeDirectory`
- * pattern): the lane makes no network calls, and a later SIEM / CMDB / intel /
- * EDR adapter only swaps the implementation behind the same interface.
- *
- * The one exception in production is `CaseHistory`: the host may back it with
- * Mastra Memory over persistent storage (`tools/mastra-case-history.ts`,
- * plan §5.1) while tests and CI stay on the fixture implementation below.
+ * Tool seams for the security lane: every seam is a protocol with a fixture-backed
+ * in-memory implementation, so the lane makes no network calls and a later SIEM /
+ * CMDB / intel / EDR adapter only swaps the implementation. `CaseHistory` is the
+ * one exception, since the host may back it with Mastra Memory.
  */
 
 /* ----------------------------------------------------------------- telemetry */

@@ -7,28 +7,11 @@ import { McpClientGitHubBackend, type CodeHit, type DirEntry } from "./mcp.js";
 import { ValidatorRegistry } from "./validators.js";
 
 /**
- * Read-only repository tools for the coding agents (agent quality upgrade,
- * Phases 1–2). Until now the investigator could only cite what the ticket
- * named and the actor only saw the up-to-four evidence files the flow stuffed
- * into the prompt. These tools let the agents look at the repository for
- * themselves — orient with `list_dir`, locate candidates with `search_code`,
- * verify with `read_file` — and self-check a draft patch with `validate_patch`
- * against the same deterministic structure floor the flow scores with.
- *
- * The design copies the `web_search` tool's discipline exactly:
- * * plain function tools (any tool-calling model can use them), attached
- *   unconditionally so each agent stays one canonical `new Agent({...})`;
- * * graceful degradation — with no GitHub credentials the tools return an
- *   availability error string instead of throwing into the agent loop, so an
- *   unconfigured deployment behaves exactly like before this upgrade;
- * * governance — every call re-checks the repository allowlist
- *   (`GITHUB_REPOSITORY_ALLOWLIST`, the same env the flow's policy is built
- *   from) and fails closed when it is not configured. A denied repository
- *   yields an error string naming the policy, never content.
- *
- * The write side (push_files / create_pull_request) deliberately stays with
- * the deterministic flow behind the approval receipt; agents never get a
- * tool that can mutate a repository.
+ * Read-only repository tools (`list_dir`, `search_code`, `read_file`) plus
+ * `validate_patch`, which scores a draft against the same deterministic floor
+ * the flow uses. Every call re-checks the repository allowlist and fails closed,
+ * returning an availability string rather than throwing when unconfigured.
+ * Writes stay in the flow behind the approval receipt.
  */
 
 /**

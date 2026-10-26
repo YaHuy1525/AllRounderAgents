@@ -1,15 +1,11 @@
 # ruff: noqa: B008 -- FastAPI dependencies are declared as parameter defaults.
 
-"""Console knowledge base (upgrade U5).
+"""Console knowledge base.
 
-The Knowledge page reads and ingests through this router. Reads are
-role-gated like the command bar (any signed-in console role); uploads are
-admin-only because a document changes what every lane's grounding can cite.
-Ingestion reuses the store's existing ``ingest`` path unchanged: one
-document, one ``source_version``, a ``stale_after`` review horizon, and a
-``canonical`` flag that the search toggle filters on. No agent runs here and
-no run state is touched, so the only write on the surface stays a document
-upsert.
+Reads are open to any signed-in console role and uploads are admin only, because a
+document changes what every lane's grounding can cite. Ingestion reuses the store's
+``ingest`` path unchanged, and since no agent runs and no run state is touched, the
+only write on this surface is a document upsert.
 """
 
 from __future__ import annotations

@@ -649,14 +649,11 @@ def _qa_ref_resolves(
 def qa_deterministic_outcomes(
     *, output: Mapping[str, Any], expect: Mapping[str, Any]
 ) -> list[CriterionOutcome]:
-    """Mechanically-checkable qa gates, never sent to a judge.
+    """Mechanically checkable qa gates, never sent to a judge.
 
-    Six rail cases read one run, so the checks answer two questions: did the
-    designed set reach *this* case's affordance, and is the verdict honest at
-    all — results for exactly the approved cases, defects only where a case
-    failed, evidence references that resolve, gaps only where nothing passed,
-    and a blocked execution that never claims a pass. A failure on any of these
-    fails the case whatever the judge scores.
+    Results must cover exactly the approved cases, defects must exist only where a
+    case failed, every evidence reference must resolve, and a blocked execution may
+    never claim a pass. A failure here fails the case whatever the judge scores.
     """
     cases = output.get("cases", [])
     results = output.get("results", [])
@@ -823,18 +820,11 @@ def qa_deterministic_outcomes(
 def qa_state(*, rail: Mapping[str, Any], output: Mapping[str, Any]) -> dict[str, Any]:
     """Assemble the judge's view of one rail case against one qa run.
 
-    `rail` is the behaviour under test, `cases` is what the squad designed for
-    it, and `results`/`defects` are what the run reported. Calibration reads the
-    gap between the three, so an intention stated as an expectation, or a
-    defect that restates its own title, is visible rather than trusted.
-
-    Six rail cases read one run, so the run-level material is scoped to the case
-    under review wherever a criterion is about *this* case: `defects` holds this
-    case's findings, and the findings filed against its siblings are named in
-    `defectsElsewhere` so the judge can see the run did file them without being
-    asked to grade four other cases through this one. Requirements come with
-    their text, because `R3` alone is not something a judge can decide an
-    `requirementId` against.
+    `rail` is the behaviour under test, `cases` what the squad designed,
+    `results`/`defects` what the run reported. Findings are scoped to this case and
+    sibling defects are named separately, so the judge never grades other cases
+    through this one. Requirements carry their text, since an id alone is not
+    something a judge can decide a `requirementId` against.
     """
     case_id = str(rail.get("id", ""))
     cases = [

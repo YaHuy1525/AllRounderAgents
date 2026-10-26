@@ -4,17 +4,10 @@ import type { CorsOptions, MiddlewareHandler } from "@mastra/core/server";
 import { MASTRA_RESOURCE_ID_KEY } from "@mastra/core/request-context";
 
 /**
- * Tenant and identity enforcement for the browser-facing console chat.
- *
- * The browser now talks to this host directly instead of through the Python
- * serving plane, so two values the caller controls have to be policed: the
- * tenant the console tools read, and the memory resource that addresses a
- * user's threads. Both are derived here from the verified Supabase access
- * token and never taken from the request.
- *
- * The decisions are a pure function over plain data. The Hono adapter in
- * `chatAuthMiddleware` (Task 3) only converts a `GuardDecision` into a
- * response, which keeps the whole security table testable without a server.
+ * Tenant and identity enforcement for the browser-facing console chat. The
+ * tenant and the memory resource both come from the verified Supabase token,
+ * never from the request. Decisions are a pure function over plain data, so
+ * the security table stays testable without a server.
  */
 
 /** Contract names the guard reads, all three supplied by the deployment. */
@@ -187,14 +180,10 @@ function denialBody(reason: string): { error: { message: string } } {
 
 /**
  * Hono middleware enforcing the console chat contract on the agent and memory
- * routes. Registered through `server.middleware`, so it runs after the
- * framework's context middleware has created the `RequestContext` and before
- * the route handler reads it — that is the object the console tools later read
- * the tenant from, which is why setting it here is enough.
- *
- * It never consumes the request body unless `strictResourceMatch` is on, and
- * then only through `c.req.raw.clone()`, so the handler's own body read is
- * untouched. That is the spec §7.1 implementation risk closed by construction.
+ * routes. It runs through `server.middleware`, after the framework has created the
+ * `RequestContext` the console tools later read the tenant from. The body is only
+ * read via `c.req.raw.clone()`, under `strictResourceMatch`, so the handler's own
+ * read is untouched.
  */
 export function chatAuthMiddleware(deps: GuardDeps): MiddlewareHandler<{ Variables: Variables }> {
   return async (c, next) => {

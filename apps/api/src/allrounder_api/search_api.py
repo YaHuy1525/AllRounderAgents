@@ -2,16 +2,11 @@
 
 """Read-only command-bar search across runs, approvals, and knowledge.
 
-The console command bar (upgrade U1) resolves every query through this
-route. It is deliberately read-only: no step is executed, no decision is
-recorded, and raw receipt tokens never leave the server — results carry
-``run:step`` deep links so acting on a hit always goes through the existing
-receipt-gated decision endpoint.
-
-Intent resolution is deterministic (never an LLM): ``why`` > ``list`` with
-an awaiting/blocked/overdue scope > ``do`` navigate verbs > ``find`` free
-text. Structured hits (runs, approvals) and knowledge-retriever passages
-are returned in separate arrays so their scores never mix.
+No step is executed, no decision is recorded, and raw receipt tokens never leave the
+server: results carry ``run:step`` deep links so acting on a hit goes through the
+existing receipt-gated decision endpoint. Intent resolution is deterministic rather
+than an LLM, and structured hits and knowledge passages are returned in separate
+arrays so their scores never mix.
 """
 
 from __future__ import annotations

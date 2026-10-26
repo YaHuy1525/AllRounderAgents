@@ -1,13 +1,9 @@
 """Prometheus metrics registry for the serving plane.
 
-One process-local :class:`MetricsRegistry` per app instance keeps unit tests
-isolated (no default-collector duplicate registration). Label sets are
-bounded: route labels use router path templates, never raw ids or ticket keys.
-
-The registry doubles as the console's data source: :meth:`MetricsRegistry.summary`
-turns the raw counters and histogram buckets into a small JSON document for
-``GET /metrics/summary`` (runs by workflow/status, decisions, queue depth, and
-latency percentiles), while ``GET /metrics`` keeps the Prometheus exposition.
+One registry per app instance keeps unit tests isolated, and label sets stay bounded:
+route labels use path templates, never raw ids or ticket keys. ``summary()`` turns the
+same counters into the JSON behind ``GET /metrics/summary``, while ``GET /metrics``
+keeps the Prometheus exposition.
 """
 
 from __future__ import annotations

@@ -172,6 +172,44 @@ export async function createThread(
   title: string,
   client?: MastraClient,
 ): Promise<AssistantThread | null> {
+  const opened = await openThread(title, client);
+  return "thread" in opened ? opened.thread : null;
+}
+
+/** The configured host, for the sentence a person reads when a call fails. */
+export function assistantHost(): string {
+  const base = process.env.NEXT_PUBLIC_MASTRA_URL;
+  return base === undefined || base.trim() === ""
+    ? "no host configured (NEXT_PUBLIC_MASTRA_URL is unset)"
+    : base.trim();
+}
+
+/**
+ * Turns a host failure into something a person can act on. The reason is kept
+ * on purpose: a swallowed error is what made the first failure unreadable.
+ */
+function hostFailure(error: unknown): string {
+  const host = assistantHost();
+  const detail = error instanceof Error ? error.message : String(error);
+  if (/no tenant/i.test(detail)) {
+    return "This account has no tenant, so a conversation cannot be stored.";
+  }
+  if (/not configured/i.test(detail)) {
+    return "The assistant has no host to talk to. Set NEXT_PUBLIC_MASTRA_URL to this project's Mastra host.";
+  }
+  if (/ECONNREFUSED|fetch failed|Failed to fetch|NetworkError|ECONNRESET/i.test(detail)) {
+    return `Nothing answered at ${host}. Start the assistant host with npm run dev:backend, then try again.`;
+  }
+  if (/404|not found/i.test(detail)) {
+    return `The host at ${host} answered, but it has no "${ASSISTANT_AGENT_ID}" agent. Point NEXT_PUBLIC_MASTRA_URL at this project's Mastra host.`;
+  }
+  return `The host at ${host} refused the conversation: ${detail.slice(0, 200)}`;
+}
+
+export type ThreadOpen = { thread: AssistantThread } | { reason: string };
+
+/** Like `createThread`, but it says why it failed instead of returning null. */
+export async function openThread(title: string, client?: MastraClient): Promise<ThreadOpen> {
   try {
     const resourceId = await requireResource();
     const target = client ?? (await assistantClient());
@@ -181,9 +219,9 @@ export async function createThread(
       resourceId,
       agentId: ASSISTANT_AGENT_ID,
     });
-    return { id: String(thread.id), title: titleOf(thread.title), updatedAt: null };
-  } catch {
-    return null;
+    return { thread: { id: String(thread.id), title: titleOf(thread.title), updatedAt: null } };
+  } catch (error) {
+    return { reason: hostFailure(error) };
   }
 }
 
@@ -273,6 +311,8 @@ export type ChatTurn = {
   body: string;
   toolNotes: string[];
   rows: AssistantTicketRow[];
+  /** A single ticket the `execute_ticket` tool resolved, rendered as an Execute action. */
+  execute: AssistantTicketRow | null;
   error: string | null;
   stopped: boolean;
 };
@@ -291,7 +331,7 @@ export function initialChatState(unusable = false): ChatState {
 }
 
 function blankTurn(role: "user" | "assistant"): ChatTurn {
-  return { role, body: "", toolNotes: [], rows: [], error: null, stopped: false };
+  return { role, body: "", toolNotes: [], rows: [], execute: null, error: null, stopped: false };
 }
 
 export function appendUserTurn(state: ChatState, text: string): ChatState {
@@ -386,6 +426,23 @@ export function extractTicketRows(chunk: unknown): AssistantTicketRow[] {
 }
 
 /**
+ * Read the single ticket an `execute_ticket` result resolved, or null. The
+ * result carries `ticket`, not a `tickets` array, and an `ok: false` or a
+ * missing ticket yields nothing so no Execute button is offered for a record
+ * the console never read.
+ */
+export function extractExecuteTicket(chunk: unknown): AssistantTicketRow | null {
+  const payload = chunkPayload(chunk);
+  const toolName = payload.toolName ?? (chunk as { toolName?: unknown } | null)?.toolName;
+  if (toolName !== "execute_ticket") return null;
+  const result = payload.result;
+  if (typeof result !== "object" || result === null) return null;
+  const record = result as { ok?: unknown; ticket?: unknown };
+  if (record.ok === false) return null;
+  return ticketRow(record.ticket);
+}
+
+/**
  * The single transcript reducer. `ChatShell` only calls it and renders its
  * output, which is how every streaming behaviour stays a node test rather than
  * a browser click. It returns the same object when a chunk carries nothing, so
@@ -413,6 +470,10 @@ export function reduceChatState(state: ChatState, chunk: unknown): ChatState {
   }
 
   if (type === "tool-result" || payload.result !== undefined) {
+    const execute = extractExecuteTicket(chunk);
+    if (execute !== null) {
+      return withLastTurn(ensureAssistantTurn(state), (turn) => ({ ...turn, execute }));
+    }
     const rows = extractTicketRows(chunk);
     if (rows.length === 0) return state;
     return withLastTurn(ensureAssistantTurn(state), (turn) => {

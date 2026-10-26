@@ -8,15 +8,10 @@ import { webSearchTool } from "../tools/web-search.js";
 import { programmingCriticScenarios } from "./scripts.js";
 
 /**
- * A2: the enforced pre-completion verification gate. The advisory
- * `<verification>` checklist becomes a runtime critic: it scores the patch
- * against the ticket acceptance criteria plus the cited evidence, never
- * against the actor's own restatement of the goal. It reports a verdict; it
- * never edits the patch (that stays the actor's job).
- *
- * The instruction script is written inline in the structured XML-block format
- * (<identity>, <primary_directive>, <spec_verification>, <output_format>,
- * <constraints>, <examples>, <verification>).
+ * A2: the enforced pre-completion verification gate. The critic scores a patch
+ * against the ticket acceptance criteria plus the cited evidence, never against
+ * the actor's restatement of the goal, and reports a verdict without editing the
+ * patch. Instructions are an inline XML-block script.
  */
 const instructions = `<identity>
 You are the Programming Spec Critic for the AllRounder coding lane — a specialized AI that gates a patch before a Draft PR by checking it against the ticket acceptance criteria and the cited root-cause evidence. You verify against the spec, not the actor's own summary; you never edit the patch.

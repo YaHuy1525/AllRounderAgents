@@ -2,18 +2,11 @@ import { api } from "./api";
 import { formatRate } from "./metrics";
 
 /**
- * Browser-side model for the coding-lane benchmark (`GET /metrics/benchmark`).
- *
- * The endpoint folds the durable ``run_archive`` mirror into a small JSON
- * document: one lane per coding workflow, each carrying a per-step approval
- * funnel (``approvals / (approvals + retries + stops)``) and a lane pass rate
- * paired with cost-per-pass, plus the A7 self-correction counters that prove
- * the harness upgrade. The numbers survive a console restart because they come
- * from archived terminal runs, not the in-process Prometheus counters.
- *
- * Mirrors the ``metrics.ts`` contract pattern: a defensive sanitizer that
- * drops malformed lane/step rows without ever failing the whole payload, so a
- * partial document still renders.
+ * Browser-side model for `GET /metrics/benchmark`, which folds the durable
+ * `run_archive` mirror into per-lane approval funnels, pass rates with
+ * cost-per-pass, and the A7 self-correction counters. The numbers survive a
+ * console restart because they come from archived runs, not Prometheus counters.
+ * Like `metrics.ts`, the sanitizer drops malformed rows instead of failing.
  */
 
 const SELF_CORRECTION_KEYS = [

@@ -1,14 +1,10 @@
 """Start-input checks: refuse an incomplete run at the door.
 
-Each flow's Zod ``InputSchema`` stays the authority on the exact value. This
-module only enforces the contract the catalog already publishes through
-``WorkflowDefinition.start_fields``, so a start that is missing a required
-value comes back as one 422 naming every offending field — instead of a run
-that saves, drives, and then fails (or, worse, suspends on a step whose gate
-the flow cannot compute) because ``employeeId`` was absent.
-
-Deliberately lenient where the flow is lenient: a number may arrive as ``7``
-or ``"7"``, and an unlisted optional field is ignored rather than rejected.
+Each flow's Zod ``InputSchema`` stays the authority on the exact value, and this module
+only enforces what the catalog publishes through ``WorkflowDefinition.start_fields``,
+so an incomplete start is one 422 naming every offending field. It is lenient where
+the flow is lenient: a number may arrive as ``7`` or ``"7"``, and an unlisted optional
+field is ignored rather than rejected.
 """
 
 from __future__ import annotations

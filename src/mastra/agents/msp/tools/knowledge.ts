@@ -18,16 +18,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Knowledge seam over the platform API's service-to-service retrieval route
- * (`POST /knowledge/search`, shared bearer token). The run's tenant plus the
- * client ref map onto the store partition `msp:<clientRef>`, so one client's
- * runbooks never ground another client's reply.
- *
- * Every failure degrades to an empty result instead of an exception: an
- * unreachable or unconfigured service must surface as the lane's
- * `empty_retrieval` escalation, where a human sees it, rather than fail the
- * draft step. A response the MspPassage contract cannot parse is treated as
- * no grounding at all, because partial trust is worse than a human review.
+ * Knowledge seam over the platform API's service-to-service retrieval route. The
+ * run's tenant plus client ref map onto the partition `msp:<clientRef>`, so one
+ * client's runbooks never ground another's reply. Every failure degrades to an
+ * empty result, surfacing the lane's `empty_retrieval` escalation rather than a
+ * failed draft, and an unparseable passage counts as no grounding at all.
  */
 export class HttpMspKnowledge implements MspKnowledge {
   private readonly baseUrl: string;

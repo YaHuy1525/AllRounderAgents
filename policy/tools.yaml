@@ -210,6 +210,11 @@ tools:
     scope: jira-projects
     class: read-only
 
+  - name: console.execute_ticket
+    description: Read one ticket by its exact key and the workflow lanes its text matches, so the console can open its run tab.
+    scope: jira-projects
+    class: read-only
+
   # QA squad writes (the qa lane): two, both behind a human decision. Writing
   # the case set is the approve-cases gate; filing a defect is the
   # approve-defects gate, and the file-defects step refuses any finding the

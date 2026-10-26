@@ -152,15 +152,10 @@ class StepDefinition:
     def __post_init__(self) -> None:
         """Fail loudly on governance values the platform does not know.
 
-        ``_pass_kinds`` filters the declared kinds against ``SLOT_ORDER``, so
-        an undeclared kind (a ``"modl"`` typo) would silently drop the
-        requirement and un-cap the step instead of capping it — the exact
-        failure mode slot discipline exists to prevent. Validation happens at
-        import time for the shipped definitions, never at run time.
-
-        The same reasoning guards ``risk``: a typo'd band (``5`` for ``55``)
-        would land in range but silently un-rank the gate onto a bogus value,
-        so an explicit band must be one of the ``RISK_BANDS`` anchors.
+        ``_pass_kinds`` filters declared kinds against ``SLOT_ORDER``, so an
+        undeclared kind would silently drop the requirement and un-cap the step
+        instead of capping it. A typo'd ``risk`` would land in range yet un-rank the
+        gate onto a bogus value. Both are validated at import time.
         """
         unknown = [kind for kind in self.slots if kind not in SLOT_ORDER]
         if unknown:
@@ -511,20 +506,13 @@ def run_topology(
     run: WorkflowRun,
     definition: WorkflowDefinition | None,
 ) -> dict[str, object]:
-    """Read-only topology for one run: steps + satellites + receipts + lock.
+    """Read-only topology for one run: steps, satellites, receipts and lock.
 
-    One payload feeds the console's five lenses (forms, graph, data, timeline,
-    logs): live step rows carry state, the static workflow definition adds the
-    display-only ``sideEffecting`` / ``integrations`` fields the flow graph
-    renders as satellites plus any lane-declared custom ``fields`` the
-    console renders on the step surface, and the lock/receipt summaries close
-    the loop. Run-level header fields and step rows derive from
-    ``run_snapshot()`` — the shape ``GET /runs/{run_id}`` and SSE transition
-    events publish — so the console read model can never disagree with the
-    detail surface. The definition is passed in by the caller because
-    ``definitions.py`` already imports this module — importing it back would
-    be a cycle. Unknown workflows (``definition`` is None) degrade to the
-    run's own rows with empty satellites instead of failing.
+    One payload feeds the console's five lenses, and every row derives from
+    ``run_snapshot()``, the same shape ``GET /runs/{run_id}`` publishes, so the read
+    model cannot disagree with the detail surface. The definition is passed in by the
+    caller because ``definitions.py`` imports this module, and importing it back would
+    be a cycle. Unknown workflows degrade to the run's own rows with empty satellites.
     """
 
     snapshot = run_snapshot(run)

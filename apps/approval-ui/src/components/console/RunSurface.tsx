@@ -2997,15 +2997,9 @@ export function parseDependencyGroups(
 }
 
 /**
- * The one move rule behind drag, keyboard, and click: relocate one package
- * from its group to another, appending it to the target group. A same-group
- * request, an unknown package, or a target that already lists that name all
- * return the *same array reference* so callers can detect the no-op and skip
- * a state write — the semantics the component's early returns had before this
- * extraction. The duplicate-name guard matters because an artifact that ever
- * listed a package twice could otherwise land it twice in the target (and a
- * package present in two groups would duplicate the target group's React
- * keys and counts; the append is exactly what must not happen then).
+ * The one move rule behind drag, keyboard and click: relocate one package to
+ * another group, appended. A same-group request, unknown package or duplicate name
+ * returns the *same array reference* so callers can skip the state write.
  */
 export function movePackageBetween(
   groups: DependencyGroupView[],

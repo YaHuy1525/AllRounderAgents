@@ -303,15 +303,11 @@ export interface ScreeningFlowDeps {
 }
 
 /**
- * Mastra `screeningFlow`: the candidate screening lane as named, suspendable
- * workflow steps (requisition -> screen -> shortlist -> schedule). The
- * requisition rubric, per-criterion verdicts, weighted scores, and shortlist
- * defaults are deterministic; the HR guardrail screens notes and evidence for
- * protected-attribute language and non-rubric reasoning and its flags attach
- * to the screen artifact. The single side-effecting step executes only on a
- * decision backed by a signed receipt and stays idempotent — interview
- * invites by `(requisitionId, candidateId)`. Invite failures are listed in the
- * receipt, never swallowed.
+ * Mastra `screeningFlow`: requisition -> screen -> shortlist -> schedule. Rubrics,
+ * per-criterion verdicts and weighted scores are deterministic, and the HR
+ * guardrail flags protected-attribute language on the screen artifact. The one
+ * side-effecting step runs only on a signed receipt, idempotent by
+ * `(requisitionId, candidateId)`, and invite failures are listed in the receipt.
  */
 export function createScreeningFlow(deps: ScreeningFlowDeps) {
   const ats = deps.ats;

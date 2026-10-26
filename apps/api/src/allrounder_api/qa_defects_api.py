@@ -1,24 +1,14 @@
 """The one governed write the QA squad may make: filing a defect.
 
-The agent plane does not get a second Jira client. It posts here, and this
-route wraps ``JiraTools.create_ticket``, which already owns receipts, the
-MCP-to-REST degradation and the replay rule. Two transports would mean two
-idempotency records for one defect (decision D2 in the QA squad plan).
+The agent plane gets no second Jira client. It posts here and this route wraps
+``JiraTools.create_ticket``, which already owns receipts, the MCP to REST
+degradation and the replay rule.
 
-Idempotency is ``"{storyKey}:{caseId}"`` — one defect per case per story:
-
-* first failure: create the ticket, and remember its key in this process;
-* repeat failure: comment the new evidence on the remembered ticket;
-* a create the shared idempotency store has already claimed: answer
-  ``replayed`` with no second ticket, which is what survives the restart the
-  in-process ledger does not;
-* a case that now passes: comment that it passes, or answer ``skipped`` when
-  the correlation has no defect at all.
-
-That is what stops a nightly suite from producing a ticket avalanche, and it
-is why the route answers 200 with an ``action`` even when the write failed: a
-governed write reports what happened, and the caller keeps the finding visible
-instead of losing it to an exception.
+Idempotency is ``"{storyKey}:{caseId}"``, one defect per case per story. A first
+failure creates the ticket, a repeat comments the new evidence, an already claimed
+create answers ``replayed``, and a case that now passes comments or answers
+``skipped``. The route answers 200 with an ``action`` even when the write failed,
+so a governed write reports what happened and the caller keeps the finding.
 """
 
 from __future__ import annotations

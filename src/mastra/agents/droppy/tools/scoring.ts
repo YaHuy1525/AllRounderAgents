@@ -2,21 +2,11 @@ import type { EngagementScore, SalesEstimate, CreativeAnalysis } from "../contra
 import type { DroppyConfig } from "../settings.js";
 
 /**
- * The AutoDS recreation's scoring core.
- *
- * AutoDS is the one paid research tool in the stack (PLAN §1, R1: "$49+/mo, no
- * free tier"), so it is the one we rebuild. Its behaviour is three engines over
- * public ad signals:
- *
- *   1. engagement — run-days (the profitability proxy) + engagement per view
- *   2. estimate   — weekly revenue inferred from public signals, as an interval
- *   3. creative   — hook detection, plus the TGA therapeutic-claim lint
- *
- * Phase 1 recon extracts the real weights; until then these reproduce the
- * *documented* behaviour and say so. What matters for the build is that each
- * engine is a pure function of its inputs plus config: testable, tunable, and
- * independently replaceable — which is exactly what we cannot do while we rent
- * someone else's scorer.
+ * The AutoDS recreation's scoring core: three pure engines over public ad signals
+ * (engagement run-days, weekly revenue as an interval, and creative hook plus
+ * TGA therapeutic-claim lint). Weights reproduce AutoDS's *documented* behaviour
+ * until Phase 1 recon extracts the real ones, and each engine stays a pure
+ * function of its inputs plus config so it is testable and replaceable.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -194,16 +184,10 @@ const HOOK_KEYWORDS: Array<{ hook: CreativeAnalysis["hook"]; terms: string[] }> 
 ];
 
 /**
- * Analyse a creative from its text signals.
- *
- * Two of the outputs are compliance-critical, not cosmetic:
- * - `therapeuticClaim` triggers the TGA lint. Beauty products may make cosmetic
- *   claims only.
- * - `wowFactor` is the "visible before/after or problem solved" criterion from
- *   the original spec, and it is a real scoring input.
- *
- * Text-only analysis is a placeholder until the creative itself can be read.
- * It is honest about that: `hook: "unknown"` rather than a guess.
+ * Analyse a creative from its text signals. `therapeuticClaim` drives the TGA
+ * lint (beauty products may make cosmetic claims only) and `wowFactor` is a real
+ * scoring input, so neither is cosmetic. Text-only for now: it reports
+ * `hook: "unknown"` rather than guessing until the creative itself is readable.
  */
 export function analyseCreative(
   input: {

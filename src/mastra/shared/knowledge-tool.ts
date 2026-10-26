@@ -4,21 +4,11 @@ import { createVectorQueryTool } from "@mastra/rag";
 import { knowledgeVectorStore, openAiCompatibleEmbedder, readEmbeddingSettings } from "./rag.js";
 
 /**
- * Shared factory for Mastra-native knowledge tools (upgrade plan P2). One
- * thin wrapper over `createVectorQueryTool` so every conversational lane
- * gets the same grounded-retrieval behavior: the pinned OpenAI-compatible
- * embedder, the PgVector store registered on the instance, a score floor
- * that keeps irrelevant chunks out of the prompt, and metadata filtering
- * enabled so the agent can narrow by `domain`, `tenantId` or `canonical`
- * (chunk text lives at `metadata.text`, governance at ingest).
- *
- * Returns `undefined` when `DATABASE_URL` or the `EMBEDDING_*`/`MODEL_*`
- * block is missing, which lets callers omit the tool with a conditional
- * spread instead of shipping a tool that fails at call time.
- *
- * Usage notes for agents (tutorial practice, enforced via description):
- * ask for 3-4 results, not dozens; rerank happens on the retrieved results
- * through the optional `reranker` config, never by re-querying the database.
+ * One shared wrapper over `createVectorQueryTool` so every conversational lane
+ * retrieves the same way: pinned embedder, instance PgVector store, a score
+ * floor, and metadata filtering on `domain`, `tenantId` and `canonical`.
+ * Returns `undefined` when the store or the embedding env is missing, so
+ * callers omit the tool instead of shipping one that fails at call time.
  */
 export interface KnowledgeToolOptions {
   /** Stable tool id, surfaced to the model and to Studio. */

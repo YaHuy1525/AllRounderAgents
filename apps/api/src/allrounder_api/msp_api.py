@@ -2,16 +2,11 @@
 
 """MSP surface: connection settings (console) and the audit pack download.
 
-``GET/PUT /msp/connections`` and ``POST/DELETE /msp/clients`` mirror the
-``msp_connections``/``msp_clients`` tables the onboarding script also writes.
-``GET /msp/audit-pack`` serves the per-client per-month proof artifact, JSON
-or PDF, built by :class:`allrounder_api.audit_pack.AuditPackBuilder` from the
-immutable trail only.
-
-``GET/POST/DELETE /msp/vendors`` mirror the ``msp_vendors`` table (the bills
-lane's registry), and ``POST /msp/vendors/lookup`` is the service-to-service
-sender lookup the Mastra host calls before it posts anything: it accepts the
-shared service token only and answers the registered vendor or ``null``.
+``/msp/connections`` and ``/msp/clients`` mirror the tables the onboarding script also
+writes, and ``GET /msp/audit-pack`` builds the per-client per-month proof artifact from
+the immutable trail only. ``/msp/vendors`` mirrors the bills lane registry, and
+``POST /msp/vendors/lookup`` is the service token only sender lookup the Mastra host
+calls before it posts anything.
 """
 
 from __future__ import annotations

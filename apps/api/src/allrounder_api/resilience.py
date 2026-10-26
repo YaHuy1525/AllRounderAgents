@@ -1,11 +1,8 @@
 """Bounded retry with backoff for outbound calls.
 
-Shared by the Jira REST transport, the Rovo MCP transport, and the
-OpenAI-compatible model adapter. The default policy retries transport
-failures, timeouts, and the transient HTTP statuses (429/500/502/503/504);
-other client errors are never retried. ``Retry-After`` responses are honored,
-capped at :data:`MAX_RETRY_AFTER_SECONDS`. Delays use full jitter:
-``uniform(0, min(max_delay, base_delay * 2 ** (attempt - 1)))``.
+Transport failures, timeouts and 429/500/502/503/504 are retried with full jitter,
+``Retry-After`` is honored up to ``MAX_RETRY_AFTER_SECONDS``, and other client errors
+are never retried.
 """
 
 from __future__ import annotations

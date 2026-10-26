@@ -85,7 +85,8 @@ type PanelKind =
   | "settings"
   | "account"
   | "runs"
-  | "observability";
+  | "observability"
+  | "assistant";
 
 type BoardResult = {
   project: string;
@@ -615,11 +616,6 @@ export function Console() {
     focusTicket({ key: target.ticketKey, summary }, { focusStepId: target.stepId });
   }
 
-  function focusChat(): void {
-    const input = document.getElementById("chat-input");
-    if (input instanceof HTMLTextAreaElement) input.focus();
-  }
-
   const changeSettingsProject = useCallback(
     (project: string): void => {
       const boards = workspaceRef.current.boards.filter((board) => board.project === project);
@@ -961,12 +957,12 @@ export function Console() {
               </button>
               <button
                 type="button"
-                className="rail-button"
+                className={`rail-button${activeTab.kind === "assistant" ? " active" : ""}`}
                 data-view="chat"
                 data-qa="nav-chat"
                 aria-label="Assistant"
                 title="Assistant"
-                onClick={focusChat}
+                onClick={() => openPanel("assistant")}
               >
                 <IconChat />
                 <span className="rail-label">Assistant</span>
@@ -1113,7 +1109,7 @@ export function Console() {
               </div>
             </header>
 
-            <div className="view-area">
+            <div className={activeTab.kind === "assistant" ? "view-area view-flush" : "view-area"}>
               {activeTab.kind === "dashboard" && (
                 <BoardView
                   prefs={prefs}
@@ -1230,19 +1226,47 @@ export function Console() {
               )}
 
               {activeTab.kind === "observability" && <ObservabilityView />}
+
+              {activeTab.kind === "assistant" && (
+                <AssistantPanel
+                  tickets={chatTickets}
+                  selectedKey={activeTicketKey}
+                  onOpenRun={openRun}
+                  onOpenTicket={(ticketKey) => {
+                    const issue = issues.find((item) => item.key === ticketKey);
+                    focusTicket({ key: ticketKey, summary: issue?.summary ?? "" });
+                  }}
+                  onExecuteTicket={(ticket) => {
+                    // The run tab limits its workflows to the lanes the ticket's own
+                    // text trips, so make sure that text is in the board state before
+                    // opening it. A ticket the board never loaded comes in as a row the
+                    // assistant resolved; graft it in so the lane match stays honest.
+                    setIssues((current) =>
+                      current.some((issue) => issue.key === ticket.key)
+                        ? current
+                        : [
+                            ...current,
+                            {
+                              key: ticket.key,
+                              project: ticket.project,
+                              summary: ticket.summary,
+                              issue_type: ticket.issueType,
+                              priority: ticket.priority,
+                              status: ticket.status,
+                              assignee: ticket.assignee,
+                              labels: ticket.labels,
+                              updated: new Date().toISOString(),
+                              browse_url: "",
+                            },
+                          ],
+                    );
+                    focusTicket({ key: ticket.key, summary: ticket.summary });
+                  }}
+                  onOpenInbox={() => openPanel("inbox")}
+                />
+              )}
             </div>
           </main>
-
-          <AssistantPanel
-            tickets={chatTickets}
-            selectedKey={activeTicketKey}
-            onOpenRun={openRun}
-            onOpenTicket={(ticketKey) => {
-              const issue = issues.find((item) => item.key === ticketKey);
-              focusTicket({ key: ticketKey, summary: issue?.summary ?? "" });
-            }}
-            onOpenInbox={() => openPanel("inbox")}
-          />
 
           <CommandBar
             open={commandOpen}

@@ -1,17 +1,13 @@
 """U7 doc-snap: a snapped document becomes an editable draft with checks.
 
-Field reality is paper — an invoice, a certificate, an ID. Snapping one
-produces a *draft*, never an action: this module only reads the bytes and
-reports what it saw (extracted canonical fields plus validation flags for
-the ABN checksum, certificate expiry, and duplicates of earlier snaps on
-the same case). Turning any of it into a change still goes through the
-normal edit decision and its receipt gate, so a bad extraction can never
-advance a run on its own.
+Snapping paper (an invoice, a certificate, an ID) produces a draft, never an
+action. This module reads the bytes and reports what it saw, which is the extracted
+canonical fields plus validation flags for the ABN checksum, certificate expiry and
+duplicates on the same case. Turning any of it into a change still goes through the
+edit decision and its receipt gate.
 
-The default :class:`HeuristicDocSnapExtractor` is deterministic and offline
-(text-decodable payloads, regex extraction). The :class:`DocSnapExtractor`
-protocol is the seam an OCR/vision backend slots into later without
-touching the router, the draft shape, or the validators.
+The default ``HeuristicDocSnapExtractor`` is deterministic and offline, and the
+``DocSnapExtractor`` protocol is the seam an OCR or vision backend slots into.
 """
 
 from __future__ import annotations

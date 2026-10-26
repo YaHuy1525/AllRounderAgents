@@ -6,14 +6,10 @@ import { z } from "zod";
 import { fixtureFile } from "../../../shared/fixtures.js";
 
 /**
- * Applicant-tracking seam for the screening lane. Fixture-backed on purpose:
- * the plan's ATS seam (`ScreeningAts`) is the interface, and the in-memory
- * implementation reads `fixtures/hr_candidates.json` so the lane makes no
- * network calls. A later MCP-first integration only swaps this
- * implementation. `schedule` is idempotent by `(requisitionId, candidateId)`:
- * re-scheduling a candidate returns the stored invite with `created: false`,
- * and seeded `failures` make a candidate fail deterministically so the lane's
- * "failures are listed, never swallowed" path can be exercised.
+ * Applicant-tracking seam for the screening lane, fixture-backed so the lane makes
+ * no network calls. `schedule` is idempotent by `(requisitionId, candidateId)`:
+ * re-scheduling returns the stored invite with `created: false`, and seeded
+ * `failures` make a candidate fail deterministically.
  */
 
 export const EVIDENCE_STRENGTHS = ["strong", "weak"] as const;

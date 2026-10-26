@@ -11,14 +11,10 @@ import { codingSnapshot, codingOutputFromArtifacts, codingState } from "./snapsh
 import type { CodingSnapshot, FeaturesArtifacts, CodingTicket } from "./snapshot.ts";
 
 /**
- * Public surface of the native coding-quality eval. This module is consumed by
- * three places, all sharing the same rubric-driven logic:
- *   * `src/mastra/mastra.ts` registers the assembled scorers so dataset
- *     experiments persist their scores to `mastra_scorers`;
- *   * `scripts/run-coding-quality-eval.mjs` runs the in-process experiment and
- *     aggregates a suite verdict;
- *   * `src/mastra/evals/__tests__/coding-quality.test.ts` asserts the gates, the
- *     gate-veto regression, and the aggregation without any model.
+ * Public surface of the native coding-quality eval, shared by the Mastra scorer
+ * registration, `scripts/run-coding-quality-eval.mjs`, and the gate test, so all
+ * three run the same rubric-driven logic. No module here reaches a model unless a
+ * judge is configured.
  */
 
 export { codingSnapshot, codingOutputFromArtifacts, codingState, deterministicGateResults };

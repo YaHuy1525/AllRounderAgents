@@ -1,20 +1,10 @@
 import { AgentBrowser } from "@mastra/agent-browser";
 
 /**
- * Optional Playwright-backed browser for the coding lane, mirroring the
- * degrade-don't-break posture of {@link webSearchTool}.
- *
- * Mastra attaches a provider's browser tools to an agent through its `browser`
- * config. The browser object itself is cheap to construct; the underlying
- * Chromium only launches on the first tool call, so wiring costs nothing until
- * a run actually drives it. To keep the default test and Docker run free of the
- * Playwright browser binaries, {@link codingBrowser} returns `undefined` unless
- * `AGENT_BROWSER_ENABLED=true`, and the agent only receives the `browser` key
- * when a browser is present.
- *
- * When enabled, the container or host must already have the Playwright browser
- * installed (`npx playwright install chromium` plus OS deps). Screencast is left
- * off, which avoids the `ws` and `@hono/node-ws` peer packages entirely.
+ * Optional Playwright-backed browser for the coding lane. Returns `undefined`
+ * unless `AGENT_BROWSER_ENABLED=true`, so tests and the Docker image need no
+ * browser binaries. When enabled, the host or container must already have
+ * Chromium installed.
  */
 
 let cached: AgentBrowser | undefined;
