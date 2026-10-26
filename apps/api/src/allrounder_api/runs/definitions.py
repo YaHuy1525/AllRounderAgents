@@ -32,12 +32,25 @@ dependency step that opens bump PRs for a human to merge and the security
 step that executes whichever disposition a human approved (close, escalate or
 recommend as often as containment) both fall back to the default rule in
 ``service._gate_risk`` (55 side-effecting, 10 pure).
+
+Workflow ``start_fields`` publish the run input each flow's Zod
+``InputSchema`` already enforces: what a run needs before its first step can
+move. ``GET /workflows`` serves them and ``POST /runs`` refuses an
+incomplete start, so a missing ``employeeId`` is a 422 naming the field
+instead of a failure inside the drive loop. Fields the server derives from
+the ticket itself (``ticketKey``, the candidate list) are not listed.
 """
 
 from __future__ import annotations
 
 from .ceilings import APPLY_SLOT, MODEL_SLOT
-from .models import RISK_IRREVERSIBLE, FieldDefinition, StepDefinition, WorkflowDefinition
+from .models import (
+    RISK_IRREVERSIBLE,
+    FieldDefinition,
+    StartField,
+    StepDefinition,
+    WorkflowDefinition,
+)
 
 REVIEW_WORKFLOW = WorkflowDefinition(
     id="review",
@@ -49,6 +62,22 @@ REVIEW_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="ai-review", title="AI Review", slots=(MODEL_SLOT,)),
         StepDefinition(
             id="complete", title="Complete", side_effecting=True, integrations=("github",)
+        ),
+    ),
+    start_fields=(
+        StartField(
+            id="repository",
+            label="Repository",
+            required=True,
+            example="acme/app",
+            help="Owner/name of the GitHub repository the pull request lives in.",
+        ),
+        StartField(
+            id="prNumber",
+            label="Pull request number",
+            kind="number",
+            example="7",
+            help="Leave empty to let the flow pick the open pull request.",
         ),
     ),
 )
@@ -63,6 +92,14 @@ ISSUES_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="implementation", title="Implementation", slots=(MODEL_SLOT,)),
         StepDefinition(
             id="complete", title="Complete", side_effecting=True, integrations=("github",)
+        ),
+    ),
+    start_fields=(
+        StartField(
+            id="repository",
+            label="Repository",
+            example="acme/app",
+            help="Optional: narrows the issue search and the patch to one repository.",
         ),
     ),
 )
@@ -80,6 +117,24 @@ FEATURES_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="implementation", title="Implementation", slots=(MODEL_SLOT,)),
         StepDefinition(
             id="complete", title="Complete", side_effecting=True, integrations=("github",)
+        ),
+    ),
+    start_fields=(
+        StartField(
+            id="repository",
+            label="Repository",
+            example="acme/app",
+            help="Optional: scopes the implementation and its pull request to one repository.",
+        ),
+        StartField(
+            id="acceptanceCriteria",
+            label="Acceptance criteria",
+            kind="list",
+            example="Users can export CSV; the export is audited",
+            help=(
+                "Optional: comma-separated criteria; the flow drafts them "
+                "from the ticket otherwise."
+            ),
         ),
     ),
 )
@@ -111,6 +166,20 @@ DEPENDENCIES_WORKFLOW = WorkflowDefinition(
             integrations=("github",),
         ),
     ),
+    start_fields=(
+        StartField(
+            id="repository",
+            label="Repository",
+            example="acme/app",
+            help="Optional: one repository to scan; every connected repository otherwise.",
+        ),
+        StartField(
+            id="manifestPath",
+            label="Manifest path",
+            example="package.json",
+            help="Optional: the manifest to read instead of the repository default.",
+        ),
+    ),
 )
 
 ACCESSIBILITY_WORKFLOW = WorkflowDefinition(
@@ -127,6 +196,22 @@ ACCESSIBILITY_WORKFLOW = WorkflowDefinition(
             title="Re-scan",
             side_effecting=True,
             integrations=("github",),
+        ),
+    ),
+    start_fields=(
+        StartField(
+            id="repository",
+            label="Repository",
+            required=True,
+            example="acme/web",
+            help="Owner/name of the repository the fix pull request opens against.",
+        ),
+        StartField(
+            id="targetUrl",
+            label="Target URL",
+            required=True,
+            example="https://acme.test/pricing",
+            help="Where the crawl starts; routes below it are audited.",
         ),
     ),
 )
@@ -173,6 +258,29 @@ VENDORS_WORKFLOW = WorkflowDefinition(
             risk=RISK_IRREVERSIBLE,
         ),
     ),
+    start_fields=(
+        StartField(
+            id="vendorName",
+            label="Vendor name",
+            required=True,
+            example="Northwind Power Pty Ltd",
+        ),
+        StartField(
+            id="taxId",
+            label="Tax / ABN",
+            required=True,
+            example="51824753556",
+            help="The idempotency key of the master record: never guess it.",
+        ),
+        StartField(id="requestor", label="Requested by", required=True, example="dana.whit"),
+        StartField(
+            id="country",
+            label="Country",
+            required=True,
+            example="AU",
+            help="Two-letter ISO code, uppercase.",
+        ),
+    ),
 )
 
 LEAVE_WORKFLOW = WorkflowDefinition(
@@ -185,6 +293,22 @@ LEAVE_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="approve", title="Approve"),
         # Booking the leave entry is the side effect (idempotent by request id).
         StepDefinition(id="apply", title="Apply", side_effecting=True, integrations=("workday",)),
+    ),
+    start_fields=(
+        StartField(id="employeeId", label="Employee id", required=True, example="EMP-1042"),
+        StartField(
+            id="leaveType",
+            label="Leave type",
+            kind="enum",
+            required=True,
+            values=("annual", "sick", "unpaid", "parental"),
+        ),
+        StartField(
+            id="startDate", label="First day off", kind="date", required=True, example="2026-11-02"
+        ),
+        StartField(
+            id="endDate", label="Last day off", kind="date", required=True, example="2026-11-06"
+        ),
     ),
 )
 
@@ -222,6 +346,23 @@ ONBOARDING_WORKFLOW = WorkflowDefinition(
             risk=RISK_IRREVERSIBLE,
         ),
     ),
+    start_fields=(
+        StartField(id="fullName", label="New hire name", required=True, example="Sam Rivera"),
+        StartField(id="roleTitle", label="Role title", required=True, example="Support Engineer"),
+        StartField(id="department", label="Department", required=True, example="Customer Ops"),
+        StartField(id="location", label="Location", required=True, example="Sydney"),
+        StartField(
+            id="startDate", label="First day", kind="date", required=True, example="2026-11-16"
+        ),
+        StartField(id="managerId", label="Manager id", example="EMP-1004"),
+        StartField(
+            id="accessTier",
+            label="Access tier",
+            kind="enum",
+            values=("low", "medium", "high"),
+            help="Leave empty to let the risk score pick the tier.",
+        ),
+    ),
 )
 
 OFFBOARDING_WORKFLOW = WorkflowDefinition(
@@ -246,6 +387,19 @@ OFFBOARDING_WORKFLOW = WorkflowDefinition(
         # effect (idempotent by employee id).
         StepDefinition(id="attest", title="Attest", side_effecting=True),
     ),
+    start_fields=(
+        StartField(id="employeeId", label="Employee id", required=True, example="EMP-1042"),
+        StartField(
+            id="lastDay", label="Last day", kind="date", required=True, example="2026-11-30"
+        ),
+        StartField(
+            id="reason",
+            label="Reason",
+            required=True,
+            example="Resignation",
+            help="Recorded on the case next to the final-pay attestation.",
+        ),
+    ),
 )
 
 SCREENING_WORKFLOW = WorkflowDefinition(
@@ -262,6 +416,15 @@ SCREENING_WORKFLOW = WorkflowDefinition(
             id="schedule", title="Schedule", side_effecting=True, integrations=("email",)
         ),
     ),
+    start_fields=(
+        StartField(
+            id="requisitionId",
+            label="Requisition id",
+            required=True,
+            example="REQ-2026-014",
+            help="Selects the rubric and the candidate pool; nothing is invented.",
+        ),
+    ),
 )
 
 HR_HELP_WORKFLOW = WorkflowDefinition(
@@ -275,6 +438,15 @@ HR_HELP_WORKFLOW = WorkflowDefinition(
         StepDefinition(id="approve", title="Approve"),
         # Recording the answer is the side effect (idempotent by case + ticket).
         StepDefinition(id="send", title="Send", side_effecting=True, integrations=("email",)),
+    ),
+    start_fields=(
+        StartField(
+            id="question",
+            label="Employee question",
+            required=True,
+            example="How many days of carer's leave do I get?",
+            help="The answer is drafted from the policy knowledge base and cited.",
+        ),
     ),
 )
 
@@ -300,6 +472,28 @@ SECURITY_WORKFLOW = WorkflowDefinition(
             id="contain", title="Contain", side_effecting=True, integrations=("aws",),
             slots=(MODEL_SLOT,),
         ),
+    ),
+    start_fields=(
+        StartField(
+            id="alertSource",
+            label="Alert source",
+            kind="enum",
+            required=True,
+            values=("edr", "siem", "email", "cloud"),
+        ),
+        StartField(
+            id="title",
+            label="Alert title",
+            required=True,
+            example="Encoded PowerShell from WIN-4471",
+        ),
+        StartField(
+            id="rawAlert",
+            label="Raw alert text",
+            kind="text",
+            help="Optional: the raw alert as received; triage reads it verbatim.",
+        ),
+        StartField(id="host", label="Host", example="WIN-4471"),
     ),
 )
 
@@ -330,6 +524,18 @@ MSP_WORKFLOW = WorkflowDefinition(
             integrations=("email", "jira", "halopsa"),
         ),
     ),
+    start_fields=(
+        StartField(
+            id="messageId",
+            label="Message id",
+            required=True,
+            help="Intake fills this from the inbound client email.",
+        ),
+        StartField(id="from", label="From", required=True, example="ops@client.test"),
+        StartField(id="to", label="To", required=True, example="desk@acme-msp.test"),
+        StartField(id="subject", label="Subject", required=True),
+        StartField(id="text", label="Body", required=True),
+    ),
 )
 
 BILLS_WORKFLOW = WorkflowDefinition(
@@ -349,6 +555,82 @@ BILLS_WORKFLOW = WorkflowDefinition(
             side_effecting=True,
             integrations=("xero",),
             risk=RISK_IRREVERSIBLE,
+        ),
+    ),
+    start_fields=(
+        StartField(
+            id="messageId",
+            label="Message id",
+            required=True,
+            help="Intake fills this from the inbound vendor email.",
+        ),
+        StartField(id="from", label="From", required=True, example="billing@northwind.test"),
+        StartField(id="to", label="To", required=True, example="bills@acme.test"),
+        StartField(id="subject", label="Subject", required=True),
+        StartField(id="text", label="Body", required=True),
+    ),
+)
+
+
+QA_WORKFLOW = WorkflowDefinition(
+    id="qa",
+    mastra_workflow="qaFlow",
+    title="QA Case Design & Run",
+    steps=(
+        StepDefinition(id="intake", title="Intake"),
+        StepDefinition(id="analyse", title="Analyse", slots=(MODEL_SLOT,)),
+        StepDefinition(id="design", title="Design Cases", slots=(MODEL_SLOT,)),
+        # Approval is a checkpoint, not an outbound side effect: the step
+        # refuses a set with an uncovered requirement and writes the approved
+        # cases to the lane's own store.
+        StepDefinition(id="approve-cases", title="Approve Cases"),
+        # Driving the approved cases is the first side effect. It is safe to
+        # repeat only because the flow reuses the execution record when the
+        # case set hash matches, so a re-drive cannot spend or act twice.
+        StepDefinition(
+            id="execute", title="Execute Cases", side_effecting=True, integrations=("web",)
+        ),
+        StepDefinition(id="assess", title="Assess"),
+        # The human keeps or drops each finding; the next step files only what
+        # survives this gate.
+        StepDefinition(id="approve-defects", title="Approve Defects"),
+        # One governed write per approved finding, through the Python route
+        # that keys on `{storyKey}:{caseId}` — a second failing run comments on
+        # the existing defect instead of filing a twin.
+        StepDefinition(
+            id="file-defects", title="File Defects", side_effecting=True, integrations=("jira",)
+        ),
+        StepDefinition(id="close", title="Close"),
+    ),
+    start_fields=(
+        StartField(
+            id="storyKey",
+            label="Story key",
+            required=True,
+            example="OPS-123",
+            help="Jira key of the story the cases are written for.",
+        ),
+        StartField(
+            id="scope",
+            label="Scope",
+            required=True,
+            example="Approving a leave request from the console",
+            help="What to test, in your words; the squad reads it as data, not as instructions.",
+        ),
+        StartField(
+            id="target",
+            label="Target",
+            kind="enum",
+            example="local-console",
+            values=("local-console",),
+            help="Which running app the cases are written against.",
+        ),
+        StartField(
+            id="maxCases",
+            label="Case budget",
+            kind="number",
+            example="10",
+            help="Upper bound on cases per run; defaults to 10 and caps at 25.",
         ),
     ),
 )
@@ -382,6 +664,7 @@ WORKFLOW_DEFINITIONS: dict[str, WorkflowDefinition] = {
         SECURITY_WORKFLOW,
         MSP_WORKFLOW,
         BILLS_WORKFLOW,
+        QA_WORKFLOW,
     )
 }
 
@@ -397,6 +680,7 @@ __all__ = [
     "MSP_WORKFLOW",
     "OFFBOARDING_WORKFLOW",
     "ONBOARDING_WORKFLOW",
+    "QA_WORKFLOW",
     "REVIEW_WORKFLOW",
     "SCREENING_WORKFLOW",
     "SECURITY_WORKFLOW",

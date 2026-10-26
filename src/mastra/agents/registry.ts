@@ -29,6 +29,7 @@ import { offboardingAuditAgent } from "./offboarding/agents/index.js";
 import { onboardingRiskAgent, onboardingVerifierAgent } from "./onboarding/agents/index.js";
 import { hrGuardrailAgent } from "./screening/agents/index.js";
 import { reviewerAgent } from "./review/agents/index.js";
+import { qaLeadAgent } from "./qa/agents/index.js";
 import { vendorRiskAgent, vendorVerifierAgent } from "./vendors/agents/index.js";
 import {
   alertTriageAgent,
@@ -37,6 +38,7 @@ import {
   reportingAgent,
 } from "./security/agents/index.js";
 import { supportDrafterAgent, supportResearcherAgent } from "./support/agents/index.js";
+import { consoleAssistantAgent } from "./console/agents/index.js";
 import { droppyAgents } from "./droppy/agents/bots.js";
 
 export function allRounderAgents() {
@@ -51,6 +53,11 @@ export function allRounderAgents() {
     // callable over the agents API; it is read-only and gates nothing.
     llmopsUpgradeAdvisor: upgradeAdvisorAgent,
     reviewReviewer: reviewerAgent,
+    // QA lead: the supervisor of the four-specialist testing squad. It holds
+    // no tools of its own; the delegation gate in `qa/squad.ts` decides which
+    // child a phase may reach, and the executor stays refused until a human
+    // approved a case set.
+    qaLead: qaLeadAgent,
     issuesAnalyst: issueAnalystAgent,
     issuesEngineer: issueEngineerAgent,
     featuresPlanner: featurePlannerAgent,
@@ -84,6 +91,10 @@ export function allRounderAgents() {
     marketingBrandGuardrail: brandGuardrailAgent,
     supportResearcher: supportResearcherAgent,
     supportDrafter: supportDrafterAgent,
+    // Conversational console assistant: the only agent that retrieves its own
+    // grounding through the Mastra knowledge search tools. Always registered so
+    // Studio shows it; the tools appear only when the knowledge plane is wired.
+    consoleAssistant: consoleAssistantAgent,
     // Droppy lane: the autonomous AU dropshipping system. Nine bots over one
     // shared index, with three reverse-engineered research engines (Minea,
     // PipiADS, Kalodata) on one collector layer. See docs/architecture/adr.

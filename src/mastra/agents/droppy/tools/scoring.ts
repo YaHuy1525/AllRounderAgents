@@ -1,5 +1,5 @@
 import type { EngagementScore, SalesEstimate, CreativeAnalysis } from "../contracts.js";
-import type { DroppyConfig } from "../config.js";
+import type { DroppyConfig } from "../settings.js";
 
 /**
  * The AutoDS recreation's scoring core.

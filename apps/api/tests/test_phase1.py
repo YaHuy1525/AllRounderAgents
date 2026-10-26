@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -98,6 +99,30 @@ async def test_openai_compatible_adapter_without_live_calls() -> None:
         )
         assert await adapter.embed(["hello"]) == [[1.0, 0.0]]
         assert await adapter.complete("ground claims", "question") == "cited draft"
+
+
+@pytest.mark.asyncio
+async def test_adapter_splits_oversized_embedding_batches_in_order() -> None:
+    """A document with more chunks than the provider ceiling still embeds whole."""
+    ceiling = OpenAICompatibleAdapter.MAX_EMBED_BATCH
+    batches: list[list[str]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        inputs = json.loads(request.content)["input"]
+        batches.append(list(inputs))
+        return httpx.Response(
+            200, json={"data": [{"embedding": [float(text)]} for text in inputs]}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        adapter = OpenAICompatibleAdapter(
+            base_url="https://models.example/v1", api_key="fake",
+            embedding_model="embed-v1", dimensions=1, chat_model="chat-v1", client=client,
+        )
+        vectors = await adapter.embed([str(index) for index in range(ceiling * 2 + 3)])
+
+    assert [len(batch) for batch in batches] == [ceiling, ceiling, 3]
+    assert [vector[0] for vector in vectors] == [float(index) for index in range(ceiling * 2 + 3)]
 
 
 def test_receipts_bind_action_and_expire() -> None:

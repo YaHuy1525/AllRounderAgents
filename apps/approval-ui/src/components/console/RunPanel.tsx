@@ -2015,6 +2015,7 @@ export function RunPanel({
         <div className="run-actions" role="group" aria-label={`Actions for ${step.title}`}>
           <button
             type="button"
+            data-qa="decision-back"
             disabled={busy || index <= 0}
             title={index <= 0 ? "This is the first checkpoint" : "Re-open the previous checkpoint; downstream steps re-derive"}
             onClick={() => armOrSubmit("back")}
@@ -2023,6 +2024,7 @@ export function RunPanel({
           </button>
           <button
             type="button"
+            data-qa="decision-edit"
             disabled={busy}
             onClick={() => {
               setArmedAction(null);
@@ -2033,6 +2035,7 @@ export function RunPanel({
           </button>
           <button
             type="button"
+            data-qa="decision-regenerate"
             disabled={busy || !regenerateAvailable}
             title={
               regenerateAvailable
@@ -2061,12 +2064,19 @@ export function RunPanel({
           <button
             type="button"
             className="approve"
+            data-qa="decision-proceed"
             disabled={busy || proceedDisabled}
             onClick={() => void submitDecision(buildProceed())}
           >
             {proceedLabel(detail?.workflow ?? "", step.stepId)}
           </button>
-          <button type="button" className="danger" disabled={busy} onClick={() => armOrSubmit("abort")}>
+          <button
+            type="button"
+            className="danger"
+            data-qa="decision-abort"
+            disabled={busy}
+            onClick={() => armOrSubmit("abort")}
+          >
             {armedAction === "abort" ? "Confirm abort" : "Abort"}
           </button>
         </div>

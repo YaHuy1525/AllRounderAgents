@@ -45,6 +45,7 @@ describe("persisted session snapshot", () => {
         access_token: "token-123",
         expires_at: 1893456000,
         user: {
+          id: "user-1",
           email: "louis@omnidewalt.com",
           app_metadata: { tenant_id: "omnidewalt", roles: ["admin"] },
         },
@@ -55,6 +56,7 @@ describe("persisted session snapshot", () => {
       accessToken: "token-123",
       expiresAt: 1893456000,
       appMetadata: { tenant_id: "omnidewalt", roles: ["admin"] },
+      userId: "user-1",
     });
   });
 
@@ -85,6 +87,7 @@ describe("persisted session snapshot", () => {
       accessToken: "token-123",
       expiresAt: null,
       appMetadata: null,
+      userId: null,
     });
   });
 });

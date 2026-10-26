@@ -11,6 +11,8 @@ import { allRounderAgents } from "./agents/registry.js";
 import { hrHelpDrafterAgent } from "./agents/hr-help/agents/index.js";
 import { mspDrafterAgent } from "./agents/msp/agents/index.js";
 import { supportDrafterAgent } from "./agents/support/agents/index.js";
+import { consoleAssistantAgent } from "./agents/console/agents/index.js";
+import { chatCorsConfig, consoleChatAuth } from "./server/chat-auth.js";
 import { webSearchTool } from "./agents/programming/tools/web-search.js";
 import { knowledgeVectorStore } from "./shared/rag.js";
 import {
@@ -20,6 +22,10 @@ import {
   rcaEvidenceScorer,
   rcaGoldenPathScorer,
 } from "./shared/scorers.js";
+import {
+  buildCodingQualityJudges,
+  codingQualityGateScorers,
+} from "./evals/coding-quality/index.js";
 import {
   createAccessibilityFlow,
   type AccessibilityFlowDeps,
@@ -49,6 +55,7 @@ import { createScreeningFlow, type ScreeningFlowDeps } from "./agents/screening/
 import { MemoryScreeningAts } from "./agents/screening/tools/screening-ats.js";
 import { createCodingFlow, type CodingFlowDeps } from "./agents/programming/flow.js";
 import { createReviewFlow, type ReviewFlowDeps } from "./agents/review/flow.js";
+import { createQaFlow, type QaFlowDeps } from "./agents/qa/flow.js";
 import { createVendorsFlow, type VendorsFlowDeps } from "./agents/vendors/flow.js";
 import { MemoryVendorRegistry } from "./agents/vendors/tools/vendor-registry.js";
 import { createSecurityFlow, type SecurityFlowDeps } from "./agents/security/flow.js";
@@ -78,6 +85,28 @@ function serverTimeoutMs(): number {
   return Number.isFinite(seconds) && seconds > 0
     ? seconds * 1000
     : DEFAULT_SERVER_TIMEOUT_SECONDS * 1000;
+}
+
+const DEFAULT_CHAT_LAST_MESSAGES = 40;
+const CHAT_LAST_MESSAGES_MIN = 1;
+const CHAT_LAST_MESSAGES_MAX = 200;
+
+/**
+ * How many past turns of a chat thread go into each request. Written here, not
+ * in `instance.ts`, because `instance.ts` imports this module and the reverse
+ * edge would be a cycle. `CHAT_LAST_MESSAGES` clamps rather than throws: a
+ * mistyped value must not take the console down.
+ */
+export function chatLastMessages(
+  raw: string | undefined = process.env.CHAT_LAST_MESSAGES,
+): number {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed === "") return DEFAULT_CHAT_LAST_MESSAGES;
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed)) return DEFAULT_CHAT_LAST_MESSAGES;
+  if (parsed < CHAT_LAST_MESSAGES_MIN) return CHAT_LAST_MESSAGES_MIN;
+  if (parsed > CHAT_LAST_MESSAGES_MAX) return CHAT_LAST_MESSAGES_MAX;
+  return parsed;
 }
 
 /**
@@ -164,7 +193,8 @@ function buildMastraStorage(): MastraCompositeStore {
  * Semantic recall engages when `MASTRA_MEMORY_EMBEDDER` names an embedder,
  * plain message-history recall otherwise. Only the conversational drafters
  * are attached to it (below); the deterministic single-shot agents stay
- * stateless on purpose.
+ * stateless on purpose. The chat history window is explicit (`CHAT_LAST_MESSAGES`
+ * via `chatLastMessages()`) so a long thread never floods the model.
  */
 function buildCoreMemory(storage: MastraCompositeStore): Memory {
   const embedder = process.env.MASTRA_MEMORY_EMBEDDER;
@@ -172,7 +202,10 @@ function buildCoreMemory(storage: MastraCompositeStore): Memory {
   return new Memory({
     storage,
     ...(semanticRecall ? { embedder } : {}),
-    options: { semanticRecall },
+    // Console chat is the only conversational surface a human watches turn by
+    // turn, so the history window is explicit rather than whatever the
+    // provider happens to accept.
+    options: { semanticRecall, lastMessages: chatLastMessages() },
   });
 }
 
@@ -223,6 +256,7 @@ export function createAllRounderMastra(
     msp?: MspFlowDeps;
     bills?: BillsFlowDeps;
     security?: SecurityFlowDeps;
+    qa?: QaFlowDeps;
   } = {},
 ) {
   const ledger = deps.ledger ?? new MemorySandboxLedger();
@@ -232,14 +266,20 @@ export function createAllRounderMastra(
   // pilot (shared pool with `MastraRagHrPolicyRetriever`). Absent without
   // `DATABASE_URL`, so credential-free runs never touch the vector path.
   const knowledgeVectors = knowledgeVectorStore();
-  // Studio Threads need memory on the agent itself. The three conversational
-  // drafters share the instance core memory; `__setMemory` is the framework's
-  // late-wiring setter (module-level agent singletons are built before this
-  // function runs, so the constructor config is not an option). Workflow
-  // calls without a threadId stay history-less, so lane behavior is
-  // unchanged. Deterministic agents (investigator, actor, validator,
-  // dispatcher, extractors) are deliberately left memory-free.
-  for (const conversationalAgent of [hrHelpDrafterAgent, mspDrafterAgent, supportDrafterAgent]) {
+  // Studio Threads need memory on the agent itself. The conversational agents
+  // (the three lane drafters plus the console assistant) share the instance core
+  // memory; `__setMemory` is the framework's late-wiring setter (module-level
+  // agent singletons are built before this function runs, so the constructor
+  // config is not an option). Workflow calls without a threadId stay
+  // history-less, so lane behavior is unchanged. Deterministic agents
+  // (investigator, actor, validator, dispatcher, extractors) are deliberately
+  // left memory-free.
+  for (const conversationalAgent of [
+    hrHelpDrafterAgent,
+    mspDrafterAgent,
+    supportDrafterAgent,
+    consoleAssistantAgent,
+  ]) {
     conversationalAgent.__setMemory(coreMemory);
   }
   // Every workflow is defined once, as its own `const`. The lanes mounted on
@@ -285,6 +325,7 @@ export function createAllRounderMastra(
     },
   );
   const billsFlow = createBillsFlow(deps.bills ?? { ledger: new MemoryBillsLedger() });
+  const qaFlow = createQaFlow(deps.qa ?? {});
   const securityFlow = createSecurityFlow(
     deps.security ?? {
       telemetry: new MemoryTelemetrySearch(),
@@ -304,9 +345,42 @@ export function createAllRounderMastra(
     deps.accessibility === undefined
       ? undefined
       : createAccessibilityFlow(deps.accessibility);
+
+  // Native coding-quality evals. The deterministic gates always register (no
+  // model, no rubric file needed at import time). The LLM judge set is opt-in:
+  // it registers only when a distinct JUDGE_CHAT_MODEL is configured, so an
+  // offline bundle never pulls the fuzzy-quality layer into the hot path. A
+  // missing rubric fixture is swallowed here because the judge is never a
+  // merge gate; the runner constructs it directly when a key is present.
+  const judgeModel = process.env.JUDGE_CHAT_MODEL;
+  const codingQualityJudges: Record<
+    string,
+    ReturnType<typeof buildCodingQualityJudges>[number]["scorer"]
+  > = {};
+  if (judgeModel !== undefined && judgeModel !== "") {
+    try {
+      for (const entry of buildCodingQualityJudges({ model: judgeModel })) {
+        codingQualityJudges[entry.spec.id] = entry.scorer;
+      }
+    } catch {
+      // Leave the judge unregistered; gates still persist.
+    }
+  }
+
+  // Server security for a host that is now browser-facing. `consoleChatAuth`
+  // reads its configuration from the environment and throws if the dev
+  // escape hatch is set in production, so an unsafe deployment fails at boot
+  // rather than serving tenant data to whoever asks.
+  const serverMiddleware = consoleChatAuth();
+  const cors = chatCorsConfig();
+
   return new Mastra({
     logger: false,
-    server: { timeout: serverTimeoutMs() },
+    server: {
+      timeout: serverTimeoutMs(),
+      middleware: serverMiddleware,
+      ...(cors === undefined ? {} : { cors }),
+    },
     storage,
     // Native Mastra observability, opt-in via `MASTRA_OBSERVABILITY=true`
     // (off by default so the vitest suites and ordinary runs pay nothing; the
@@ -370,6 +444,8 @@ export function createAllRounderMastra(
       rcaGoldenPath: rcaGoldenPathScorer,
       patchContract: patchContractScorer,
       criticAgreement: criticAgreementScorer,
+      ...codingQualityGateScorers,
+      ...codingQualityJudges,
     },
     workflows: {
       financeFlow,
@@ -382,6 +458,7 @@ export function createAllRounderMastra(
       mspFlow,
       billsFlow,
       securityFlow,
+      qaFlow,
       ...(codingFlow !== undefined ? { codingFlow } : {}),
       ...(reviewFlow !== undefined ? { reviewFlow } : {}),
       ...(issuesFlow !== undefined ? { issuesFlow } : {}),

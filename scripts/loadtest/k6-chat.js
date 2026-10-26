@@ -1,164 +1,95 @@
-// k6 load test for the chat surface (/chat and /chat/stream).
+// k6 load test for the console assistant on the Mastra host.
 //
-// Usage (repo root, API running):
+// Usage (repo root, host running):
 //   k6 run -e AUTH_TOKEN="$TOKEN" scripts/loadtest/k6-chat.js
 //
 // Env knobs:
-//   BASE_URL   target origin            (default http://localhost:8000)
-//   AUTH_TOKEN Supabase access token    (required; bearer JWT)
-//   VUS        virtual users            (default 5)
-//   DURATION   test duration            (default 30s)
-//   FLOW       chat | stream | mixed    (default chat; mixed streams every 3rd iteration)
-//   PACE_MS    pause between iterations (default 0)
+//   BASE_URL   host origin              (default http://localhost:4111)
+//   AUTH_TOKEN Supabase access token    (required; the host derives tenant from it)
+//   AGENT_ID   agent id on the host     (default console-assistant)
+//   VUS / DURATION / FLOW / PACE_MS as before
 //
-// HTTP 429 rate-limit responses are expected and validated (Retry-After header)
-// instead of counted as failures, so http_req_failed only tracks real errors.
+// The host enforces no rate limit, so 429 handling is gone. A non-200 is a real failure.
 import http from "k6/http";
 import { check, sleep } from "k6";
-import { Counter } from "k6/metrics";
 
-const BASE_URL = (__ENV.BASE_URL || "http://localhost:8000").replace(/\/$/, "");
+const BASE_URL = (__ENV.BASE_URL || "http://localhost:4111").replace(/\/$/, "");
+const AGENT_ID = __ENV.AGENT_ID || "console-assistant";
 const TOKEN = __ENV.AUTH_TOKEN;
-const FLOW = (__ENV.FLOW || "chat").toLowerCase();
+const FLOW = (__ENV.FLOW || "generate").toLowerCase();
 const PACE_MS = Number(__ENV.PACE_MS || 0);
 
 if (!TOKEN) {
   throw new Error("AUTH_TOKEN is required: k6 run -e AUTH_TOKEN=<supabase access token> ...");
 }
-if (!["chat", "stream", "mixed"].includes(FLOW)) {
-  throw new Error(`FLOW must be chat|stream|mixed, got: ${FLOW}`);
-}
-
-const rateLimited = new Counter("rate_limited_total");
-const chatSource = new Counter("chat_source_total");
-
-const thresholds = {
-  http_req_failed: ["rate<0.05"],
-  checks: ["rate>0.99"],
-};
-if (FLOW !== "stream") {
-  thresholds["http_req_duration{kind:chat}"] = ["p(95)<2000"];
-}
-if (FLOW !== "chat") {
-  thresholds["http_req_duration{kind:stream}"] = ["p(95)<8000"];
+if (!["generate", "stream", "mixed"].includes(FLOW)) {
+  throw new Error(`FLOW must be generate|stream|mixed, got: ${FLOW}`);
 }
 
 export const options = {
   vus: Number(__ENV.VUS || 5),
   duration: __ENV.DURATION || "30s",
-  thresholds,
+  thresholds:
+    FLOW === "generate"
+      ? { http_req_failed: ["rate<0.05"], checks: ["rate>0.99"], "http_req_duration{kind:generate}": ["p(95)<20000"] }
+      : FLOW === "stream"
+        ? { http_req_failed: ["rate<0.05"], checks: ["rate>0.99"], "http_req_duration{kind:stream}": ["p(95)<60000"] }
+        : { http_req_failed: ["rate<0.05"], checks: ["rate>0.99"] },
 };
 
-const TICKETS = [
-  {
-    key: "ENG-201",
-    summary: "API returns 500 stack trace",
-    status: "To Do",
-    issueType: "Bug",
-    priority: "High",
-    assignee: null,
-    labels: ["backend"],
-  },
-  {
-    key: "FIN-201",
-    summary: "Reconcile month-end ledger",
-    status: "In Progress",
-    issueType: "Task",
-    priority: "Highest",
-    assignee: "finance-bot",
-    labels: ["reconciliation"],
-  },
-  {
-    key: "SUP-401",
-    summary: "Customer cannot log in",
-    status: "Open",
-    issueType: "Service Request",
-    priority: "High",
-    assignee: null,
-    labels: ["customer"],
-  },
-];
-
 const MESSAGES = [
-  "What is blocking ENG-201?",
-  "Summarize the month-end reconciliation status.",
-  "Which tickets need human review right now?",
-  "Draft a reply to the customer about their login issue.",
-  "How many tickets are open per lane?",
-  "What is the highest priority ticket on the board?",
+  "Which tickets look stuck right now?",
+  "Summarize what is assigned to me.",
+  "What is high priority and still open?",
+  "List the tickets mentioning reconciliation.",
 ];
 
-function chatPayload() {
+// The host overwrites the resource from the verified token, so this value is a
+// probe of that override: a resource that is not the caller's must not change
+// what comes back.
+function body() {
   return JSON.stringify({
-    message: MESSAGES[__ITER % MESSAGES.length],
-    selectedKey: TICKETS[__ITER % TICKETS.length].key,
-    tickets: TICKETS,
+    messages: [{ role: "user", content: MESSAGES[__ITER % MESSAGES.length] }],
+    memory: { thread: `loadtest-${__ITER % 5}`, resource: "loadtest:probe" },
   });
 }
 
-function requestParams(kind, accept, timeout) {
+function params(kind, accept, timeout) {
   return {
-    headers: {
-      Authorization: `Bearer ${TOKEN}`,
-      "Content-Type": "application/json",
-      Accept: accept,
-    },
+    headers: { Authorization: `Bearer ${TOKEN}`, "Content-Type": "application/json", Accept: accept },
     tags: { kind },
-    timeout: timeout || "10s",
-    responseCallback: http.expectedStatuses(200, 429),
+    timeout,
+    responseCallback: http.expectedStatuses(200),
   };
 }
 
-function noteRateLimit(response) {
-  rateLimited.add(1);
-  const retryAfter = response.headers["Retry-After"] || response.headers["retry-after"] || "";
-  check(response, {
-    "429 carries Retry-After seconds": () => /^\d+$/.test(String(retryAfter).trim()),
-  });
-}
-
-function chatRequest() {
-  const response = http.post(
-    `${BASE_URL}/chat`,
-    chatPayload(),
-    requestParams("chat", "application/json"),
+function generateRequest() {
+  const res = http.post(
+    `${BASE_URL}/api/agents/${AGENT_ID}/generate`,
+    body(),
+    params("generate", "application/json", "60s"),
   );
-  if (response.status === 429) {
-    noteRateLimit(response);
-    return;
-  }
-  let body = null;
+  let text = null;
   try {
-    body = response.json();
+    text = res.json().text;
   } catch (error) {
-    body = null;
+    text = null;
   }
-  check(response, {
-    "chat status is 200": (r) => r.status === 200,
-    "chat reply is non-empty": () => Boolean(body && body.reply),
-    "chat source is known": () => Boolean(body && ["model", "local"].includes(body.source)),
+  check(res, {
+    "generate status is 200": (r) => r.status === 200,
+    "generate returned text": () => typeof text === "string" && text.length > 0,
   });
-  if (body && body.source) {
-    chatSource.add(1, { source: body.source });
-  }
 }
 
 function streamRequest() {
-  const response = http.post(
-    `${BASE_URL}/chat/stream`,
-    chatPayload(),
-    requestParams("stream", "text/event-stream", "30s"),
+  const res = http.post(
+    `${BASE_URL}/api/agents/${AGENT_ID}/stream`,
+    body(),
+    params("stream", "application/json", "120s"),
   );
-  if (response.status === 429) {
-    noteRateLimit(response);
-    return;
-  }
-  check(response, {
+  check(res, {
     "stream status is 200": (r) => r.status === 200,
-    "stream ends with done event": (r) =>
-      typeof r.body === "string" && r.body.includes('"done": true'),
-    "stream disables proxy buffering": (r) =>
-      r.headers["X-Accel-Buffering"] === "no" || r.headers["x-accel-buffering"] === "no",
+    "stream carried text deltas": (r) => typeof r.body === "string" && r.body.includes("text-delta"),
   });
 }
 
@@ -166,9 +97,7 @@ export default function () {
   if (FLOW === "stream" || (FLOW === "mixed" && __ITER % 3 === 2)) {
     streamRequest();
   } else {
-    chatRequest();
+    generateRequest();
   }
-  if (PACE_MS > 0) {
-    sleep(PACE_MS / 1000);
-  }
+  if (PACE_MS > 0) sleep(PACE_MS / 1000);
 }

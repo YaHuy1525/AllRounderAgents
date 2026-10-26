@@ -5,7 +5,7 @@ import type {
   Source,
   TikTokShopListing,
 } from "../contracts.js";
-import type { DroppyConfig } from "../config.js";
+import type { DroppyConfig } from "../settings.js";
 import { analyseCreative, estimateSales, scoreCriteria, scoreEngagement, totalScore } from "./scoring.js";
 
 /**

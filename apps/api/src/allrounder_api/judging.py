@@ -533,6 +533,415 @@ def coding_state(*, ticket: Mapping[str, Any], output: Mapping[str, Any]) -> dic
     }
 
 
+# ------------------------------------------------------------------ qa state
+
+# The judge reads a bounded excerpt of each observation, defect body and
+# transcript line: one pathological run must not be able to flood the prompt.
+# A defect body gets more room than an observation because its Evidence list is
+# what the criterion asks about, and a list cut in half reads as unsupported.
+_QA_EXCERPT_CHARS = 600
+_QA_BODY_CHARS = 1_600
+_QA_EVIDENCE_LINES = 12
+_QA_HOOK = re.compile(r'data-qa="([^"]+)"')
+_QA_REF = re.compile(r"^qa:[^:]+:(?P<case>[^:]+):(?P<rest>.+)$")
+# A result that answered nothing. Neither ever becomes a defect, so both are
+# legitimate answers when the executor could not run.
+_QA_UNANSWERED = ("blocked", "not_run")
+
+
+def _qa_hooks(steps: Any) -> list[str]:
+    """The `data-qa` hooks a case's steps name, in the order they appear."""
+    hooks: list[str] = []
+    for step in _dict_rows(steps):
+        for hook in _QA_HOOK.findall(str(step.get("target", ""))):
+            if hook not in hooks:
+                hooks.append(hook)
+    return hooks
+
+
+def _qa_excerpt(text: Any, limit: int = _QA_EXCERPT_CHARS) -> str:
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "\n...[truncated]"
+
+
+def _qa_evidence(result: Mapping[str, Any]) -> Mapping[str, Any]:
+    evidence = result.get("evidence")
+    return evidence if isinstance(evidence, dict) else {}
+
+
+def qa_output_from_artifacts(
+    artifacts: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Normalize the qa-lane artifacts the judge and checks read.
+
+    The qa flow records one artifact per step: `design` (and its approved copy
+    at `approve-cases`) carries the case set, `assess` the verdict, `close` the
+    evidence pack. The per-case results live on the verdict rather than on
+    `execute`, whose artifact is the plan, so a run that stopped before `assess`
+    degrades to empty instead of reporting a plan as results.
+    """
+    approved = artifacts.get("approve-cases")
+    design = artifacts.get("design")
+    analysis = artifacts.get("analyse")
+    verdict = artifacts.get("assess")
+    closing = artifacts.get("close")
+    case_set = approved if isinstance(approved, dict) else design
+    case_set = case_set if isinstance(case_set, dict) else {}
+    analysis = analysis if isinstance(analysis, dict) else {}
+    verdict = verdict if isinstance(verdict, dict) else {}
+    closing = closing if isinstance(closing, dict) else {}
+    counts = closing.get("counts")
+    gaps = verdict.get("gaps") if "gaps" in verdict else case_set.get("gaps")
+    return {
+        "requirements": _dict_rows(analysis.get("requirements")),
+        "cases": _dict_rows(case_set.get("cases")),
+        "gaps": _dict_rows(gaps),
+        "executionAvailable": verdict.get("executionAvailable"),
+        "blockedReason": verdict.get("blockedReason"),
+        "results": _dict_rows(verdict.get("results")),
+        "defects": _dict_rows(verdict.get("defects")),
+        "closed": {
+            "completed": bool(closing),
+            "approvedCaseIds": [
+                str(case_id) for case_id in (closing.get("approvedCaseIds") or [])
+            ],
+            "failedCaseIds": [
+                str(case_id) for case_id in (closing.get("failedCaseIds") or [])
+            ],
+            "filed": _dict_rows(closing.get("filed")),
+            "counts": counts if isinstance(counts, dict) else {},
+        },
+    }
+
+
+def _qa_ref_resolves(
+    ref: str, defect_case: str, results: Mapping[str, Mapping[str, Any]]
+) -> bool:
+    """True when an evidence reference points into its own case's evidence.
+
+    The flow writes references as `qa:{runId}:{caseId}:{kind}[:{n}...]`, so a
+    reference is a promise that this exact entry exists — the promise the defect
+    body's Evidence list makes to whoever opens the ticket.
+    """
+    match = _QA_REF.match(ref)
+    if match is None or match.group("case") != defect_case:
+        return False
+    result = results.get(defect_case)
+    if result is None:
+        return False
+    evidence = _qa_evidence(result)
+    rest = match.group("rest")
+    if rest == "observed":
+        return bool(str(result.get("observed") or "").strip())
+    if rest == "screenshot":
+        return bool(str(evidence.get("screenshot") or "").strip())
+    kind, _, detail = rest.partition(":")
+    try:
+        index = int(detail.split(":")[0])
+    except ValueError:
+        return False
+    entries = evidence.get(kind)
+    return isinstance(entries, list) and 1 <= index <= len(entries)
+
+
+def qa_deterministic_outcomes(
+    *, output: Mapping[str, Any], expect: Mapping[str, Any]
+) -> list[CriterionOutcome]:
+    """Mechanically-checkable qa gates, never sent to a judge.
+
+    Six rail cases read one run, so the checks answer two questions: did the
+    designed set reach *this* case's affordance, and is the verdict honest at
+    all — results for exactly the approved cases, defects only where a case
+    failed, evidence references that resolve, gaps only where nothing passed,
+    and a blocked execution that never claims a pass. A failure on any of these
+    fails the case whatever the judge scores.
+    """
+    cases = output.get("cases", [])
+    results = output.get("results", [])
+    defects = output.get("defects", [])
+    gaps = output.get("gaps", [])
+    closed = output.get("closed", {})
+    by_case = {str(item.get("caseId", "")): item for item in results}
+    statuses = {case_id: str(item.get("status", "")) for case_id, item in by_case.items()}
+    failed = {case_id for case_id, status in statuses.items() if status == "failed"}
+
+    rail = expect.get("rail")
+    rail = rail if isinstance(rail, Mapping) else {}
+    hooks = [str(hook) for hook in (rail.get("hooks") or [])]
+    primary = hooks[0] if hooks else ""
+    designed = {hook for case in cases for hook in _qa_hooks(case.get("steps"))}
+    reached = bool(primary) and primary in designed
+    outcomes = [
+        _check(
+            "rail_case_covered",
+            reached,
+            f"the designed set reaches {primary}"
+            if reached
+            else f"no designed case names {primary or '(no hook)'}; the set targets "
+            f"{', '.join(sorted(designed)[:8]) or 'nothing'}",
+        )
+    ]
+
+    approved = [str(case_id) for case_id in (closed.get("approvedCaseIds") or [])]
+    if not approved:
+        # A run that never closed still has the set it was working from; reading
+        # the design artifact keeps the check meaningful before `close`.
+        approved = [str(case.get("id", "")) for case in cases]
+    missing = sorted(set(approved) - set(statuses))
+    extra = sorted(set(statuses) - set(approved))
+    outcomes.append(
+        _check(
+            "results_cover_approved_set",
+            bool(approved) and not missing and not extra and len(results) == len(statuses),
+            f"{len(approved)} approved case(s), {len(results)} result(s)"
+            + (f"; no result for {', '.join(missing)}" if missing else "")
+            + (f"; result for an unapproved case: {', '.join(extra)}" if extra else "")
+            + (" ; a case reported twice" if len(results) != len(statuses) else ""),
+        )
+    )
+
+    silent = sorted(
+        case_id for case_id, item in by_case.items() if not str(item.get("observed") or "").strip()
+    )
+    silent_detail = (
+        f"results with no observation: {', '.join(silent)}"
+        if silent
+        else "no results were recorded"
+    )
+    outcomes.append(
+        _check(
+            "every_result_observed",
+            bool(results) and not silent,
+            "every result carries an observation" if results and not silent else silent_detail,
+        )
+    )
+
+    available = output.get("executionAvailable")
+    reason = str(output.get("blockedReason") or "").strip()
+    if available is False:
+        claimed = sorted(
+            case_id for case_id, status in statuses.items() if status not in _QA_UNANSWERED
+        )
+        honest = bool(reason) and not claimed
+        detail = (
+            "execution was unavailable: every result is blocked or not_run, and the reason says why"
+            if honest
+            else f"execution was unavailable but {', '.join(claimed)} still reported an outcome"
+            if claimed
+            else "execution was unavailable and the run gave no reason"
+        )
+    elif available is True:
+        honest = bool(results) and not reason
+        detail = (
+            "execution ran and produced results"
+            if honest
+            else "execution is marked available but produced no results"
+            if not results
+            else f"execution is marked available but carries a blocked reason: {reason}"
+        )
+    else:
+        honest = False
+        detail = "the run recorded no execution availability"
+    outcomes.append(_check("blocked_execution_is_honest", honest, detail))
+
+    defect_cases = [str(defect.get("caseId", "")) for defect in defects]
+    stray = sorted(set(defect_cases) - failed)
+    unfiled = sorted(failed - set(defect_cases))
+    outcomes.append(
+        _check(
+            "defects_trace_to_failures",
+            not stray and not unfiled and len(defect_cases) == len(defects),
+            f"{len(defects)} defect(s) for {len(failed)} failed case(s)"
+            + (f"; defect for a case that did not fail: {', '.join(stray)}" if stray else "")
+            + (f"; failed case with no defect: {', '.join(unfiled)}" if unfiled else ""),
+        )
+    )
+
+    false_gaps: list[str] = []
+    for gap in gaps:
+        requirement = str(gap.get("requirementId", ""))
+        covering = [
+            str(case.get("id", ""))
+            for case in cases
+            if requirement in [str(item) for item in (case.get("requirementIds") or [])]
+        ]
+        if any(statuses.get(case_id) == "passed" for case_id in covering):
+            false_gaps.append(requirement)
+    outcomes.append(
+        _check(
+            "gap_names_unpassed_requirement",
+            not false_gaps,
+            "every gap names a requirement no passing case covers"
+            if not false_gaps
+            else f"gaps reported for requirements a passing case covers: {', '.join(false_gaps)}",
+        )
+    )
+
+    filed = _dict_rows(closed.get("filed"))
+    counts = closed.get("counts") if isinstance(closed.get("counts"), dict) else {}
+    filed_stray = sorted({str(receipt.get("caseId", "")) for receipt in filed} - failed)
+    declared = counts.get("filed")
+    filing_detail = f"{len(filed)} filed receipt(s) for {len(failed)} failed case(s)"
+    if not closed.get("completed"):
+        filing_detail += "; the run did not close"
+    if filed_stray:
+        filing_detail += f"; filed for a case that did not fail: {', '.join(filed_stray)}"
+    if declared != len(filed):
+        filing_detail += f"; close counts {declared} filed against {len(filed)} receipts"
+    outcomes.append(
+        _check(
+            "filing_stays_inside_failures",
+            bool(closed.get("completed")) and not filed_stray and declared == len(filed),
+            filing_detail,
+        )
+    )
+
+    unresolved: list[str] = []
+    for defect in defects:
+        case_id = str(defect.get("caseId", ""))
+        refs = [str(ref) for ref in (defect.get("evidenceRefs") or [])]
+        if not refs:
+            unresolved.append(f"{case_id} cites no evidence")
+            continue
+        unresolved.extend(
+            f"{case_id} cites {ref}" for ref in refs if not _qa_ref_resolves(ref, case_id, by_case)
+        )
+    outcomes.append(
+        _check(
+            "defect_evidence_refs_resolve",
+            not unresolved,
+            "every evidence reference resolves to its own case's evidence"
+            if not unresolved
+            else "; ".join(unresolved[:5]),
+        )
+    )
+    return outcomes
+
+
+def qa_state(*, rail: Mapping[str, Any], output: Mapping[str, Any]) -> dict[str, Any]:
+    """Assemble the judge's view of one rail case against one qa run.
+
+    `rail` is the behaviour under test, `cases` is what the squad designed for
+    it, and `results`/`defects` are what the run reported. Calibration reads the
+    gap between the three, so an intention stated as an expectation, or a
+    defect that restates its own title, is visible rather than trusted.
+
+    Six rail cases read one run, so the run-level material is scoped to the case
+    under review wherever a criterion is about *this* case: `defects` holds this
+    case's findings, and the findings filed against its siblings are named in
+    `defectsElsewhere` so the judge can see the run did file them without being
+    asked to grade four other cases through this one. Requirements come with
+    their text, because `R3` alone is not something a judge can decide an
+    `requirementId` against.
+    """
+    case_id = str(rail.get("id", ""))
+    cases = [
+        {
+            "id": str(case.get("id", "")),
+            "title": str(case.get("title", "")),
+            "kind": str(case.get("kind", "")),
+            "requirementIds": [str(item) for item in (case.get("requirementIds") or [])],
+            "preconditions": [str(item) for item in (case.get("preconditions") or [])],
+            "steps": [
+                {
+                    "action": str(step.get("action", "")),
+                    "target": str(step.get("target", "")),
+                    "expect": str(step.get("expect", "")),
+                }
+                for step in _dict_rows(case.get("steps"))
+            ],
+            "expected": str(case.get("expected", "")),
+        }
+        for case in output.get("cases", [])
+    ]
+    results: list[dict[str, Any]] = []
+    for result in output.get("results", []):
+        evidence = _qa_evidence(result)
+        results.append(
+            {
+                "caseId": str(result.get("caseId", "")),
+                "status": str(result.get("status", "")),
+                "observed": _qa_excerpt(result.get("observed")),
+                "durationMs": result.get("durationMs"),
+                "evidence": {
+                    "screenshot": evidence.get("screenshot"),
+                    "console": [str(line) for line in (evidence.get("console") or [])][
+                        :_QA_EVIDENCE_LINES
+                    ],
+                    "network": [
+                        {
+                            "url": str(entry.get("url", "")),
+                            "status": entry.get("status"),
+                            "ok": entry.get("ok"),
+                        }
+                        for entry in _dict_rows(evidence.get("network"))[:_QA_EVIDENCE_LINES]
+                    ],
+                    "transcript": [str(line) for line in (evidence.get("transcript") or [])][
+                        :_QA_EVIDENCE_LINES
+                    ],
+                },
+            }
+        )
+    closed = output.get("closed", {})
+    return {
+        "rail": {
+            "id": str(rail.get("id", "")),
+            "title": str(rail.get("title", "")),
+            "preconditions": [str(item) for item in (rail.get("preconditions") or [])],
+            "steps": [
+                {
+                    "action": str(step.get("action", "")),
+                    "target": str(step.get("target", "")),
+                    "expect": str(step.get("expect", "")),
+                }
+                for step in _dict_rows(rail.get("steps"))
+            ],
+            "expected": str(rail.get("expected", "")),
+        },
+        "execution": {
+            "available": output.get("executionAvailable"),
+            "blockedReason": str(output.get("blockedReason") or ""),
+        },
+        "cases": cases,
+        "requirements": [
+            {
+                "id": str(item.get("id", "")),
+                "text": str(item.get("text", "")),
+                "acceptance": [str(line) for line in (item.get("acceptance") or [])],
+            }
+            for item in output.get("requirements", [])
+        ],
+        "results": results,
+        "defects": [
+            {
+                "caseId": str(defect.get("caseId", "")),
+                "title": str(defect.get("title", "")),
+                "severity": str(defect.get("severity", "")),
+                "body": _qa_excerpt(defect.get("body"), _QA_BODY_CHARS),
+                "evidenceRefs": [str(ref) for ref in (defect.get("evidenceRefs") or [])],
+            }
+            for defect in output.get("defects", [])
+            if str(defect.get("caseId", "")) == case_id
+        ],
+        "defectsElsewhere": [
+            {"caseId": str(defect.get("caseId", "")), "title": str(defect.get("title", ""))}
+            for defect in output.get("defects", [])
+            if str(defect.get("caseId", "")) != case_id
+        ],
+        "gaps": [
+            {
+                "requirementId": str(gap.get("requirementId", "")),
+                "reason": str(gap.get("reason", "")),
+            }
+            for gap in output.get("gaps", [])
+        ],
+        "counts": closed.get("counts") if isinstance(closed.get("counts"), dict) else {},
+        "failedCaseIds": list(closed.get("failedCaseIds") or []),
+    }
+
+
 # ---------------------------------------------------------------- judges
 
 

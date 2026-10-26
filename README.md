@@ -276,7 +276,7 @@ fallback. The living register lives in
 | Atlassian Jira | Comments, transitions, JQL search, seed creation | Atlassian Rovo MCP (`https://mcp.atlassian.com/v2/mcp`) | `JIRA_TRANSPORT=mcp`, `JIRA_EMAIL` + agent-interface-scoped `JIRA_API_TOKEN` |
 | Jira boards | Board listing (approval UI) | Read-only REST always (Rovo MCP has no agile-board tools) | `JIRA_BASE_URL` + same email/token |
 | Models | Mastra workflow agents | Model router (OpenRouter) | `OPENROUTER_API_KEY` |
-| Console chat | `/chat` + SSE stream | OpenAI-compatible completer | `MODEL_API_KEY`, `MODEL_BASE_URL` |
+| Console chat | Browser → Mastra host (`console-assistant`) | OpenRouter router model | `OPENROUTER_API_KEY`, `CHAT_MODEL` |
 
 Rationale: one tool protocol, streaming sessions, no per-API SDK churn; the REST paths
 are kept and tested as fallbacks (see the register for the trade-offs, D1).
@@ -439,7 +439,25 @@ node scripts/github-mcp-verify.mjs
 
 ## Run locally
 
-Start Redis first, then the API:
+Docker-free, two terminals from the repository root:
+
+```powershell
+npm run dev:backend    # FastAPI on :8000 + Mastra agent plane on :4111 (Studio included)
+npm run dev:frontend   # approval UI (Next.js dev server) on http://localhost:5173
+```
+
+`npm run dev` starts all three in one terminal instead. Neither command needs
+containers. The backend group pins the API's `MASTRA_BASE_URL` to
+`http://localhost:4111` (the `.env` value is the Docker-bridge address for a
+containerised API), reuses an already-running Mastra host when one answers on
+:4111, and probes `REDIS_URL`: when no Redis server answers it starts the API
+with `RUNS_BACKEND=memory`, keeping run state in-process. Terminal runs still
+archive to Postgres, so run history survives a reload. With Redis running
+(`docker compose up -d redis`) the same command uses the shared Redis backend,
+which is what multi-process and production deployments require.
+
+Started manually, the API reads `.env` from the working directory, so run it from
+the repository root:
 
 ```powershell
 uvicorn allrounder_api.production:create_production_app --factory --app-dir apps/api/src
@@ -480,9 +498,12 @@ ingress/load-balancer IPs whose `X-Forwarded-For` the API may trust.
 
 ## API surface
 
-All endpoints below `/approvals`, `/coding`, `/finance`, `/runs`, `/jira`, `/chat`,
+All endpoints below `/approvals`, `/coding`, `/finance`, `/runs`, `/jira`,
 `/intake`, and `/msp` require a Supabase bearer token with tenant roles from signed
-`app_metadata`; `/health` and `/metrics` stay unauthenticated. `POST /knowledge/search`
+`app_metadata`; `/health` and `/metrics` stay unauthenticated. The conversation itself
+no longer goes through the API — the browser talks to the Mastra host, which verifies the
+same Supabase token — so `/chat/feedback` is the only surviving `/chat` route, and it
+takes the same bearer token. `POST /knowledge/search`
 is service-to-service: it mounts only when `KNOWLEDGE_SERVICE_TOKEN` is set, rejects
 any other bearer, and answers an empty scope with empty passages rather than an error.
 The API adds security headers, per-IP rate limiting
@@ -496,9 +517,7 @@ failures (transport errors and HTTP 429/5xx) with full-jitter backoff and honor
 | --- | --- | --- |
 | POST | `/webhooks/jira` | Jira webhook entry: HMAC verification, dedupe, triage/pre-flight, enqueue + comment receipt, and the cross-domain spawn on support defect reports (`deduped` on replay) |
 | GET | `/health` | Liveness |
-| GET | `/metrics` | Prometheus exposition: request/webhook counters, gate and approval decisions, chat answer sources, a `chat_first_token_seconds` TTFT histogram, run terminal/decision counters, and the security-lane counters (`security_triage_verdicts_total`, `security_containment_total`) |
-| POST | `/chat` | Chat completion through the model router |
-| POST | `/chat/stream` | Same chat request streamed as SSE (`data:` JSON delta frames + a terminal `done` frame carrying `source` and `interrupted`) |
+| GET | `/metrics` | Prometheus exposition: request/webhook counters, gate and approval decisions, run terminal/decision counters, and the security-lane counters (`security_triage_verdicts_total`, `security_containment_total`) |
 | POST | `/chat/feedback` | Rate a reply (`up`/`down`/`report`) by client-computed `messageSha256` with an optional ≤ 200-char reason; message text is never stored |
 | GET | `/jira/workspace` | Tenant-scoped project/board visibility (board UI) |
 | GET | `/jira/issues` | Up to 100 issues via backend Jira credentials (board UI) |
@@ -701,11 +720,13 @@ covers the wiring, the escalation handling and the second-MSP delta.
 ## Load testing & evals
 
 Chat load tests use k6 (`scripts/loadtest/k6-chat.js`, see the
-[loadtest README](scripts/loadtest/README.md)): `chat` / `stream` / `mixed` flows, with
-thresholds on failure rate, p95 latency, and checks; `429`s are expected traffic and are
-validated for a numeric `Retry-After` instead of failing the run. Server-side TTFT
-(`chat_first_token_seconds`, split by `source`) shows on `/metrics` and in the Grafana
-dashboard while a run is in flight.
+[loadtest README](scripts/loadtest/README.md)) and hit the Mastra host directly:
+`generate` / `stream` / `mixed` flows against `POST /api/agents/{id}/generate` and
+`/stream`, with thresholds on failure rate, checks, and p95 latency. The host enforces no
+rate limit, so the script has no 429 handling and a non-200 is a real failure. Two
+caveats when reading the numbers: they are model-dependent, and the host has no local
+fallback — a run without a funded `OPENROUTER_API_KEY` measures the error path, not the
+assistant.
 
 Routing golden cases live in `evals/golden_tickets.jsonl` (15 pinned expectations: 12
 domain + gate routing cases plus 3 security guardrail cases, including refuse and
@@ -775,9 +796,12 @@ YARA text, IOC lists — must pass untouched). All three replay through
   carrying the vendor id and effective date in the receipt.
 - The coding and finance lanes execute end to end in tests and scripts; live model-driven
   runs need a real `OPENROUTER_API_KEY`/`MODEL_API_KEY` (currently a placeholder) — the
-  deterministic engines and approval/evidence plumbing run without it. Model wiring is
-  OpenAI-compatible (`MODEL_BASE_URL`), so pointing it at a local server (Ollama `/v1`,
-  vLLM) exercises `/chat` and `/chat/stream` end to end without an external key.
+  deterministic engines and approval/evidence plumbing run without it. Model wiring inside
+  the API stays OpenAI-compatible (`MODEL_BASE_URL`), so pointing it at a local server
+  (Ollama `/v1`, vLLM) still works for lanes that reach a model through the API. The
+  console assistant is not one of them: it runs on the Mastra host against `CHAT_MODEL`
+  and has no local fallback, so the panel needs a funded `OPENROUTER_API_KEY` before it can
+  answer anything.
 - The marketing lane has agents and contracts but no workflow yet.
 - The security/SOC lane (plan: `docs/AllRounderAgent_SOC_Lane_Plan_20260917.md`) is shipped
   as a six-checkpoint run (`ingest → triage → investigate → decide → approve → contain`):

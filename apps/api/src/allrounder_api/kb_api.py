@@ -34,9 +34,9 @@ _READ_ROLES = ("viewer", "approver", "agent", "admin")
 _UPLOAD_ROLES = ("admin",)
 
 # Mirrors the kb_documents domain check: the phase-1 partitions plus the
-# `msp:<clientRef>` and `hr:<lane>` prefix families.
+# `msp:<clientRef>`, `hr:<lane>` and `tac:<stream>` prefix families.
 _DOMAIN_PATTERN = re.compile(
-    r"^(?:code|finance|marketing|support)$|^(?:msp|hr):[a-z0-9][a-z0-9._-]*$"
+    r"^(?:code|finance|marketing|support)$|^(?:msp|hr|tac):[a-z0-9][a-z0-9._-]*$"
 )
 
 # Uploads without an explicit review horizon go stale after a year, matching

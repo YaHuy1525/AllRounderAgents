@@ -49,11 +49,13 @@ temp/
 supabase/.branches/
 supabase/.temp/
 /docs
-/apps/api/tests/*
-!/apps/api/tests/test_judging.py
 .mastra
 .qoder/
 /fixtures
+
+# QA lane: a Playwright storage-state file holds a live session cookie, so it
+# stays local; it is produced once by a human login. See the qa agent squad plan.
+/.qa/
 
 # Judge eval harness: generated reports and judgment cache stay local;
 # candidates and baselines are committed.

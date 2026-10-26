@@ -101,6 +101,8 @@ describe("Mastra scripted agents", () => {
     expect(mastra.getAgent("dependenciesEngineer").id).toBe("dependency-engineer");
     expect(mastra.getAgent("dependenciesRepair").id).toBe("dependency-repair");
     expect(mastra.getAgent("screeningGuardrail").id).toBe("hr-guardrail");
+    // Conversational console assistant: grounded by the knowledge search tools.
+    expect(mastra.getAgent("consoleAssistant").id).toBe("console-assistant");
     // Droppy lane — the autonomous AU dropshipping system, eight bots (PLAN §4).
     expect(mastra.getAgent("droppyResearch").id).toBe("droppy-r1-research");
     expect(mastra.getAgent("droppyListing").id).toBe("droppy-l2-listing");

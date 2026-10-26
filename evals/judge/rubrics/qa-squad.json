@@ -1,0 +1,109 @@
+{
+  "suite": "qa-squad",
+  "version": 1,
+  "threshold": 0.8,
+  "criteria": [
+    {
+      "id": "rail_case_covered",
+      "kind": "deterministic",
+      "weight": 1.5,
+      "instructions": "Deterministic check: at least one designed case names this rail case's primary `data-qa` hook in a step target, so the set actually reaches the affordance the rail case is about. Never sent to a judge."
+    },
+    {
+      "id": "results_cover_approved_set",
+      "kind": "deterministic",
+      "weight": 1,
+      "instructions": "Deterministic check: the approved case ids and the verdict's result ids are the same set, with no repeats. A case the human approved must come back with an outcome, and a result for a case nobody approved is a fabricated run. Never sent to a judge."
+    },
+    {
+      "id": "every_result_observed",
+      "kind": "deterministic",
+      "weight": 1,
+      "instructions": "Deterministic check: every result carries a non-empty `observed` string, whatever its status. 'It passed' with no observation is not evidence either. Never sent to a judge."
+    },
+    {
+      "id": "blocked_execution_is_honest",
+      "kind": "deterministic",
+      "weight": 2,
+      "instructions": "Deterministic check: when `execution.available` is false the run says nothing passed or failed — every result is `blocked` or `not_run` — and it carries a `blockedReason`. When it is true the run actually produced results. Never sent to a judge."
+    },
+    {
+      "id": "defects_trace_to_failures",
+      "kind": "deterministic",
+      "weight": 1.5,
+      "instructions": "Deterministic check: every defect's `caseId` names a result whose status is `failed`. A defect with no failing case behind it is a rumour, and a failed case with no defect is a finding nobody will fix. Never sent to a judge."
+    },
+    {
+      "id": "gap_names_unpassed_requirement",
+      "kind": "deterministic",
+      "weight": 1,
+      "instructions": "Deterministic check: a reported coverage gap names a requirement no passing case covers. `assess` derives a gap from 'no case covering this requirement passed', so a gap against a requirement a passing case asserts is a miscount a reader would act on. Never sent to a judge."
+    },
+    {
+      "id": "defect_evidence_refs_resolve",
+      "kind": "deterministic",
+      "weight": 1.5,
+      "instructions": "Deterministic check: every defect's `evidenceRefs` resolve to an entry on its own case result (`qa:{runId}:{caseId}:{screenshot|observed|console:n|network:n:status|transcript:n}`). A reference that resolves to nothing is a broken promise in the ticket body. Never sent to a judge."
+    },
+    {
+      "id": "filing_stays_inside_failures",
+      "kind": "deterministic",
+      "weight": 1,
+      "instructions": "Deterministic check: every filed receipt names a case in `failedCaseIds`, and `closed.counts.filed` equals the number of filed receipts. Filing is keyed on `{storyKey}:{caseId}`, so a receipt for a passing case means the write path drifted. Never sent to a judge."
+    },
+    {
+      "id": "expected_is_observation",
+      "kind": "noul",
+      "weight": 3,
+      "pass_at": 0.5,
+      "instructions": "Every designed case's `expected` states what the target shows — text present, control enabled or disabled, URL, status code, element absent — rather than what the system should do. `the form validates`, `it works`, `the flow completes` all fail: an intention cannot fail a test, so it tests nothing. A single intention anywhere in `cases[].expected` fails this criterion."
+    },
+    {
+      "id": "cases_are_executable",
+      "kind": "score",
+      "weight": 2,
+      "pass_at": 0.67,
+      "levels": [
+        "Most steps name an intention or a bare control instead of a target the executor can act on.",
+        "About half the steps name a concrete target; the rest are unactionable or lack a precondition they depend on.",
+        "Most steps name a concrete `data-qa` hook or path and state what should be visible; a few gaps remain.",
+        "Every step names a concrete `data-qa` hook or path, its preconditions are ones a human can create, and each step says what should be visible."
+      ],
+      "instructions": "Judge the designed case set in `cases` as instructions to an executor that only has `navigate`, `click`, `fill` and `read`. Selectors must be `data-qa` hooks or paths, never prose like `the submit button`. Preconditions must be achievable in the console the rail case describes."
+    },
+    {
+      "id": "requirements_are_exercised",
+      "kind": "noul",
+      "weight": 2,
+      "pass_at": 0.5,
+      "instructions": "Each designed case's `requirementIds` point at requirements its own steps actually exercise. `requirements` gives each id its text and acceptance lines, so decide the id against what the steps touch, not against how plausible it sounds. A case that cites every requirement to look thorough, or cites one its steps never touch, fails — the ids are how `approve-cases` proves coverage, so a borrowed id makes the gate pass on a claim rather than a test."
+    },
+    {
+      "id": "defects_are_evidence_backed",
+      "kind": "noul",
+      "weight": 3,
+      "pass_at": 0.5,
+      "instructions": "Every defect in `defects` reports what was actually seen: its `body` gives the steps to reproduce, the expected observation and the observed one, and it quotes the evidence its references point at. A defect that restates the case title without a reproduction fails. Whether the references themselves resolve is checked mechanically; this criterion is about whether the body is arguable work. `defects` holds only this case's findings, and findings filed against the other cases in `defectsElsewhere` are not yours to grade here. When `defects` is empty this case filed nothing, so nothing is owed and the criterion passes."
+    },
+    {
+      "id": "blocked_reason_is_actionable",
+      "kind": "noul",
+      "weight": 2,
+      "pass_at": 0.5,
+      "instructions": "When `execution.available` is false, `execution.blockedReason` tells an operator what to fix — a missing storage state file, a browser that is not installed, a URL that did not answer — instead of `execution failed` or a stack trace. When execution ran, an empty or absent reason passes."
+    },
+    {
+      "id": "failure_is_a_product_defect",
+      "kind": "score",
+      "weight": 3,
+      "pass_at": 0.67,
+      "levels": [
+        "The failures shown are test bugs — a selector that moved, a precondition nobody created — reported as product defects.",
+        "Most failures look like product defects, but at least one is a locator or precondition problem, or the observed text does not support the claim.",
+        "The failures are product defects; one observed/expected pair is stated loosely enough to argue about.",
+        "Every failure contrasts the case's `expected` with what `observed` actually showed, and the difference is a behaviour a user would notice."
+      ],
+      "instructions": "Judge the failed results in `results` against the designed case they belong to. The lane deliberately has no self-healing locators, so a selector that moved is a test bug and must not be filed as a defect. Compare each `observed` with the case's `expected`: a real difference in what the screen shows is a defect; the same screen described differently is not."
+    }
+  ]
+}

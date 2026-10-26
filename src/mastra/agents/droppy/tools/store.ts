@@ -9,7 +9,7 @@ import type {
   SupportTicket,
   TikTokShopListing,
 } from "../contracts.js";
-import type { DroppyConfig } from "../config.js";
+import type { DroppyConfig } from "../settings.js";
 
 /**
  * The local index (Layer 2).

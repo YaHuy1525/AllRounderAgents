@@ -13,6 +13,15 @@ export function fixtureFile(name: string): string {
   return found ?? resolve(import.meta.dirname, "../../../fixtures", name);
 }
 
+/**
+ * True when `fixtures/<name>` exists in this checkout. Datasets too large to
+ * commit (the 125 MB agentcompany harvest) use this to skip their pins on a
+ * clean checkout instead of failing on a missing file.
+ */
+export function hasFixture(name: string): boolean {
+  return existsSync(fixtureFile(name));
+}
+
 /** Walk up from `startDir` until `fixtures/<name>` exists; null when missing. */
 export function findFixture(startDir: string, name: string): string | null {
   let directory = startDir;

@@ -1,0 +1,43 @@
+# Raise the k3s ingress edge above the 600s agent ceiling.
+#
+# A single Mastra run can hold a response open for up to
+# MASTRA_REQUEST_TIMEOUT_SECONDS (600) while a slow model step works. On the
+# cloud the request path is client -> Traefik -> the UI container's nginx ->
+# the api Service. nginx already reads for 3600s (apps/approval-ui/nginx.conf),
+# so the last hop that could cut a long stream is Traefik's own entrypoints.
+#
+# Traefik's idleTimeout defaults to 180s. That is a keep-alive gap timer, not a
+# per-response cap, so a stream emitting tokens continuously survives it, but a
+# run that thinks quietly for over three minutes would look idle. Setting every
+# responding timeout to 720s keeps the edge strictly above the 600s app ceiling
+# and makes the intent auditable instead of relying on framework defaults.
+#
+# k3s installs Traefik through its helm-controller. A HelmChartConfig with the
+# same name in kube-system merges into that install, so this is how the bundled
+# chart is customised without a separate helm release that k3s would fight.
+#
+# Applied by deploy/scripts/bootstrap-oci.ps1 after the node reports Ready.
+# Not exercised against a live cluster in this repository, because the Always
+# Free node is provisioned by hand, so treat the first cloud bring-up as the
+# verification of this file.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    extraArguments:
+      - "--entryPoints.web.transport.respondingTimeouts.idleTimeout=720s"
+      - "--entryPoints.web.transport.respondingTimeouts.readTimeout=720s"
+      - "--entryPoints.web.transport.respondingTimeouts.writeTimeout=720s"
+      - "--entryPoints.websecure.transport.respondingTimeouts.idleTimeout=720s"
+      - "--entryPoints.websecure.transport.respondingTimeouts.readTimeout=720s"
+      - "--entryPoints.websecure.transport.respondingTimeouts.writeTimeout=720s"
+
+# Caveat for a future change, not the current design. This cluster is reached by
+# the node's bare public IP, so Traefik is the outermost hop. If an OCI managed
+# Load Balancer is ever put in front of it, that LB has its own idle timeout
+# (360s by default) which is shorter than 600s and would sever the stream before
+# Traefik ever sees it. Raise the backend set's server timeout there too, or keep
+# streaming over a connection the LB is configured to hold open.

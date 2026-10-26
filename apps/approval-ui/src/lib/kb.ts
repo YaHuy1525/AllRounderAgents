@@ -71,7 +71,7 @@ export const SUGGESTED_KB_DOMAINS = ["support", "hr:policy"] as const;
 
 /** Mirrors the API's `_DOMAIN_PATTERN` (kb_api.py) and the DB check. */
 const KB_DOMAIN_PATTERN =
-  /^(?:code|finance|marketing|support)$|^(?:msp|hr):[a-z0-9][a-z0-9._-]*$/;
+  /^(?:code|finance|marketing|support)$|^(?:msp|hr|tac):[a-z0-9][a-z0-9._-]*$/;
 
 const KB_SOURCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const KB_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

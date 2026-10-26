@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { fixtureFile } from "../fixtures.js";
+import { fixtureFile, hasFixture } from "../fixtures.js";
 
 /**
  * Pins the vendored TheAgentCompany service harvest
@@ -15,6 +15,7 @@ import { fixtureFile } from "../fixtures.js";
 
 const PINNED_COMMIT = "98b68ef82a47690c316f42fddb05baafaab56851";
 const servicesDir = fixtureFile("agentcompany/services");
+const harvested = hasFixture("agentcompany/services");
 
 function readJson<T>(relativePath: string): T {
   return JSON.parse(readFileSync(resolve(servicesDir, relativePath), "utf8")) as T;
@@ -51,9 +52,23 @@ type Issue = {
 type MergeRequest = { project: string; iid: number | null; title: string | null; description: string | null };
 type Wiki = { project: string; slug: string | null; content: string | null };
 
-const manifest = readJson<HarvestManifest>("HARVEST.json");
+// The harvest is gitignored (125 MB of extracted artefacts), so CI has nothing
+// to pin. The guard stays real wherever the harvest script has actually run.
+const manifest = harvested
+  ? readJson<HarvestManifest>("HARVEST.json")
+  : ({
+      source: { repo: "", commit: "", images: [] },
+      services: {
+        owncloud: { files: 0, bytes: 0 },
+        rocketchat: { channels: 0, directRooms: 0, users: 0, memberships: 0, npcDefinitions: 0, messages: 0 },
+        gitlab: { projects: 0, issues: 0, mergeRequests: 0, wikiPages: 0 },
+        plane: { status: "" },
+      },
+      counts: { files: 0, bytes: 0 },
+      files: [],
+    } satisfies HarvestManifest);
 
-describe("agentcompany service harvest", () => {
+describe.skipIf(!harvested)("agentcompany service harvest", () => {
   it("pins the service images and verifies every manifest hash", () => {
     expect(manifest.source.repo).toBe("TheAgentCompany/TheAgentCompany");
     expect(manifest.source.commit).toBe(PINNED_COMMIT);

@@ -3,6 +3,17 @@ name: CI
 on:
   push:
   pull_request:
+    # A docs-only pull request changes no executable surface, so it must not
+    # burn a full polyglot CI run.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+# Newest run per ref wins. Cancellation is limited to pull requests so a push
+# to main always finishes and can be deployed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -89,6 +100,47 @@ jobs:
           for migration in supabase/migrations/*.sql; do
             psql -v ON_ERROR_STOP=1 -f "$migration"
           done
+
+  migration-lint:
+    # Migrations on a live database cannot be unwound by a revert, so a
+    # destructive statement is blocked at review time rather than at deploy
+    # time. A migration that genuinely needs it opts in explicitly with an
+    # `-- ALLOW-DESTRUCTIVE: <reason>` line inside the file.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check migrations for destructive changes
+        env:
+          CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash deploy/scripts/check-migrations.sh "$CI_BASE"
+
+  security:
+    # Dependency vulnerability sweep. The Python audit is advisory on first
+    # adoption so a pre-existing finding cannot freeze every deploy. Flip
+    # continue-on-error to false once the backlog is triaged. The npm audit is
+    # blocking at high severity because the shipped images install these trees.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: python -m pip install --quiet -e ".[dev]" pip-audit
+      - name: Audit Python dependencies
+        continue-on-error: true
+        run: python -m pip_audit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install production JavaScript dependencies
+        run: npm ci --workspaces=false --omit=dev --legacy-peer-deps
+      - name: Audit JavaScript dependencies
+        run: npm audit --omit=dev --audit-level=high
 
   judge:
     # Re-judges the committed candidates and fails on regression against the

@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { fixtureFile } from "../fixtures.js";
+import { fixtureFile, hasFixture } from "../fixtures.js";
 
 /**
  * Pins the vendored TheAgentCompany import (`fixtures/agentcompany`).
@@ -14,6 +14,7 @@ import { fixtureFile } from "../fixtures.js";
 
 const PINNED_COMMIT = "98b68ef82a47690c316f42fddb05baafaab56851";
 const companyDir = fixtureFile("agentcompany");
+const imported = hasFixture("agentcompany");
 
 function readJson<T>(relativePath: string): T {
   return JSON.parse(readFileSync(resolve(companyDir, relativePath), "utf8")) as T;
@@ -51,9 +52,17 @@ type Catalog = {
   }>;
 };
 
-const manifest = readJson<Manifest>("MANIFEST.json");
+// The import is gitignored (125 MB of harvested artefacts), so CI has nothing to
+// pin. The guard stays real wherever `scripts/import-agentcompany.mjs` has run.
+const manifest = imported
+  ? readJson<Manifest>("MANIFEST.json")
+  : ({
+      source: { repo: "", commit: "" },
+      counts: { people: 0, staff: 0, projects: 0, channels: 0, tasks: 0, files: 0 },
+      files: [],
+    } satisfies Manifest);
 
-describe("agentcompany import", () => {
+describe.skipIf(!imported)("agentcompany import", () => {
   it("pins the upstream commit and verifies every manifest hash", () => {
     expect(manifest.source.repo).toBe("TheAgentCompany/TheAgentCompany");
     expect(manifest.source.commit).toBe(PINNED_COMMIT);

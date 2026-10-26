@@ -34,6 +34,15 @@ export const MECHANICAL_AGENT_MODEL_CONFIG: ModelRef = {
   id: (process.env.CODING_MECHANICAL_MODEL ?? DEFAULT_AGENT_MODEL) as `${string}/${string}`,
 };
 
+/**
+ * Console chat seam: `CHAT_MODEL` swaps the conversational model by env edit
+ * with no code change, exactly like the coding tiers. Router id only — an
+ * explicit `url` would move authentication off `OPENROUTER_API_KEY`.
+ */
+export const CONSOLE_ASSISTANT_MODEL_CONFIG: ModelRef = {
+  id: (process.env.CHAT_MODEL ?? DEFAULT_AGENT_MODEL) as `${string}/${string}`,
+};
+
 export function modelTierConfig(tier: ModelTier): ModelRef {
   return tier === "reasoning" ? REASONING_AGENT_MODEL_CONFIG : MECHANICAL_AGENT_MODEL_CONFIG;
 }

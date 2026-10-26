@@ -37,6 +37,15 @@ const supabaseAnonKey = preferEnv(
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
 );
 const apiUrl = preferEnv(process.env.NEXT_PUBLIC_API_URL, process.env.VITE_API_URL);
+// The assistant is not behind this origin: the browser streams straight from the
+// Mastra host. In Compose the UI container proxies /mastra/ to it, so the
+// deployed value is a path; a plain `next dev` needs an absolute origin, which
+// is what the default below provides.
+const mastraUrl = preferEnv(
+  process.env.NEXT_PUBLIC_MASTRA_URL,
+  process.env.VITE_MASTRA_URL,
+  "http://localhost:4111",
+);
 
 // Keep both channels in sync: mutating process.env fixes Next.js' own
 // NEXT_PUBLIC_* inlining, and the env key is the documented mechanism that
@@ -44,6 +53,7 @@ const apiUrl = preferEnv(process.env.NEXT_PUBLIC_API_URL, process.env.VITE_API_U
 process.env.NEXT_PUBLIC_SUPABASE_URL = supabaseUrl;
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = supabaseAnonKey;
 process.env.NEXT_PUBLIC_API_URL = apiUrl;
+process.env.NEXT_PUBLIC_MASTRA_URL = mastraUrl;
 
 const nextConfig: NextConfig = {
   // The console is a session-gated SPA with no server-side rendering needs:
@@ -54,6 +64,7 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_SUPABASE_URL: supabaseUrl,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: supabaseAnonKey,
     NEXT_PUBLIC_API_URL: apiUrl,
+    NEXT_PUBLIC_MASTRA_URL: mastraUrl,
   },
 };
 

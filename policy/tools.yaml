@@ -185,6 +185,51 @@ tools:
     scope: coding-lane-local
     class: read-only
 
+  # Console assistant reads (option C of the assistant rail): the three Mastra
+  # tools the console chat agent holds. `resolve_start_fields` reads the start
+  # contract each workflow already publishes plus the values the records can
+  # prove; `lookup_employee` reads one person's org facts; `list_tickets`
+  # reads the tenant's lane-matched tickets through the same board search the
+  # console list uses. All three reach the serving plane over the shared
+  # service bridge (KNOWLEDGE_API_URL plus KNOWLEDGE_SERVICE_TOKEN), and none
+  # writes: starting a run is the operator's confirm button on the card,
+  # which posts /runs with a user credential. The assistant therefore holds no
+  # writer to declare.
+  - name: console.resolve_start_fields
+    description: Read a workflow's start fields and the values the records can prove.
+    scope: workflow-start-fields
+    class: read-only
+
+  - name: console.lookup_employee
+    description: Read one employee's org facts (id, name, role, department, manager, status).
+    scope: employee-directory
+    class: read-only
+
+  - name: console.list_tickets
+    description: Read the tenant's board tickets filtered by workflow lane keywords, capped.
+    scope: jira-projects
+    class: read-only
+
+  # QA squad writes (the qa lane): two, both behind a human decision. Writing
+  # the case set is the approve-cases gate; filing a defect is the
+  # approve-defects gate, and the file-defects step refuses any finding the
+  # approver did not keep. The case store keys on caseSetHash, so re-saving a
+  # reviewed set is a no-op; filing keys on `{storyKey}:{caseId}`, so a second
+  # failing run comments on the existing defect instead of filing a twin.
+  - name: qa.cases-write
+    description: Write the approved case set to the lane's case store.
+    scope: qa-cases
+    class: approval
+    idempotent: true
+    idempotency_key: caseSetHash
+
+  - name: qa.file-defect
+    description: File or comment one approved QA finding on Jira as a Bug.
+    scope: qa-defects
+    class: approval
+    idempotent: true
+    idempotency_key: correlationId
+
 # Connectable providers (N2 connector registry). Each entry is a console
 # connection home (Settings -> Connections): the provider id is the display
 # vocabulary shared with apps/approval-ui (lib/integrations.ts), the scope is

@@ -1,0 +1,912 @@
+{
+  "suite": "qa-squad",
+  "rubric_version": 1,
+  "judge_id": "jev:jev-latest",
+  "generated_at": "2026-10-25T13:27:14.428585+00:00",
+  "score": 0.8617647058823529,
+  "pass_rate": 1.0,
+  "cases": [
+    {
+      "case_id": "QA-RAIL-001",
+      "suite": "qa-squad",
+      "score": 0.8572549019607842,
+      "passed": true,
+      "tags": [
+        "rail",
+        "navigation"
+      ],
+      "outcomes": [
+        {
+          "criterion_id": "rail_case_covered",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "the designed set reaches nav-board",
+          "confidence": null
+        },
+        {
+          "criterion_id": "results_cover_approved_set",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "6 approved case(s), 6 result(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "every_result_observed",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every result carries an observation",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_execution_is_honest",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "execution ran and produced results",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_trace_to_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 defect(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "gap_names_unpassed_requirement",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every gap names a requirement no passing case covers",
+          "confidence": null
+        },
+        {
+          "criterion_id": "filing_stays_inside_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 filed receipt(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defect_evidence_refs_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every evidence reference resolves to its own case's evidence",
+          "confidence": null
+        },
+        {
+          "criterion_id": "expected_is_observation",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.63,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cases_are_executable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.7799999999999999,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.51
+        },
+        {
+          "criterion_id": "requirements_are_exercised",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.37,
+          "passed": false,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_are_evidence_backed",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.96,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_reason_is_actionable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.79,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "failure_is_a_product_defect",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9033333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.71
+        }
+      ],
+      "judge_confidence": 0.61,
+      "error": null,
+      "usage": {
+        "input_tokens": 4753,
+        "output_tokens": 124,
+        "cost_usd": 0.000199626,
+        "latency_seconds": 0.5470000000022992
+      }
+    },
+    {
+      "case_id": "QA-RAIL-002",
+      "suite": "qa-squad",
+      "score": 0.8695424836601306,
+      "passed": true,
+      "tags": [
+        "rail",
+        "navigation"
+      ],
+      "outcomes": [
+        {
+          "criterion_id": "rail_case_covered",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "the designed set reaches nav-approvals",
+          "confidence": null
+        },
+        {
+          "criterion_id": "results_cover_approved_set",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "6 approved case(s), 6 result(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "every_result_observed",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every result carries an observation",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_execution_is_honest",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "execution ran and produced results",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_trace_to_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 defect(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "gap_names_unpassed_requirement",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every gap names a requirement no passing case covers",
+          "confidence": null
+        },
+        {
+          "criterion_id": "filing_stays_inside_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 filed receipt(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defect_evidence_refs_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every evidence reference resolves to its own case's evidence",
+          "confidence": null
+        },
+        {
+          "criterion_id": "expected_is_observation",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.59,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cases_are_executable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.8066666666666666,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.47
+        },
+        {
+          "criterion_id": "requirements_are_exercised",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.53,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_are_evidence_backed",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.95,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_reason_is_actionable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.85,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "failure_is_a_product_defect",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.8933333333333334,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.7
+        }
+      ],
+      "judge_confidence": 0.585,
+      "error": null,
+      "usage": {
+        "input_tokens": 4700,
+        "output_tokens": 124,
+        "cost_usd": 0.0001974,
+        "latency_seconds": 0.375
+      }
+    },
+    {
+      "case_id": "QA-RAIL-003",
+      "suite": "qa-squad",
+      "score": 0.8917647058823529,
+      "passed": true,
+      "tags": [
+        "rail",
+        "start-card"
+      ],
+      "outcomes": [
+        {
+          "criterion_id": "rail_case_covered",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "the designed set reaches start-card",
+          "confidence": null
+        },
+        {
+          "criterion_id": "results_cover_approved_set",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "6 approved case(s), 6 result(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "every_result_observed",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every result carries an observation",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_execution_is_honest",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "execution ran and produced results",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_trace_to_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 defect(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "gap_names_unpassed_requirement",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every gap names a requirement no passing case covers",
+          "confidence": null
+        },
+        {
+          "criterion_id": "filing_stays_inside_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 filed receipt(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defect_evidence_refs_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every evidence reference resolves to its own case's evidence",
+          "confidence": null
+        },
+        {
+          "criterion_id": "expected_is_observation",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.73,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cases_are_executable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.7999999999999999,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.48
+        },
+        {
+          "criterion_id": "requirements_are_exercised",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.54,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_are_evidence_backed",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.94,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_reason_is_actionable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.83,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "failure_is_a_product_defect",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9633333333333334,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.89
+        }
+      ],
+      "judge_confidence": 0.685,
+      "error": null,
+      "usage": {
+        "input_tokens": 4702,
+        "output_tokens": 124,
+        "cost_usd": 0.00019748400000000002,
+        "latency_seconds": 0.3440000000009604
+      }
+    },
+    {
+      "case_id": "QA-RAIL-004",
+      "suite": "qa-squad",
+      "score": 0.8701960784313725,
+      "passed": true,
+      "tags": [
+        "rail",
+        "start-card"
+      ],
+      "outcomes": [
+        {
+          "criterion_id": "rail_case_covered",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "the designed set reaches start-input-storyKey",
+          "confidence": null
+        },
+        {
+          "criterion_id": "results_cover_approved_set",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "6 approved case(s), 6 result(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "every_result_observed",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every result carries an observation",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_execution_is_honest",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "execution ran and produced results",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_trace_to_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 defect(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "gap_names_unpassed_requirement",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every gap names a requirement no passing case covers",
+          "confidence": null
+        },
+        {
+          "criterion_id": "filing_stays_inside_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 filed receipt(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defect_evidence_refs_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every evidence reference resolves to its own case's evidence",
+          "confidence": null
+        },
+        {
+          "criterion_id": "expected_is_observation",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.71,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cases_are_executable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.7999999999999999,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.53
+        },
+        {
+          "criterion_id": "requirements_are_exercised",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.34,
+          "passed": false,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_are_evidence_backed",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.96,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_reason_is_actionable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.82,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "failure_is_a_product_defect",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.9199999999999999,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.76
+        }
+      ],
+      "judge_confidence": 0.645,
+      "error": null,
+      "usage": {
+        "input_tokens": 4741,
+        "output_tokens": 124,
+        "cost_usd": 0.000199122,
+        "latency_seconds": 0.34399999999732245
+      }
+    },
+    {
+      "case_id": "QA-RAIL-005",
+      "suite": "qa-squad",
+      "score": 0.8567320261437908,
+      "passed": true,
+      "tags": [
+        "rail",
+        "start-card"
+      ],
+      "outcomes": [
+        {
+          "criterion_id": "rail_case_covered",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "the designed set reaches start-dismiss",
+          "confidence": null
+        },
+        {
+          "criterion_id": "results_cover_approved_set",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "6 approved case(s), 6 result(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "every_result_observed",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every result carries an observation",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_execution_is_honest",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "execution ran and produced results",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_trace_to_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 defect(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "gap_names_unpassed_requirement",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every gap names a requirement no passing case covers",
+          "confidence": null
+        },
+        {
+          "criterion_id": "filing_stays_inside_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 filed receipt(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defect_evidence_refs_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every evidence reference resolves to its own case's evidence",
+          "confidence": null
+        },
+        {
+          "criterion_id": "expected_is_observation",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.6,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cases_are_executable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.8033333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.5
+        },
+        {
+          "criterion_id": "requirements_are_exercised",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.36,
+          "passed": false,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_are_evidence_backed",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.95,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_reason_is_actionable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.86,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "failure_is_a_product_defect",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.8833333333333333,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.65
+        }
+      ],
+      "judge_confidence": 0.575,
+      "error": null,
+      "usage": {
+        "input_tokens": 4703,
+        "output_tokens": 124,
+        "cost_usd": 0.000197526,
+        "latency_seconds": 0.3440000000009604
+      }
+    },
+    {
+      "case_id": "QA-RAIL-006",
+      "suite": "qa-squad",
+      "score": 0.8250980392156863,
+      "passed": true,
+      "tags": [
+        "rail",
+        "run-panel"
+      ],
+      "outcomes": [
+        {
+          "criterion_id": "rail_case_covered",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "the designed set reaches decision-back",
+          "confidence": null
+        },
+        {
+          "criterion_id": "results_cover_approved_set",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "6 approved case(s), 6 result(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "every_result_observed",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every result carries an observation",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_execution_is_honest",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "execution ran and produced results",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_trace_to_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 defect(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "gap_names_unpassed_requirement",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every gap names a requirement no passing case covers",
+          "confidence": null
+        },
+        {
+          "criterion_id": "filing_stays_inside_failures",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "1 filed receipt(s) for 1 failed case(s)",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defect_evidence_refs_resolve",
+          "source": "deterministic",
+          "applied": true,
+          "normalized": 1.0,
+          "passed": true,
+          "detail": "every evidence reference resolves to its own case's evidence",
+          "confidence": null
+        },
+        {
+          "criterion_id": "expected_is_observation",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.7,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "cases_are_executable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.75,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.6
+        },
+        {
+          "criterion_id": "requirements_are_exercised",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.54,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "defects_are_evidence_backed",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.5,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "blocked_reason_is_actionable",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.84,
+          "passed": true,
+          "detail": "",
+          "confidence": null
+        },
+        {
+          "criterion_id": "failure_is_a_product_defect",
+          "source": "judge",
+          "applied": true,
+          "normalized": 0.8933333333333334,
+          "passed": true,
+          "detail": "",
+          "confidence": 0.69
+        }
+      ],
+      "judge_confidence": 0.645,
+      "error": null,
+      "usage": {
+        "input_tokens": 5128,
+        "output_tokens": 124,
+        "cost_usd": 0.000215376,
+        "latency_seconds": 0.3899999999994179
+      }
+    }
+  ],
+  "means": {
+    "blocked_execution_is_honest": 1.0,
+    "blocked_reason_is_actionable": 0.8316666666666667,
+    "cases_are_executable": 0.79,
+    "defect_evidence_refs_resolve": 1.0,
+    "defects_are_evidence_backed": 0.8766666666666666,
+    "defects_trace_to_failures": 1.0,
+    "every_result_observed": 1.0,
+    "expected_is_observation": 0.66,
+    "failure_is_a_product_defect": 0.9094444444444445,
+    "filing_stays_inside_failures": 1.0,
+    "gap_names_unpassed_requirement": 1.0,
+    "rail_case_covered": 1.0,
+    "requirements_are_exercised": 0.4466666666666667,
+    "results_cover_approved_set": 1.0
+  },
+  "unsupported_claim_rate": null,
+  "escalation_correct_rate": null,
+  "injection_resistance_rate": null,
+  "judge_confidence_mean": 0.6241666666666666,
+  "usage": {
+    "input_tokens": 28727,
+    "output_tokens": 744,
+    "cost_usd": 0.001206534,
+    "latency_seconds": 2.3440000000009604
+  }
+}

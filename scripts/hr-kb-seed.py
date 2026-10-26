@@ -47,7 +47,9 @@ from allrounder_api.settings import Settings
 # Mirrors the tenant check on the knowledge route (knowledge_api.py).
 TENANT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 # Mirrors kb_api.py's _DOMAIN_PATTERN, which mirrors the kb_documents check.
-DOMAIN_RE = re.compile(r"^(?:code|finance|marketing|support)$|^(?:msp|hr):[a-z0-9][a-z0-9._-]*$")
+DOMAIN_RE = re.compile(
+    r"^(?:code|finance|marketing|support)$|^(?:msp|hr|tac):[a-z0-9][a-z0-9._-]*$"
+)
 # Mirrors kb_api.py's UploadDocument.source_id pattern.
 SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 DEFAULT_DOMAIN = "hr:policy"

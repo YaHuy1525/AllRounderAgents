@@ -1,6 +1,6 @@
 import { Agent } from "@mastra/core/agent";
 
-import type { DroppyConfig } from "../config.js";
+import type { DroppyConfig } from "../settings.js";
 import type { DroppyStore } from "../tools/store.js";
 
 /**

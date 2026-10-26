@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { allRounderAgents } from "../../registry.js";
 import { EventNameSchema } from "../contracts.js";
-import { loadDroppyConfig } from "../config.js";
+import { loadDroppyConfig } from "../settings.js";
 
 /**
  * Plan conformance.

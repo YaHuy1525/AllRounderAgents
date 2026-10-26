@@ -770,6 +770,480 @@ TICKETS: tuple[TicketSpec, ...] = (
             "and charts, and every figure cites the run ids behind it."
         ),
     },
+    # -- Leave lane: real ledger edges from fixtures/company ----------------
+    {
+        "summary": "Leave: overlapping November bookings for Pavel Novak (E-2009)",
+        "labels": ["leave", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Leave Request. The leave ledger holds three "
+            "booked rows for E-2009 Pavel Novak: LR-1D6BDF80 covers 2026-11-02 to "
+            "2026-11-04, LR-E84C284F covers 2026-11-04 to 2026-11-06, and "
+            "LR-5981DF34 covers 2026-10-19 to 2026-10-26. The two November spans "
+            "share 2026-11-04, so the same day is booked twice.\n\n"
+            "Start the run with employee E-2009 and ask for the November bookings "
+            "to be checked for overlap. Done when the run names both request ids, "
+            "reports 2026-11-04 as the collided date, and refuses to approve the "
+            "later request instead of silently accepting it."
+        ),
+    },
+    {
+        "summary": "Leave: four booked days against a zero balance (E-2124)",
+        "labels": ["leave", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Leave Request, and a live data contradiction. "
+            "The ledger row LR-42773ED6 books E-2124 Gina Eriksen (Operations, "
+            "reports to E-2121) from 2027-02-01 to 2027-02-04 as four working days "
+            "with status booked, while the directory carries her leaveBalanceDays as "
+            "0. E-2065 Jasper Aalto is the other zero-balance employee.\n\n"
+            "Start the run with the booked request LR-42773ED6. Done when the run "
+            "surfaces the contradiction instead of approving the booked row, reports "
+            "the balance and the booked span together, and asks a human which side "
+            "is wrong before touching the ledger."
+        ),
+    },
+    {
+        "summary": "Leave: two reports of one manager booked the same week (E-2009, E-2051)",
+        "labels": ["leave", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Leave Request. E-2003 Ines Vasquez is an "
+            "Engineering Manager with eight reports. Two of them are booked over an "
+            "overlapping week: LR-5981DF34 covers E-2009 Pavel Novak from 2026-10-19 "
+            "to 2026-10-26, and LR-756FBEA5 covers E-2051 Katya Weber from 2026-10-19 "
+            "to 2026-10-25.\n\n"
+            "Start the run with a coverage question for team E-2003 in the week of "
+            "2026-10-19. Done when the run finds both bookings, reports the shared "
+            "days, notes that a third booking that week would leave the team short, "
+            "and routes the coverage decision to the manager rather than cancelling "
+            "either approved booking."
+        ),
+    },
+    {
+        "summary": "Leave: working-day count across the Thanksgiving holidays",
+        "labels": ["leave", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Leave Request. The calendar lists Thanksgiving "
+            "2026-11-26 and the day after 2026-11-27 as holidays. The leave engine "
+            "counts working days between two dates while excluding the holiday "
+            "list, and the expected answers are pinned in evals/hr_lane_cases.jsonl.\n\n"
+            "Start the run with a request from 2026-11-23 to 2026-11-27 with those "
+            "two holidays excluded, and a second request from 2026-10-12 to "
+            "2026-10-18 with no holidays. Done when the run reports 3 working days "
+            "for the first span and 5 for the second, and shows the weekend and "
+            "holiday exclusions it applied."
+        ),
+    },
+    {
+        "summary": "Leave: absence request during the quarterly audit freeze (E-2103)",
+        "labels": ["leave", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Leave Request. A second blackout period runs "
+            "from 2027-03-29 to 2027-04-02 for the quarterly audit freeze. E-2103 "
+            "Gina Quintana is a Financial Analyst in Lisbon who started 2026-07-03 "
+            "and reports to E-2097.\n\n"
+            "Start the run with a request for E-2103 covering 2027-03-29 to "
+            "2027-04-01. Done when the run detects the freeze overlap, notes that "
+            "four of the five working days fall inside it, and escalates to the "
+            "controller rather than approving inside the freeze."
+        ),
+    },
+    {
+        "summary": "Leave: balance-exceeding week for Leo Iversen (E-2073)",
+        "labels": ["leave", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Leave Request. E-2073 Leo Iversen is a Sales "
+            "Development Rep in Remote (EU) with leaveBalanceDays 5, started "
+            "2026-06-03, and reports to E-2058.\n\n"
+            "Start the run with a seven working day request for E-2073 beginning "
+            "2026-11-09. Done when the run computes the two-day shortfall against "
+            "the balance, addresses the approval to the named manager E-2058, and "
+            "asks whether the excess is unpaid leave or a balance advance."
+        ),
+    },
+    # -- HR Help lane: one question per handbook added in 2026-10 ------------
+    {
+        "summary": "HR help: raising an anonymous concern about expense fraud",
+        "labels": ["hr-help", "handbook", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. The handbook now carries a dedicated "
+            "whistleblowing policy (serious-concerns-whistleblowing.md) alongside "
+            "the conduct and grievances policy, and an expense policy "
+            "(expenses-and-travel.md).\n\n"
+            "Start the run with the question: an employee believes their manager "
+            "has submitted personal purchases as company expenses and wants to "
+            "report it without their name reaching the manager. Done when the "
+            "answer cites the whistleblowing channel rather than the ordinary "
+            "grievance route, names the retaliation protection, and does not "
+            "invent a hotline number that the policy does not state."
+        ),
+    },
+    {
+        "summary": "HR help: right to disconnect for the Manila team",
+        "labels": ["hr-help", "handbook", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. working-hours-and-disconnect.md is the "
+            "only policy that answers out-of-hours contact, and the Manila "
+            "(E-2001 is based there) and Lisbon teams sit nine hours behind Austin.\n\n"
+            "Start the run with the question: a Manila employee is messaged on "
+            "Slack at 22:30 local time by an Austin manager and asked to reply "
+            "that night. Done when the answer grounds itself in the disconnect "
+            "policy, distinguishes a genuine incident from an ordinary request, "
+            "and gives the escalation route instead of telling the employee to "
+            "ignore their manager."
+        ),
+    },
+    {
+        "summary": "HR help: exporting the candidate list to a personal drive",
+        "labels": ["hr-help", "handbook", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. it-and-data-usage.md governs company "
+            "data on personal devices and accounts. The recruiting fixtures hold "
+            "26 named candidates with evidence spans, which makes this a real "
+            "privacy question rather than a hypothetical.\n\n"
+            "Start the run with the question: a hiring manager wants the REQ-5001 "
+            "candidate notes copied into their personal Google Drive over a "
+            "weekend. Done when the answer refuses the personal-copy route on "
+            "policy grounds, offers the sanctioned access path, and flags that "
+            "third-party candidate data is involved."
+        ),
+    },
+    {
+        "summary": "HR help: who approves a conference and the training budget",
+        "labels": ["hr-help", "handbook", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. learning-and-development.md is the "
+            "seeded ground for this probe (verified 2026-10-25: top hit for the "
+            "query \"training budget conference approval\").\n\n"
+            "Start the run with the question: an engineer wants EUR 2,400 for a "
+            "two-day conference plus travel and asks who signs it off and whether "
+            "it comes out of the team or personal budget. Done when the answer "
+            "quotes the actual ceiling and approver from the policy, separates the "
+            "learning budget from the travel budget, and says what happens when "
+            "the personal allowance is already spent."
+        ),
+    },
+    {
+        "summary": "HR help: extending probation and who decides",
+        "labels": ["hr-help", "handbook", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. probation-and-confirmation.md defines "
+            "the probation length, the review point and the extension rules. Eight "
+            "employees are inside their first 180 days as of 2026-10-25, including "
+            "E-2069 Leo Zhang (5 days) and E-2167 Iris Eriksen (48 days).\n\n"
+            "Start the run with the question: a manager wants to extend a "
+            "probationary employee by three months because performance is unclear. "
+            "Done when the answer states the maximum extension and notice period "
+            "from the policy, names who signs, and warns that an extension is not "
+            "a substitute for a performance plan."
+        ),
+    },
+    {
+        "summary": "HR help: does an internal transfer need the current manager first",
+        "labels": ["hr-help", "handbook", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. internal-transfers-and-job-postings.md "
+            "covers internal application rights, the notification order and the "
+            "hold on posting after interviews. REQ-5005 (IT Support Specialist, "
+            "Manila, junior) is a plausible internal target.\n\n"
+            "Start the run with the question: an employee in Ops wants to apply "
+            "for REQ-5005 but their manager is strongly against losing them. Done "
+            "when the answer states whether the manager must be told before or "
+            "after applying, what the policy protects the employee from, and the "
+            "notice period a transfer must respect."
+        ),
+    },
+    {
+        "summary": "HR help: how calibration stops one lenient manager skewing ratings",
+        "labels": ["hr-help", "handbook", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. performance-review-and-calibration.md "
+            "is the new policy under test, and the company has a deep manager "
+            "layer (E-2003 to E-2008 each carry several reports).\n\n"
+            "Start the run with the question: one manager rates everyone at the top "
+            "band and another rates everyone mid, and the reviews feed salary "
+            "decisions. Done when the answer explains the calibration step from the "
+            "policy, who chairs it, what evidence a manager must bring to defend a "
+            "rating, and how an employee challenges an outcome."
+        ),
+    },
+    {
+        "summary": "HR help: harassment complaint intake and interim measures",
+        "labels": ["hr-help", "handbook", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for HR Help. anti-harassment-and-diversity.md is the "
+            "policy added in the 2026-10 corpus expansion, and "
+            "conduct-and-grievances.md (reviewed 2024, past its horizon) covers the "
+            "adjacent grievance route.\n\n"
+            "Start the run with the question: an employee reports that a colleague "
+            "keeps making comments about their appearance in team calls and they "
+            "have been sharing a reporting line with that person for three weeks. "
+            "Done when the answer takes the intake path from the anti-harassment "
+            "policy, names the interim measures available before any investigation "
+            "concludes, does not lean on the stale conduct revision for the "
+            "procedure, and treats a report about a named person as a human step "
+            "rather than an automated notification."
+        ),
+    },
+    # -- Recruiting lane ----------------------------------------------------
+    {
+        "summary": (
+            "Screening: payroll specialist pipeline with a gap on the heaviest "
+            "criterion (REQ-5003)"
+        ),
+        "labels": ["screening", "recruiting", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Candidate Screening. REQ-5003 is a Payroll "
+            "Specialist in Finance, Lisbon, mid, interviewers E-2094 and E-2095, "
+            "with weighted criteria payroll-ops 35, compliance 25, erp 15, reporting "
+            "15, automation 10. Four candidates are attached. C-5010 Yara Falk has "
+            "no evidence at all for compliance and rates weak on the heaviest "
+            "criterion payroll-ops, while C-5011 Iris Novak covers every criterion.\n\n"
+            "Start the run with requisition REQ-5003. Done when the run weights the "
+            "criteria rather than counting strengths, puts C-5011 above C-5010 despite "
+            "the headline years, and shows the missing compliance evidence for C-5010 "
+            "as a gap rather than inventing a span."
+        ),
+    },
+    {
+        "summary": "Screening: junior IT Support shortlist with thin evidence (REQ-5005)",
+        "labels": ["screening", "recruiting", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Candidate Screening. REQ-5005 is an IT Support "
+            "Specialist in Operations, Manila, junior, interviewers E-2120 and "
+            "E-2121, criteria troubleshooting 35, identity 25, ticketing 15, "
+            "hardware 15, communication 10. Four candidates are attached. C-5020 Vera "
+            "Xu has three evidence items only (ticketing strong, hardware weak, "
+            "communication weak) and nothing for troubleshooting or identity, while "
+            "C-5018 Henrik Santos and C-5021 Celine Everly cover all five.\n\n"
+            "Start the run with requisition REQ-5005. Done when the run reports the "
+            "coverage gap on the two heaviest criteria for C-5020 rather than scoring "
+            "an empty criterion as neutral, ranks the four candidates, and lists "
+            "which interview slot should test what no cv span supports."
+        ),
+    },
+    # -- On and offboarding: access tiers are real directory rows -----------
+    {
+        "summary": "Onboarding: provision the marketing stack for Henrik Alvarez (E-2163)",
+        "labels": ["onboarding", "access", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for New-Hire Onboarding. E-2163 Henrik Alvarez is a "
+            "Growth Marketer in Marketing, accessTier medium, status onboarding, with "
+            "systems figma, hubspot, jira, notion, okta, slack, workday. REQ-5006 (the "
+            "open Growth Marketer requisition) is the seat being filled, and "
+            "onboarding-checklist.md is the policy source.\n\n"
+            "Start the run with employee E-2163 and a start date of 2026-11-03. Done "
+            "when the run returns the provisioning order from the checklist, puts okta "
+            "ahead of the tools it feeds, flags the marketing automation and CRM "
+            "accounts as the ones needing a data owner, and keeps the actual grants as "
+            "approval-gated writes."
+        ),
+    },
+    {
+        "summary": "Offboarding: same-day banking and ERP removal for an accountant (E-2119)",
+        "labels": ["offboarding", "access", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Employee Offboarding. E-2119 Amara Eriksen is an "
+            "Accountant in Finance, status offboarding, accessTier medium, with "
+            "banking, erp, looker, payroll, okta, jira, slack and workday. This is "
+            "the money-adjacent case: two of the systems can move funds.\n\n"
+            "Start the run with employee E-2119 and a departure date of 2026-10-30. "
+            "Done when the run sequences banking, erp and payroll ahead of the "
+            "collaboration tools, states a same-day cutoff for the payment systems, "
+            "and names the finance approver who has to sign the access removal."
+        ),
+    },
+    {
+        "summary": "Onboarding: provision recruiting tooling for a new recruiter (E-2148)",
+        "labels": ["onboarding", "access", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for New-Hire Onboarding. E-2148 Iris Delgado is a "
+            "Recruiter in People with status onboarding, accessTier high, and "
+            "systems aws, github, greenhouse, hr-console, jira, okta, slack, "
+            "workday, zoom. onboarding-checklist.md is the policy source, and the "
+            "high tier plus hr-console is the sensitive part of this bundle.\n\n"
+            "Start the run with employee E-2148 and a start date of 2026-11-02. Done "
+            "when the run returns the provisioning order from the checklist, calls "
+            "out the background-check prerequisite (references-and-background-checks.md), "
+            "and does not grant hr-console before the first-day review."
+        ),
+    },
+    # -- Finance lane: the pinned phase3 reconciliation exceptions ---------
+    {
+        "summary": "Finance: amount mismatch on INV-2 blocks the period close",
+        "labels": ["finance", "invoice", "reconcile", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Finance Reconciliation. fixtures/phase3_finance.json "
+            "pins the expected exceptions for the period: an amount_mismatch on "
+            "externalRef INV-2 owned by the gl specialist, alongside the matched "
+            "ledger and bank rows for account 1000.\n\n"
+            "Start the run with the period close for the fixture ledger. Done when "
+            "the run isolates INV-2 as an amount mismatch rather than an unmatched "
+            "line, reports both sides of the difference, and leaves the journal "
+            "write to a human approval gate."
+        ),
+    },
+    {
+        "summary": "Finance: PAY-1 has a ledger entry with no bank counterpart",
+        "labels": ["finance", "ledger", "reconcile", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Finance Reconciliation. The pinned exceptions "
+            "list an unmatched_ledger on externalRef PAY-1 for the gl specialist: "
+            "a payroll journal line the bank feed never carried.\n\n"
+            "Start the run with the same period fixture. Done when the run classifies "
+            "PAY-1 as ledger-side-only (not a variance), separates it from the INV-2 "
+            "amount mismatch, and proposes the follow-up question to payroll rather "
+            "than adjusting the journal."
+        ),
+    },
+    {
+        "summary": "Finance: unmatched bank deposit DEP-9 needs treasury tracing",
+        "labels": ["finance", "bank", "treasury", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Finance Reconciliation. The third pinned "
+            "exception is an unmatched_bank on externalRef DEP-9 owned by the "
+            "treasury specialist: money arrived with no journal line behind it.\n\n"
+            "Start the run with the same period fixture. Done when the run routes "
+            "DEP-9 to treasury, states that an untraced deposit cannot be booked as "
+            "revenue on the run's own authority, and asks the human to identify the "
+            "payer before any posting."
+        ),
+    },
+    {
+        "summary": "Finance: month-end variance report across the fixture ledger",
+        "labels": ["finance", "variance", "reconciliation", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Finance Reconciliation. The fixture period holds "
+            "three ledger rows and three bank rows in USD against account 1000, with "
+            "exactly three pinned exceptions, so a correct variance report must sum "
+            "to the difference those three rows create.\n\n"
+            "Start the run asking for the period variance summary. Done when the run "
+            "reports matched totals, lists the three exceptions with their owner "
+            "specialist, and keeps the arithmetic deterministic (no model-invented "
+            "figures in the totals)."
+        ),
+    },
+    {
+        "summary": "Finance: expense claim above the travel policy ceiling",
+        "labels": ["finance", "expense", "audit", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case that pairs the finance and handbook planes. "
+            "expenses-and-travel.md is seeded in hr:policy and sets the claim rules "
+            "and ceilings; the finance lane decides what gets posted.\n\n"
+            "Start the run with a claim for a Lisbon-to-Austin trip where the flight "
+            "class and one undocumented dinner exceed the ceiling. Done when the run "
+            "cites the policy ceiling it checked, splits the approvable part from the "
+            "exception, and holds the undocumented item for human review instead of "
+            "rejecting the whole claim."
+        ),
+    },
+    {
+        "summary": "Finance: assemble the audit pack for the period close",
+        "labels": ["finance", "audit", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Finance Reconciliation with the audit-pack path. "
+            "The close has three unresolved exceptions (INV-2, PAY-1, DEP-9) and the "
+            "quarterly audit freeze lands 2027-03-29.\n\n"
+            "Start the run asking for the evidence pack behind this period's close. "
+            "Done when the pack carries each exception with both sides of the "
+            "comparison, the run log that produced the classification, and the "
+            "approval receipts, so an auditor can retrace every number without a "
+            "live model call."
+        ),
+    },
+    # -- Support lane -------------------------------------------------------
+    {
+        "summary": "Support: customer cannot log in after the identity migration",
+        "labels": ["support", "customer", "login", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Support Triage. A customer reports that after "
+            "the identity provider change their account password reset link loops "
+            "back to the login page, and they cannot reach the account screen.\n\n"
+            "Start the run with that customer description. Done when the run "
+            "classifies the ticket into the support lane, asks for the account "
+            "identifier before touching anything, proposes read-only diagnosis steps, "
+            "and does not reset or merge an account without approval."
+        ),
+    },
+    {
+        "summary": "Support: duplicate charge refund request on one account",
+        "labels": ["support", "customer", "refund", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Support Triage. A customer was billed twice for "
+            "the same subscription month and wants the second charge refunded.\n\n"
+            "Start the run with the refund request. Done when the run separates the "
+            "verification step (both transactions, same account, same period) from "
+            "the money movement, drafts the customer reply, and stops at the "
+            "approval gate because a refund is an irreversible write."
+        ),
+    },
+    # -- Marketing lane (absent from the current board spread) --------------
+    {
+        "summary": "Marketing: Q4 launch newsletter copy review before send",
+        "labels": ["marketing", "newsletter", "campaign", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Marketing Draft. The launch newsletter copy for "
+            "the Q4 campaign needs a review pass against the brand voice and the "
+            "send date; no campaign calendar exists in the store yet, so the run has "
+            "to work from the ticket body alone.\n\n"
+            "Start the run with the draft in the ticket. Done when the run classifies "
+            "into marketing, returns concrete edits rather than generic praise, and "
+            "leaves the send to a human because publishing is an outbound write."
+        ),
+    },
+    {
+        "summary": "Marketing: brand refresh landing page for the product launch",
+        "labels": ["marketing", "brand", "launch", "copy", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for Marketing Draft. A launch landing page needs "
+            "headline, sub-headline and call-to-action copy in two tones so the team "
+            "can pick one.\n\n"
+            "Start the run with the product brief in the ticket. Done when the run "
+            "produces both tone variants with the reason each fits, keeps claims "
+            "non-fabricated (no invented pricing or customer counts), and asks for "
+            "approval before anything goes live."
+        ),
+    },
+    # -- DevOps lane --------------------------------------------------------
+    {
+        "summary": "DevOps: quarantine the flaky CI suite before the release build",
+        "labels": ["devops", "ci", "build", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for the DevOps lane. The CI pipeline for this repo "
+            "(see .github/workflows/ci.yml) intermittently fails on a test that "
+            "passes on rerun, which blocks the release build and trains the team to "
+            "rerun green rather than investigate.\n\n"
+            "Start the run with the failing job name from the ticket. Done when the "
+            "run identifies the flaky test, proposes a quarantine with an owner and "
+            "an expiry instead of a permanent skip, and treats the pipeline edit as "
+            "an approval-gated change."
+        ),
+    },
+    {
+        "summary": "DevOps: ArgoCD application stuck OutOfSync for the approval console",
+        "labels": ["devops", "argocd", "deploy", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for the DevOps lane. The approval UI is deployed "
+            "through the GitOps path in deploy/argocd and deploy/k8s, and the "
+            "application shows OutOfSync against the manifest in git with no sync "
+            "error in the app events.\n\n"
+            "Start the run with the application name from the ticket. Done when the "
+            "run reads the diff between the live and desired manifests, says which "
+            "field drifted, and stops before the sync operation because syncing is "
+            "a cluster write."
+        ),
+    },
+    {
+        "summary": "DevOps: per-lane cost and latency panels on the Grafana board",
+        "labels": ["devops", "observability", "grafana", "sim", "workflow-test"],
+        "description": (
+            "Workflow test case for the DevOps lane. ops/grafana and "
+            "deploy/observability hold the dashboard and scrape config, and the "
+            "metrics endpoint already exposes per-workflow counters.\n\n"
+            "Start the run asking for lane-level cost per run and step latency on the "
+            "board. Done when the run proposes the exact metric and panel changes, "
+            "names the label that splits lanes, keeps the Prometheus format "
+            "compatible, and does not merge the dashboard JSON itself."
+        ),
+    },
 )
 
 

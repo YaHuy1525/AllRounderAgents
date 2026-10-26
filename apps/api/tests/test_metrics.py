@@ -48,19 +48,6 @@ def test_metric_labels_use_route_templates_not_ids() -> None:
     assert "abc-secret-id" not in text
 
 
-def test_chat_counter_records_the_answer_source() -> None:
-    client = metrics_client()
-    response = client.post(
-        "/chat",
-        headers={"Authorization": "Bearer viewer"},
-        json={"message": "How many tickets?", "tickets": []},
-    )
-    assert response.status_code == 200
-    assert response.json()["source"] == "local"
-    text = client.get("/metrics").text
-    assert 'chat_requests_total{source="local"} 1.0' in text
-
-
 def test_approval_decision_counters() -> None:
     client = metrics_client()
     headers = {"Authorization": "Bearer approver"}
@@ -317,7 +304,12 @@ def test_metrics_benchmark_reports_archived_coding_lanes() -> None:
     headers = {"Authorization": "Bearer tok"}
     created = client.post(
         "/runs",
-        json={"workflow": "review", "ticketKey": "ABC-1", "caseId": "case-1", "input": {}},
+        json={
+            "workflow": "review",
+            "ticketKey": "ABC-1",
+            "caseId": "case-1",
+            "input": {"repository": "acme/app"},
+        },
         headers=headers,
     )
     assert created.status_code == 201

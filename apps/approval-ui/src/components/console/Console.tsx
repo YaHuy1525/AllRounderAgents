@@ -886,6 +886,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "dashboard" ? " active" : ""}`}
                 data-view="board"
+                data-qa="nav-board"
                 aria-label="Board"
                 title="Board"
                 onClick={focusDashboard}
@@ -897,6 +898,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "runs" ? " active" : ""}`}
                 data-view="runs"
+                data-qa="nav-runs"
                 aria-label="Runs"
                 title="Runs"
                 onClick={() => openPanel("runs")}
@@ -908,6 +910,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "inbox" ? " active" : ""}`}
                 data-view="inbox"
+                data-qa="nav-inbox"
                 aria-label="Inbox"
                 title="Inbox"
                 onClick={() => openPanel("inbox")}
@@ -919,6 +922,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "kb" ? " active" : ""}`}
                 data-view="knowledge"
+                data-qa="nav-knowledge"
                 aria-label="Knowledge"
                 title="Knowledge"
                 onClick={() => openPanel("kb")}
@@ -930,6 +934,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "workflow" ? " active" : ""}`}
                 data-view="workflows"
+                data-qa="nav-workflows"
                 aria-label="Workflows"
                 title="Workflows"
                 onClick={openWorkflows}
@@ -941,6 +946,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "approvals" ? " active" : ""}`}
                 data-view="approvals"
+                data-qa="nav-approvals"
                 aria-label="Approvals"
                 title="Approvals"
                 onClick={() => openPanel("approvals")}
@@ -957,6 +963,7 @@ export function Console() {
                 type="button"
                 className="rail-button"
                 data-view="chat"
+                data-qa="nav-chat"
                 aria-label="Assistant"
                 title="Assistant"
                 onClick={focusChat}
@@ -968,6 +975,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "observability" ? " active" : ""}`}
                 data-view="observability"
+                data-qa="nav-observability"
                 aria-label="Observability"
                 title="Observability"
                 onClick={() => openPanel("observability")}
@@ -984,6 +992,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "docs" ? " active" : ""}`}
                 data-view="docs"
+                data-qa="nav-docs"
                 aria-label="Docs and help"
                 title="Docs & help"
                 onClick={() => openPanel("docs")}
@@ -995,6 +1004,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "settings" ? " active" : ""}`}
                 data-view="settings"
+                data-qa="nav-settings"
                 aria-label="Settings"
                 title="Settings"
                 onClick={() => openPanel("settings")}
@@ -1006,6 +1016,7 @@ export function Console() {
                 type="button"
                 className={`rail-button${activeTab.kind === "account" ? " active" : ""}`}
                 data-view="account"
+                data-qa="nav-account"
                 aria-label="Account"
                 title="Account"
                 onClick={() => openPanel("account")}

@@ -18,9 +18,9 @@ from pydantic import ValidationError
 from .approvals import ApprovalReceiptSigner
 from .auth import AuthenticationError, BearerVerifier, FakeBearerVerifier
 from .benchmark import CODING_LANES, build_benchmark, empty_benchmark
-from .board_chat import ChatCompleter
 from .coding_runs import CodingRunRepository, InMemoryCodingRunRepository
 from .context import RequestContext
+from .directory import EmployeeDirectory, load_directory
 from .dispatcher import DeterministicDispatcher, normalize_jira_payload
 from .finance_runs import FinanceRunRepository, InMemoryFinanceRunRepository
 from .idempotency import IdempotencyStore, MemoryIdempotencyStore
@@ -76,7 +76,6 @@ def create_app(
     receipt_signer: ApprovalReceiptSigner | None = None,
     coding_runs: CodingRunRepository | None = None,
     finance_runs: FinanceRunRepository | None = None,
-    chat_completer: ChatCompleter | None = None,
     metrics: MetricsRegistry | None = None,
     rate_limiter: RateLimiter | None = None,
     runs_service: RunService | None = None,
@@ -86,6 +85,7 @@ def create_app(
     msp_connections: MspConnectionsRepository | None = None,
     knowledge_retriever: KnowledgeConsole | None = None,
     knowledge_service_token: str | None = None,
+    employee_directory: EmployeeDirectory | None = None,
 ) -> FastAPI:
     config = settings or Settings()
     configure_logging(config.log_level)
@@ -139,9 +139,9 @@ def create_app(
         return response
 
     from .audit_pack import AuditPackBuilder
-    from .chat_api import build_chat_router
     from .connectors_api import build_connectors_router
     from .doc_snap_api import build_doc_snap_router
+    from .feedback_api import build_feedback_router
     from .github_api import build_github_router
     from .intake_api import build_intake_router
     from .jira_board_api import build_jira_board_router
@@ -159,6 +159,10 @@ def create_app(
     sends = send_repository or InMemorySupportSendRepository()
     feedback = feedback_repository or InMemoryFeedbackRepository()
     signer = receipt_signer or _receipt_signer(config, secrets.token_bytes(32))
+    # One directory serves both prefill surfaces: the console card and the
+    # agent tools. An unreadable fixture yields an empty directory, so the
+    # card asks for the value instead of failing the page.
+    directory = employee_directory if employee_directory is not None else load_directory()
 
     app.include_router(
         build_phase1_router(
@@ -214,14 +218,7 @@ def create_app(
             vault=connector_vault or InMemoryConnectorVaultRepository(),
         )
     )
-    app.include_router(
-        build_chat_router(
-            verifier=verifier,
-            completer=chat_completer,
-            feedback=feedback,
-            metrics=metrics,
-        )
-    )
+    app.include_router(build_feedback_router(verifier=verifier, feedback=feedback))
     run_service = runs_service or build_memory_run_service(
         signer=signer,
         approvals=approvals,
@@ -248,7 +245,14 @@ def create_app(
         cases=cases,
         workflows=WORKFLOW_DEFINITIONS,
     )
-    app.include_router(build_runs_router(verifier=verifier, service=run_service))
+    app.include_router(
+        build_runs_router(
+            verifier=verifier,
+            service=run_service,
+            directory=directory,
+            repositories=config.github_repository_allowlist,
+        )
+    )
     # Command-bar search (U1): read-only over the same registries the runs
     # router serves, plus approval gates and the optional knowledge store.
     # The bar covers the support corpus plus the graduated HR policy
@@ -300,6 +304,32 @@ def create_app(
             build_knowledge_router(
                 retriever=knowledge_retriever,
                 service_token=knowledge_service_token,
+            )
+        )
+    if knowledge_service_token:
+        # Read-only lookups for the Mastra console agent: one employee, the
+        # values a run still needs, or the tenant's lane-matched tickets.
+        # Same shared token as /knowledge/search. Nothing here writes, so the
+        # human's confirm stays the only start.
+        from .agent_tools_api import build_agent_tools_router
+
+        app.include_router(
+            build_agent_tools_router(
+                service_token=knowledge_service_token,
+                directory=directory,
+                reader=board_reader,
+                tenant_project_allowlist=config.jira_tenant_project_allowlist,
+            )
+        )
+        # The QA squad's one governed write. It goes through the Jira transport
+        # that already owns receipts and idempotency, so a re-run comments
+        # rather than filing a twin (the qa agent squad plan, section 7).
+        from .qa_defects_api import build_qa_defects_router
+
+        app.include_router(
+            build_qa_defects_router(
+                service_token=knowledge_service_token,
+                jira=jira_tools,
             )
         )
     app.include_router(build_workflows_router(verifier=verifier))

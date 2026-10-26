@@ -1,11 +1,12 @@
 /**
- * Per-run Docker sandbox provisioner for the sandboxed git lanes.
- *
- * One sandbox == one run == one container holding a real git checkout pinned
- * at the run's `sourceSha` (via `createDockerRepoTemplate`, whose credential
- * is a build secret only). The branch is unique per run, so reconnecting by
- * `id` and teardown are deterministic. All editing, validation and committing
- * happens inside this container; run state only carries the change manifest.
+ * Per-run sandbox provisioner for the sandboxed git lanes, behind one provider
+ * flag: `docker` (default) boots a local container, `e2b` boots an E2B cloud
+ * VM. Either way one sandbox == one run == one machine holding a real git
+ * checkout pinned at the run's `sourceSha` (the Docker template pins it at
+ * build time via `ref`; the E2B template tracks the default-branch head, so
+ * the checkout is re-pinned at runtime with a fetch/checkout). All editing,
+ * validation and committing happens inside this machine; run state only
+ * carries the change manifest.
  *
  * Credentials: cloning uses the build-time secret path above; pushing uses a
  * repo-scoped, short-TTL token handed to git through an env-conditional
@@ -17,7 +18,12 @@ import { execFileSync } from "node:child_process";
 
 import { DockerSandbox, createDockerRepoTemplate } from "@mastra/docker";
 import type { RepositoryAccess } from "@mastra/docker";
-import type { CommandResult, SandboxFileInput } from "@mastra/core/workspace";
+import { E2BSandbox, createRepoTemplate } from "@mastra/e2b";
+import type {
+  CommandResult,
+  MastraSandbox,
+  SandboxFileInput,
+} from "@mastra/core/workspace";
 
 import type { ChangeManifestEntry } from "../contracts.js";
 
@@ -64,6 +70,9 @@ export const SANDBOX_LABEL = "mastra.sandbox";
 const SANDBOX_BRANCH_LABEL = "mastra.sandbox.branch";
 const GIT_USER_NAME = "mastra-sandbox";
 const GIT_USER_EMAIL = "mastra-sandbox@local";
+/** Container paths are provider homes, not shared: each provider's build user owns its own. */
+const DOCKER_WORKING_DIRECTORY = "/workspace";
+const E2B_WORKING_DIRECTORY = "/home/user";
 
 /** Env vars whose values are secrets and must never leave the sandbox boundary. */
 const SECRET_ENV_NAMES = [
@@ -121,7 +130,7 @@ export function sandboxIdFor(branch: string): string {
 
 export class SandboxHandle {
   constructor(
-    readonly sandbox: DockerSandbox,
+    readonly sandbox: MastraSandbox,
     readonly ctx: SandboxRepoContext,
     /** Repository root inside the container: `<workingDirectory>/<repo>`. */
     readonly repoPath: string,
@@ -142,18 +151,23 @@ export class SandboxHandle {
   }
 }
 
+/** Sandbox provider selected by the SANDBOX_PROVIDER env flag. */
+export type SandboxProvider = "docker" | "e2b";
+
 export interface SandboxProvisionerOptions {
+  /** Which provider boots the per-run machine. Defaults to `"docker"`. */
+  provider?: SandboxProvider;
   mintPushCredential?: MintPushCredential;
-  /** Extra `docker run` env for the container (lane-level, non-secret). */
+  /** Extra runtime env for the sandbox (lane-level, non-secret). */
   env?: Record<string, string>;
-  /** Resource caps applied inside the Docker Desktop VM. */
+  /** Resource caps applied inside the Docker Desktop VM (Docker-only; E2B sizes come from the account tier). */
   memory?: number | undefined;
   pidsLimit?: number | undefined;
   cpuQuota?: number | undefined;
   cpuPeriod?: number | undefined;
   /** Command timeout handed to DockerSandbox (ms). */
   timeout?: number | undefined;
-  /** Image build + boot can take minutes on the first run for a repo. */
+  /** Image build + boot can take minutes on the first run for a repo (Docker only). */
   startTimeoutMs?: number | undefined;
 }
 
@@ -173,41 +187,39 @@ export class SandboxProvisioner {
       await existing.sandbox.ensureRunning();
       return existing;
     }
+    const provider = this.options.provider ?? "docker";
     const mint = this.options.mintPushCredential ?? configuredPushCredential;
     const credential = await mint(ctx);
     const id = sandboxIdFor(ctx.branch);
-    const workingDirectory = "/workspace";
+    const workingDirectory = provider === "e2b" ? E2B_WORKING_DIRECTORY : DOCKER_WORKING_DIRECTORY;
     const repoPath = `${workingDirectory}/${ctx.repo}`;
-    const template = createDockerRepoTemplate({
-      getRepositoryAccess: async (): Promise<RepositoryAccess> => ({
-        cloneUrl: `https://github.com/${ctx.owner}/${ctx.repo}.git`,
-        // The same scoped token authenticates the build-time clone; it is
-        // passed by value to the throwaway build stage and never baked in.
-        authorization: { scheme: "bearer", token: credential.token },
-      }),
-      ref: ctx.sourceSha,
-      workingDirectory,
+    // The same scoped token authenticates the template-build clone; it is
+    // passed by value to the throwaway build stage and never baked in.
+    const getRepositoryAccess = async (): Promise<RepositoryAccess> => ({
+      cloneUrl: `https://github.com/${ctx.owner}/${ctx.repo}.git`,
+      authorization: { scheme: "bearer", token: credential.token },
     });
-    if (template === undefined) {
-      throw new Error(`Repository template for ${ctx.owner}/${ctx.repo} could not be built`);
-    }
-    const sandbox = new DockerSandbox({
-      id,
-      template,
-      labels: { [SANDBOX_LABEL]: ctx.runId, [SANDBOX_BRANCH_LABEL]: ctx.branch },
-      env: { ...this.options.env, MAISTRA_SANDBOX_BRANCH: ctx.branch },
-      ...(this.options.memory === undefined ? {} : { memory: this.options.memory }),
-      ...(this.options.pidsLimit === undefined ? {} : { pidsLimit: this.options.pidsLimit }),
-      ...(this.options.cpuQuota === undefined ? {} : { cpuQuota: this.options.cpuQuota }),
-      ...(this.options.cpuPeriod === undefined ? {} : { cpuPeriod: this.options.cpuPeriod }),
-      ...(this.options.timeout === undefined ? {} : { timeout: this.options.timeout }),
-      ...(this.options.startTimeoutMs === undefined
-        ? {}
-        : { startTimeoutMs: this.options.startTimeoutMs }),
-    });
+    const sandbox = provider === "e2b"
+      ? this.buildE2bSandbox(ctx, id, workingDirectory, getRepositoryAccess)
+      : this.buildDockerSandbox(ctx, id, workingDirectory, getRepositoryAccess);
     // Boot failures leave no env overlay behind (the credential is only
     // revealed per push), so nothing to unwind here but the rethrow.
     await sandbox.start();
+    if (provider === "e2b") {
+      // The E2B repo template pins to the default-branch head it saw at build
+      // time, not to this run's sourceSha. Re-pin the checkout (fail-closed:
+      // a checkout that cannot reach the sha aborts the acquire rather than
+      // silently coding against drifted source).
+      const sha = ctx.sourceSha;
+      await this.exec(
+        sandbox,
+        `git rev-parse --verify -q "${sha}^{commit}" >/dev/null`
+        + ` || git fetch --depth 1 origin "${sha}"`
+        + ` || git fetch origin "${sha}" || git fetch origin;`
+        + ` git checkout --detach "${sha}"`,
+        repoPath,
+      );
+    }
     // Deterministic committer identity; harmless if the repo defines its own.
     await this.exec(sandbox, `git config user.name "${GIT_USER_NAME}"`
       + ` && git config user.email "${GIT_USER_EMAIL}"`, repoPath);
@@ -222,6 +234,63 @@ export class SandboxProvisioner {
     const handle = new SandboxHandle(sandbox, ctx, repoPath, credential);
     this.handles.set(ctx.branch, handle);
     return handle;
+  }
+
+  /** Docker path: template built at `sourceSha`, container labelled for the orphan sweep. */
+  private buildDockerSandbox(
+    ctx: SandboxRepoContext,
+    id: string,
+    workingDirectory: string,
+    getRepositoryAccess: () => Promise<RepositoryAccess>,
+  ): MastraSandbox {
+    const template = createDockerRepoTemplate({
+      getRepositoryAccess,
+      ref: ctx.sourceSha,
+      workingDirectory,
+    });
+    if (template === undefined) {
+      throw new Error(`Repository template for ${ctx.owner}/${ctx.repo} could not be built`);
+    }
+    return new DockerSandbox({
+      id,
+      template,
+      labels: { [SANDBOX_LABEL]: ctx.runId, [SANDBOX_BRANCH_LABEL]: ctx.branch },
+      env: { ...this.options.env, MAISTRA_SANDBOX_BRANCH: ctx.branch },
+      ...(this.options.memory === undefined ? {} : { memory: this.options.memory }),
+      ...(this.options.pidsLimit === undefined ? {} : { pidsLimit: this.options.pidsLimit }),
+      ...(this.options.cpuQuota === undefined ? {} : { cpuQuota: this.options.cpuQuota }),
+      ...(this.options.cpuPeriod === undefined ? {} : { cpuPeriod: this.options.cpuPeriod }),
+      ...(this.options.timeout === undefined ? {} : { timeout: this.options.timeout }),
+      ...(this.options.startTimeoutMs === undefined
+        ? {}
+        : { startTimeoutMs: this.options.startTimeoutMs }),
+    });
+  }
+
+  /**
+   * E2B path: cloud VM from the repo template. `sourceSha` re-pinning happens
+   * after start (see {@link acquire}); the provider's default idle lifecycle
+   * (`pause`) plus `ensureRunning()` on every reuse covers reconnection, so
+   * no start timeout or orphan sweep is needed. Credentials fall back to the
+   * E2B_API_KEY env var, same presence-gated convention as every other key.
+   */
+  private buildE2bSandbox(
+    ctx: SandboxRepoContext,
+    id: string,
+    workingDirectory: string,
+    getRepositoryAccess: () => Promise<RepositoryAccess>,
+  ): MastraSandbox {
+    const template = createRepoTemplate({ getRepositoryAccess, workingDirectory });
+    if (template === undefined) {
+      throw new Error(`Repository template for ${ctx.owner}/${ctx.repo} could not be built`);
+    }
+    return new E2BSandbox({
+      id,
+      template,
+      metadata: { [SANDBOX_LABEL]: ctx.runId, [SANDBOX_BRANCH_LABEL]: ctx.branch },
+      env: { ...this.options.env, MAISTRA_SANDBOX_BRANCH: ctx.branch },
+      workingDirectory,
+    });
   }
 
   peek(branch: string): SandboxHandle | undefined {
@@ -270,7 +339,7 @@ export class SandboxProvisioner {
     }
   }
 
-  private async exec(sandbox: DockerSandbox, script: string, cwd: string): Promise<CommandResult> {
+  private async exec(sandbox: MastraSandbox, script: string, cwd: string): Promise<CommandResult> {
     const result = await sandbox.executeCommand!("sh", ["-c", `cd ${JSON.stringify(cwd)} && ${script}`]);
     if (!result.success) {
       throw new Error(`Sandbox command failed (exit ${result.exitCode}): ${redactSecrets(result.stderr || result.stdout)}`);
@@ -286,7 +355,7 @@ export class SandboxProvisioner {
  * A missing file is reported with a `MISSING` sentinel for the caller to fail on.
  */
 export async function readManifestFromDisk(
-  sandbox: DockerSandbox,
+  sandbox: MastraSandbox,
   repoPath: string,
   touched: ReadonlyArray<{ path: string; validators: ChangeManifestEntry["validators"] }>,
 ): Promise<Array<ChangeManifestEntry | { path: string; missing: true }>> {

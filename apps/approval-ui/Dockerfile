@@ -12,9 +12,13 @@ COPY apps/approval-ui ./apps/approval-ui
 ARG NEXT_PUBLIC_SUPABASE_URL
 ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
 ARG NEXT_PUBLIC_API_URL=http://localhost:8000
+# Default is the same-origin proxy path because this value only ever reaches a
+# container browser; the explicit origin is what `next dev` uses locally.
+ARG NEXT_PUBLIC_MASTRA_URL=/mastra
 ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
     NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
-    NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+    NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
+    NEXT_PUBLIC_MASTRA_URL=$NEXT_PUBLIC_MASTRA_URL
 
 RUN npm run build --workspace @allrounder/approval-ui
 

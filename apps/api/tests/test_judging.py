@@ -43,6 +43,9 @@ from allrounder_api.judging import (
     load_jsonl,
     load_policy_corpus,
     load_rubric,
+    qa_deterministic_outcomes,
+    qa_output_from_artifacts,
+    qa_state,
     resolve_citation,
     security_deterministic_outcomes,
     security_output_from_artifacts,
@@ -899,6 +902,288 @@ def test_chat_prompt_accepts_a_versioned_preamble() -> None:
     )
     assert prompt.startswith("Custom rubric line.")
     assert "claims_supported" in prompt
+
+
+# ------------------------------------------------------------------- qa suite
+
+# apps/api/tests/test_judging.py -> the repository root, where the qa case
+# library and the rubric live next to the other suites.
+_ROOT = Path(__file__).resolve().parents[3]
+_QA_RUBRIC = _ROOT / "evals" / "judge" / "rubrics" / "qa-squad.json"
+_QA_LIBRARY = _ROOT / "evals" / "qa" / "cases" / "console-rail.jsonl"
+
+
+def _qa_case(case_id: str, hook: str, requirement: str = "R1") -> dict[str, Any]:
+    return {
+        "id": case_id,
+        "requirementIds": [requirement],
+        "title": f"The {hook} control behaves",
+        "kind": "ui",
+        "preconditions": ["Signed in to the console"],
+        "steps": [
+            {"action": "read", "target": f'[data-qa="{hook}"]', "expect": "the control shows"}
+        ],
+        "expected": f'[data-qa="{hook}"] is enabled and reads Continue',
+        "tags": ["rail"],
+        "target": "local-console",
+    }
+
+
+def _qa_result(
+    case_id: str, status: str, *, observed: str = "the control is visible"
+) -> dict[str, Any]:
+    return {
+        "caseId": case_id,
+        "status": status,
+        "observed": observed,
+        "evidence": {
+            "console": [],
+            "network": [],
+            "transcript": [f"read [data-qa=start-confirm] -> {observed}"],
+        },
+        "durationMs": 12,
+    }
+
+
+def _qa_defect(case_id: str, *, refs: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "caseId": case_id,
+        "title": f"[QA] {case_id}: the button is disabled",
+        "body": "Expected: enabled. Observed: disabled.",
+        "severity": "high",
+        "evidenceRefs": refs
+        if refs is not None
+        else [f"qa:run-1:{case_id}:transcript:1"],
+        "correlationId": f"OPS-4210:{case_id}",
+    }
+
+
+def _qa_artifacts() -> dict[str, Any]:
+    """One closed qa run: a passing case, its verdict and its evidence pack."""
+    case = _qa_case("QA-RAIL-001", "start-confirm")
+    return {
+        "design": {"cases": [case]},
+        "assess": {
+            "runId": "run-1",
+            "executionAvailable": True,
+            "results": [_qa_result("QA-RAIL-001", "passed")],
+            "gaps": [],
+            "defects": [],
+        },
+        "close": {
+            "runId": "run-1",
+            "status": "completed",
+            "approvedCaseIds": ["QA-RAIL-001"],
+            "failedCaseIds": [],
+            "filed": [],
+            "counts": {
+                "cases": 1,
+                "passed": 1,
+                "failed": 0,
+                "blocked": 0,
+                "notRun": 0,
+                "defects": 0,
+                "filed": 0,
+            },
+        },
+    }
+
+
+def _qa_outcomes(artifacts: Mapping[str, Any]) -> dict[str, CriterionOutcome]:
+    output = qa_output_from_artifacts(artifacts)
+    rail = _qa_case("QA-RAIL-001", "start-confirm", requirement="R1")
+    expect = {"rail": {**rail, "hooks": ["start-confirm"]}}
+    return {
+        item.criterion_id: item
+        for item in qa_deterministic_outcomes(output=output, expect=expect)
+    }
+
+
+def test_qa_output_extraction_prefers_the_approved_set() -> None:
+    artifacts = _qa_artifacts()
+    artifacts["approve-cases"] = {
+        "cases": [_qa_case("QA-RAIL-007", "start-confirm")],
+        "gaps": [],
+    }
+    output = qa_output_from_artifacts(artifacts)
+    assert [case["id"] for case in output["cases"]] == ["QA-RAIL-007"]
+    assert output["executionAvailable"] is True
+    assert output["closed"]["completed"] is True
+    # A run that stopped before `assess` has a plan, not results.
+    empty = qa_output_from_artifacts({})
+    assert empty["results"] == []
+    assert empty["executionAvailable"] is None
+    assert empty["closed"]["completed"] is False
+
+
+def test_qa_checks_pass_on_an_honest_run() -> None:
+    outcomes = _qa_outcomes(_qa_artifacts())
+    assert [item.criterion_id for item in outcomes.values()]
+    assert all(item.passed for item in outcomes.values())
+
+
+def test_qa_rubric_names_every_check_the_helper_emits() -> None:
+    rubric = load_rubric(_QA_RUBRIC)
+    assert rubric.suite == "qa-squad"
+    deterministic = {
+        spec.id for spec in rubric.criteria if spec.kind == "deterministic"
+    }
+    assert deterministic == set(_qa_outcomes(_qa_artifacts()))
+    # The judge half carries the fuzzy questions, so every one of them must say
+    # what it is asking or a model has nothing to answer.
+    judged = [spec for spec in rubric.criteria if spec.kind != "deterministic"]
+    assert judged
+    assert all(spec.instructions.strip() for spec in judged)
+
+
+def test_qa_checks_refuse_a_pass_when_no_browser_ran() -> None:
+    artifacts = _qa_artifacts()
+    artifacts["assess"]["executionAvailable"] = False
+    artifacts["assess"]["blockedReason"] = "no storage state at .qa/auth/local-console.json"
+    outcomes = _qa_outcomes(artifacts)
+    assert outcomes["blocked_execution_is_honest"].passed is False
+    assert "QA-RAIL-001" in outcomes["blocked_execution_is_honest"].detail
+    # The honest shape passes: nothing claims an outcome and the reason says why.
+    artifacts["assess"]["results"] = [_qa_result("QA-RAIL-001", "blocked")]
+    assert _qa_outcomes(artifacts)["blocked_execution_is_honest"].passed is True
+
+
+def test_qa_checks_refuse_a_defect_with_no_failure() -> None:
+    artifacts = _qa_artifacts()
+    artifacts["assess"]["defects"] = [_qa_defect("QA-RAIL-001")]
+    outcomes = _qa_outcomes(artifacts)
+    assert outcomes["defects_trace_to_failures"].passed is False
+    assert "did not fail" in outcomes["defects_trace_to_failures"].detail
+
+
+def test_qa_checks_refuse_an_evidence_reference_that_does_not_resolve() -> None:
+    artifacts = _qa_artifacts()
+    artifacts["assess"]["results"] = [
+        _qa_result("QA-RAIL-001", "failed", observed="the button is disabled")
+    ]
+    artifacts["assess"]["defects"] = [_qa_defect("QA-RAIL-001")]
+    artifacts["close"]["failedCaseIds"] = ["QA-RAIL-001"]
+    assert _qa_outcomes(artifacts)["defect_evidence_refs_resolve"].passed is True
+    artifacts["assess"]["defects"] = [
+        _qa_defect("QA-RAIL-001", refs=["qa:run-1:QA-RAIL-001:transcript:9"])
+    ]
+    outcomes = _qa_outcomes(artifacts)
+    assert outcomes["defect_evidence_refs_resolve"].passed is False
+    assert "transcript:9" in outcomes["defect_evidence_refs_resolve"].detail
+
+
+def test_qa_checks_refuse_a_gap_a_passing_case_covers() -> None:
+    artifacts = _qa_artifacts()
+    artifacts["assess"]["gaps"] = [
+        {"requirementId": "R1", "reason": "no case covering this requirement passed"}
+    ]
+    outcomes = _qa_outcomes(artifacts)
+    assert outcomes["gap_names_unpassed_requirement"].passed is False
+    assert "R1" in outcomes["gap_names_unpassed_requirement"].detail
+
+
+def test_qa_checks_refuse_filing_for_a_case_that_passed() -> None:
+    artifacts = _qa_artifacts()
+    artifacts["close"]["filed"] = [
+        {
+            "caseId": "QA-RAIL-001",
+            "correlationId": "OPS-4210:QA-RAIL-001",
+            "action": "created",
+            "ticketKey": "OPS-1",
+            "status": "created",
+        }
+    ]
+    artifacts["close"]["counts"]["filed"] = 1
+    outcomes = _qa_outcomes(artifacts)
+    assert outcomes["filing_stays_inside_failures"].passed is False
+    assert "did not fail" in outcomes["filing_stays_inside_failures"].detail
+
+
+def test_the_rail_library_is_six_strict_cases() -> None:
+    records = load_jsonl(_QA_LIBRARY)
+    assert len(records) == 6
+    ids = [record["id"] for record in records]
+    assert len(set(ids)) == 6
+    for record in records:
+        assert record["id"].startswith("QA-RAIL-")
+        assert record["kind"] in ("ui", "api")
+        assert record["target"] == "local-console"
+        assert "rail" in record["tags"]
+        assert record["requirementIds"]
+        assert record["expected"].strip()
+        assert record["steps"]
+        # A step either drives a console hook or a path; prose is not a target.
+        for step in record["steps"]:
+            target = step["target"]
+            assert "data-qa=" in target or target.startswith("/") or target in {"main"}, (
+                f"{record['id']} targets prose: {target}"
+            )
+
+
+def test_qa_state_carries_the_rail_the_cases_and_the_results() -> None:
+    artifacts = _qa_artifacts()
+    artifacts["assess"]["results"] = [
+        _qa_result("QA-RAIL-001", "failed", observed="x" * 2000)
+    ]
+    artifacts["assess"]["defects"] = [_qa_defect("QA-RAIL-001")]
+    output = qa_output_from_artifacts(artifacts)
+    rail = _qa_case("QA-RAIL-001", "start-confirm")
+    state = qa_state(rail={**rail, "hooks": ["start-confirm"]}, output=output)
+    assert state["rail"]["id"] == "QA-RAIL-001"
+    assert state["cases"][0]["steps"][0]["target"] == '[data-qa="start-confirm"]'
+    assert state["results"][0]["observed"].endswith("...[truncated]")
+    assert state["defects"][0]["evidenceRefs"] == [
+        "qa:run-1:QA-RAIL-001:transcript:1"
+    ]
+
+
+async def test_qa_rubric_never_sends_a_deterministic_check_to_the_judge() -> None:
+    rubric = load_rubric(_QA_RUBRIC)
+    artifacts = _qa_artifacts()
+    rail = _qa_case("QA-RAIL-001", "start-confirm")
+    state = qa_state(
+        rail={**rail, "hooks": ["start-confirm"]},
+        output=qa_output_from_artifacts(artifacts),
+    )
+    deterministic = list(_qa_outcomes(artifacts).values())
+    judged = [spec.id for spec in rubric.criteria if spec.kind != "deterministic"]
+
+    judge = FakeJudge()
+    clean = await JudgeService(judge=judge).evaluate_case(
+        rubric=rubric,
+        case_id="QA-RAIL-001",
+        tags=["rail"],
+        state=state,
+        deterministic=deterministic,
+    )
+    # The eight checks the helper computes are answered locally; a model sees
+    # only the six fuzzy questions, whatever the run did.
+    assert judge.seen_ids == judged
+    assert not {item.criterion_id for item in deterministic} & set(judged)
+    assert clean.passed is True
+    assert len(clean.outcomes) == len(rubric.criteria)
+
+    # A deterministic failure still forces the case to fail on a perfect judge,
+    # so the local checks are load-bearing rather than advisory.
+    broken = [
+        _outcome(item.criterion_id, 0.0, source="deterministic", passed=False)
+        if item.criterion_id == "filing_stays_inside_failures"
+        else item
+        for item in deterministic
+    ]
+    judge = FakeJudge()
+    forced = await JudgeService(judge=judge).evaluate_case(
+        rubric=rubric,
+        case_id="QA-RAIL-001",
+        tags=["rail"],
+        state=state,
+        deterministic=broken,
+    )
+    assert judge.seen_ids == judged
+    assert forced.passed is False
+    # The score clears the threshold on its own: only the local check failed it.
+    assert forced.score >= rubric.threshold
+    assert forced.score < clean.score
 
 
 # ------------------------------------------------------------------ settings

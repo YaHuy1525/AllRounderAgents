@@ -62,19 +62,6 @@ class MetricsRegistry:
             ["decision"],
             registry=self.registry,
         )
-        self.chat_requests = Counter(
-            "chat_requests_total",
-            "Chat replies by answer source.",
-            ["source"],
-            registry=self.registry,
-        )
-        self.chat_first_token = Histogram(
-            "chat_first_token_seconds",
-            "Time from chat stream start to the first streamed delta.",
-            ["source"],
-            buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0),
-            registry=self.registry,
-        )
         self.runs = Counter(
             "runs_total",
             "Workflow runs by terminal status.",
@@ -114,12 +101,6 @@ class MetricsRegistry:
 
     def record_approval_decision(self, decision: str) -> None:
         self.approval_decisions.labels(decision=decision).inc()
-
-    def record_chat(self, source: str) -> None:
-        self.chat_requests.labels(source=source).inc()
-
-    def record_chat_stream(self, source: str, first_token_seconds: float) -> None:
-        self.chat_first_token.labels(source=source).observe(first_token_seconds)
 
     def record_run(self, *, workflow: str, status: str) -> None:
         self.runs.labels(workflow=workflow, status=status).inc()

@@ -35,6 +35,10 @@ dev = [
   # Judge-based eval harness only (scripts/judge-eval.py). The API runtime
   # never imports it: judging.py loads the SDK lazily inside JevJudge.
   "typesafe-sdk>=0.7,<1",
+  # Seeding only (scripts/tac-kb-seed.py): the simulated company corpus holds
+  # PDFs and .docx files, so the extractor lives with the scripts, not the API.
+  "PyMuPDF>=1.24,<2",
+  "python-docx>=1.1,<2",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -73,5 +77,5 @@ explicit_package_bases = true
 mypy_path = ["apps/api/src"]
 
 [[tool.mypy.overrides]]
-module = ["typesafe_sdk", "typesafe_sdk.*", "reportlab", "reportlab.*"]
+module = ["typesafe_sdk", "typesafe_sdk.*", "reportlab", "reportlab.*", "fitz", "fitz.*"]
 ignore_missing_imports = true

@@ -4,8 +4,10 @@
 
 The run lane renders every workflow as a node graph; this endpoint hands the
 console the same definitions the service snapshots at run start (steps, order,
-side-effecting flags, and display-only integration satellites), so the graph
-and the live stepper can never disagree.
+side-effecting flags, display-only integration satellites), so the graph and
+the live stepper can never disagree. ``startFields`` publish what a run needs
+before step one — the console's start card renders them and ``POST /runs``
+rejects a start that leaves a required one empty.
 """
 
 from __future__ import annotations
@@ -43,6 +45,18 @@ def build_workflows_router(*, verifier: BearerVerifier) -> APIRouter:
                     "id": definition.id,
                     "title": definition.title,
                     "mastraWorkflow": definition.mastra_workflow,
+                    "startFields": [
+                        {
+                            "id": field.id,
+                            "label": field.label,
+                            "kind": field.kind,
+                            "required": field.required,
+                            "example": field.example,
+                            "help": field.help,
+                            "values": list(field.values),
+                        }
+                        for field in definition.start_fields
+                    ],
                     "steps": [
                         {
                             "id": step.id,

@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import sys
 import time
 from collections.abc import Mapping, Sequence
@@ -50,6 +51,9 @@ from allrounder_api.judging import (
     load_jsonl,
     load_policy_corpus,
     load_rubric,
+    qa_deterministic_outcomes,
+    qa_output_from_artifacts,
+    qa_state,
     resolve_citation,
     security_deterministic_outcomes,
     security_output_from_artifacts,
@@ -74,12 +78,22 @@ SECURITY_CORPORA = (
     ("injection", ROOT / "evals" / "security_injection_corpus.jsonl"),
     ("false-positive", ROOT / "evals" / "security_fp_corpus.jsonl"),
 )
-
-SUITES = ("hr-help", "security-triage", "coding-quality")
+# The qa suite's cases are the lane's own case library: the six rail cases the
+# squad has to design, execute and report. One story and one scope drive them
+# all, so the suite reads a single run through six lenses.
+QA_CASE_FILE = ROOT / "evals" / "qa" / "cases" / "console-rail.jsonl"
+QA_RAIL_STORY = "OPS-4210"
+QA_RAIL_TARGET = "local-console"
+QA_RAIL_SCOPE = (
+    "The approval console rail: every workspace destination in the nav, the "
+    "start-run card and its required fields, and the decision row on an open run."
+)
+SUITES = ("hr-help", "security-triage", "coding-quality", "qa-squad")
 WORKFLOWS = {
     "hr-help": "hr-help",
     "security-triage": "security",
     "coding-quality": "features",
+    "qa-squad": "qa",
 }
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
@@ -118,11 +132,42 @@ class FakeJudge:
 # --------------------------------------------------------------- case loading
 
 
+def _qa_harness_cases() -> list[dict[str, Any]]:
+    """The rail library as six eval cases over one qa run.
+
+    Each line of the library is a behaviour the squad must design, execute and
+    report. They share a story and a scope, so `produce` drives the lane once
+    and the six cases read that run through their own lens: the case id is the
+    rail case's id, and `expect` carries the rail record plus the `data-qa`
+    hooks its steps name, which is what the coverage check looks for.
+    """
+    cases: list[dict[str, Any]] = []
+    for record in load_jsonl(QA_CASE_FILE):
+        steps = record.get("steps")
+        hooks = [
+            hook
+            for step in (steps if isinstance(steps, list) else [])
+            if isinstance(step, dict)
+            for hook in re.findall(r'data-qa="([^"]+)"', str(step.get("target", "")))
+        ]
+        cases.append(
+            {
+                "caseId": str(record["id"]),
+                "ticketKey": QA_RAIL_STORY,
+                "tags": [str(tag) for tag in record.get("tags", [])],
+                "expect": {"rail": {**record, "hooks": list(dict.fromkeys(hooks))}},
+            }
+        )
+    return cases
+
+
 def load_cases(suite: str) -> list[dict[str, Any]]:
     if suite == "hr-help":
         return load_jsonl(CASE_DIR / "hr_help_cases.jsonl")
     if suite == "coding-quality":
         return load_jsonl(CASE_DIR / "coding_quality_cases.jsonl")
+    if suite == "qa-squad":
+        return _qa_harness_cases()
     cases: list[dict[str, Any]] = []
     for tag, path in SECURITY_CORPORA:
         for record in load_jsonl(path):
@@ -373,6 +418,48 @@ def failed_record(
     }
 
 
+async def produce_qa_suite(
+    client: httpx.AsyncClient,
+    api_url: str,
+    headers: Mapping[str, str],
+    limit: int | None,
+    run_timeout: float,
+    poll_interval: float,
+) -> None:
+    """Drive the qa lane once and record the run against each rail case.
+
+    The six rail cases share one story, one approved set and one execution, so a
+    run per case would spend six times the model budget to observe the same
+    console. The one run is fanned out instead: every record keeps the whole
+    artifact map, and its own case id says which rail it speaks for.
+    """
+    cases = load_cases("qa-squad")
+    if limit is not None:
+        cases = cases[:limit]
+    workflow = WORKFLOWS["qa-squad"]
+    first = cases[0]
+    case = {
+        "caseId": str(first["caseId"]),
+        "ticketKey": str(first["ticketKey"]),
+        "input": {
+            "storyKey": QA_RAIL_STORY,
+            "scope": QA_RAIL_SCOPE,
+            "target": QA_RAIL_TARGET,
+        },
+    }
+    try:
+        record = await drive_case(
+            client, api_url, headers, "qa-squad", workflow, case, run_timeout, poll_interval
+        )
+        records = [{**record, "caseId": str(item["caseId"])} for item in cases]
+    except Exception as error:  # noqa: BLE001 - the failure is recorded per case
+        reason = f"{type(error).__name__}: {error}"
+        records = [failed_record("qa-squad", workflow, item, reason) for item in cases]
+    path = CANDIDATE_DIR / "qa-squad.jsonl"
+    write_jsonl(path, records)
+    print(f"qa-squad: wrote {len(records)} candidate(s) from one run to {path}")
+
+
 async def produce_suite(
     client: httpx.AsyncClient,
     suite: str,
@@ -382,6 +469,9 @@ async def produce_suite(
     run_timeout: float,
     poll_interval: float,
 ) -> None:
+    if suite == "qa-squad":
+        await produce_qa_suite(client, api_url, headers, limit, run_timeout, poll_interval)
+        return
     cases = load_cases(suite)
     if limit is not None:
         cases = cases[:limit]
@@ -558,6 +648,10 @@ async def judge_suite(suite: str, judge_name: str, limit: int | None) -> SuiteRe
                 output = coding_output_from_artifacts(artifacts)
                 deterministic = coding_deterministic_outcomes(output=output, tags=tags)
                 state = coding_state(ticket=case.get("input", {}), output=output)
+            elif suite == "qa-squad":
+                output = qa_output_from_artifacts(artifacts)
+                deterministic = qa_deterministic_outcomes(output=output, expect=case["expect"])
+                state = qa_state(rail=case["expect"]["rail"], output=output)
             else:
                 output = security_output_from_artifacts(artifacts)
                 deterministic = security_deterministic_outcomes(

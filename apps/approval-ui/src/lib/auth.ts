@@ -42,6 +42,8 @@ export type StoredSessionSnapshot = {
   accessToken: string | null;
   expiresAt: number | null;
   appMetadata: Record<string, unknown> | null;
+  /** The Supabase user id, the second half of the memory resource string. */
+  userId: string | null;
 };
 
 /**
@@ -64,7 +66,7 @@ export function readStoredSession(storage: Storage, key: string): StoredSessionS
   const value = parsed as {
     access_token?: unknown;
     expires_at?: unknown;
-    user?: { email?: unknown; app_metadata?: unknown } | null;
+    user?: { email?: unknown; app_metadata?: unknown; id?: unknown } | null;
   };
   const email = typeof value.user?.email === "string" ? value.user.email : "";
   const accessToken =
@@ -79,6 +81,8 @@ export function readStoredSession(storage: Storage, key: string): StoredSessionS
     typeof value.user?.app_metadata === "object" && value.user.app_metadata !== null
       ? (value.user.app_metadata as Record<string, unknown>)
       : null;
+  const userId =
+    typeof value.user?.id === "string" && value.user.id !== "" ? value.user.id : null;
   if (!email && !accessToken) return null;
-  return { email, accessToken, expiresAt, appMetadata };
+  return { email, accessToken, expiresAt, appMetadata, userId };
 }

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..auth import AuthenticationError, BearerVerifier, Principal
+from ..directory import EmployeeDirectory
 from ..jira import JIRA_TICKET_KEY_PATTERN
 from .definitions import WORKFLOW_DEFINITIONS
 from .models import (
@@ -23,7 +24,9 @@ from .models import (
     run_summary,
     run_topology,
 )
+from .prefill import missing_payload, prefill_start_fields, suggestion_payload
 from .service import RunConflictError, RunService, UnknownWorkflowError
+from .start_inputs import describe_problems, start_problems
 
 _SSE_HEADERS = {"X-Accel-Buffering": "no", "Cache-Control": "no-store"}
 
@@ -54,10 +57,26 @@ class CancelRequest(ApiModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class PrefillAsk(ApiModel):
+    """What the console already knows before it asks the directory.
+
+    ``values`` is what the message parser already found, so a suggestion never
+    overwrites something the user typed.
+    """
+
+    workflow: str = Field(min_length=1, max_length=40)
+    ticket_key: str | None = Field(default=None, pattern=JIRA_TICKET_KEY_PATTERN)
+    ticket_summary: str = Field(default="", max_length=500)
+    text: str = Field(default="", max_length=2_000)
+    values: dict[str, object] = Field(default_factory=dict)
+
+
 def build_runs_router(
     *,
     verifier: BearerVerifier,
     service: RunService,
+    directory: EmployeeDirectory | None = None,
+    repositories: Sequence[str] = (),
 ) -> APIRouter:
     router = APIRouter(prefix="/runs")
 
@@ -79,6 +98,20 @@ def build_runs_router(
         identity: Principal = Depends(principal),
     ) -> dict[str, object]:
         require_role(identity, "agent", "admin")
+        # The catalog publishes what each run needs before step one; enforce
+        # the same declaration here so an incomplete start is refused with the
+        # offending fields named, instead of a run that fails inside the drive
+        # loop (or parks on a step whose gate it cannot compute).
+        problems = _start_problems(payload.workflow, payload.input)
+        if problems:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "message": describe_problems(problems),
+                    "workflow": payload.workflow,
+                    "fields": problems,
+                },
+            )
         try:
             run = await service.start(
                 workflow=payload.workflow,
@@ -257,7 +290,48 @@ def build_runs_router(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Resource not found") from None
         return _run_detail(run)
 
+    @router.post("/prefill")
+    async def prefill_start(
+        payload: PrefillAsk,
+        identity: Principal = Depends(principal),
+    ) -> dict[str, object]:
+        """The values a record can prove, plus what is still missing.
+
+        Read-only: the caller renders the confirm card and the human still
+        starts the run through ``POST /runs``. An unknown workflow keeps the
+        same 404 the start route answers.
+        """
+
+        require_role(identity, "viewer", "agent", "approver", "admin")
+        definition = WORKFLOW_DEFINITIONS.get(payload.workflow)
+        if definition is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown workflow")
+        result = prefill_start_fields(
+            definition,
+            text=payload.text,
+            ticket_summary=payload.ticket_summary,
+            values=payload.values,
+            employees=directory,
+            repositories=repositories,
+        )
+        return {
+            "workflow": definition.id,
+            "fields": [suggestion_payload(item) for item in result.suggestions],
+            "missing": [missing_payload(item) for item in result.missing],
+        }
+
     return router
+
+
+def _start_problems(
+    workflow: str, run_input: dict[str, object]
+) -> list[dict[str, str]]:
+    # An unknown workflow has no declaration to check: the service still owns
+    # the 404, so a typo keeps answering "Unknown workflow" rather than 422.
+    definition = WORKFLOW_DEFINITIONS.get(workflow)
+    if definition is None:
+        return []
+    return start_problems(definition, run_input)
 
 
 def _filter_summaries(

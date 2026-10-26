@@ -51,6 +51,57 @@ RISK_BANDS = (10, 55, 90)
 RISK_BENIGN, RISK_SINGLE, RISK_IRREVERSIBLE = RISK_BANDS
 
 
+# Input controls a start field may request. ``enum`` validates against
+# ``StartField.values``; ``list`` accepts a comma-separated string or an
+# array; ``number`` and ``date`` are shape checks only — the flow's own Zod
+# schema stays the authority on the exact value.
+START_FIELD_KINDS = ("text", "date", "number", "enum", "list")
+
+
+@dataclass(frozen=True)
+class StartField:
+    """One value a workflow needs before its first step can run.
+
+    Declared once per workflow so the catalog can publish the contract the
+    flow's Zod ``InputSchema`` already enforces, and so the console and the
+    assistant rail can ask for exactly the missing piece instead of guessing
+    it. Values are display/validation metadata only: nothing here widens a
+    permission or skips a gate.
+    """
+
+    id: str
+    label: str
+    kind: str = "text"
+    required: bool = False
+    # Shape hint rendered as the input placeholder and read by the rail.
+    example: str = ""
+    help: str = ""
+    # Allowed values for ``kind="enum"``; empty for every other kind.
+    values: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Fail at import time on a spec the console cannot render.
+
+        An unknown ``kind`` would silently fall back to a text box and an
+        enum without ``values`` would render a picker with nothing in it, so
+        both are rejected when the shipped definitions load.
+        """
+        if self.kind not in START_FIELD_KINDS:
+            raise ValueError(
+                f"Start field {self.id!r} declares unknown kind {self.kind!r}; "
+                f"valid kinds are {list(START_FIELD_KINDS)!r}"
+            )
+        if self.kind == "enum" and not self.values:
+            raise ValueError(
+                f"Start field {self.id!r} is an enum but declares no values"
+            )
+        if self.kind != "enum" and self.values:
+            raise ValueError(
+                f"Start field {self.id!r} declares values for kind {self.kind!r}; "
+                "only enum fields take values"
+            )
+
+
 @dataclass(frozen=True)
 class FieldDefinition:
     """One lane-declared input field on a step (U7), configured without code.
@@ -132,12 +183,24 @@ class WorkflowDefinition:
     mastra_workflow: str
     title: str
     steps: tuple[StepDefinition, ...]
+    # What the run needs before step one (the flows' ``InputSchema`` contract,
+    # declared here so ``GET /workflows`` can publish it and ``POST /runs`` can
+    # refuse an incomplete start instead of failing mid-drive).
+    start_fields: tuple[StartField, ...] = ()
 
     def step(self, step_id: str) -> StepDefinition:
         for step in self.steps:
             if step.id == step_id:
                 return step
         raise KeyError(f"Unknown step {step_id!r} for workflow {self.id!r}")
+
+    def start_field(self, field_id: str) -> StartField:
+        for start_field in self.start_fields:
+            if start_field.id == field_id:
+                return start_field
+        raise KeyError(
+            f"Unknown start field {field_id!r} for workflow {self.id!r}"
+        )
 
     def index_of(self, step_id: str) -> int:
         for index, step in enumerate(self.steps):

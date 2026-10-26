@@ -1,0 +1,40 @@
+#cloud-config
+# Rendered by Terraform into the instance user_data field.
+#
+# Nothing secret belongs in here. OCI instance metadata is readable by anyone
+# with read access to the instance, so this file only bootstraps the cluster.
+# Application credentials arrive later through bootstrap-secrets.ps1, which
+# creates the ConfigMap and Secret inside the allrounder namespace.
+package_update: true
+
+write_files:
+  - path: /opt/bootstrap-k3s.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euxo pipefail
+
+      # Single-node k3s. It ships Traefik as the ingress controller, which is
+      # what the Ingress objects in deploy/k8s/base already declare, so the
+      # cluster-side manifests need no change between k3d and this node.
+      export INSTALL_K3S_EXEC="server --write-kubeconfig-mode=644"
+      %{ if k3s_version != "" }export INSTALL_K3S_VERSION="${k3s_version}"
+      %{ endif }
+      curl -sfL https://get.k3s.io | sh -
+
+      # The 12 GB Always Free budget is the first real constraint on this box.
+      # ArgoCD plus kube-prometheus-stack plus the three application pods fit,
+      # but with little headroom, so the node keeps swap enabled rather than
+      # letting the kubelet evict Prometheus under memory pressure.
+      if [ ! -e /swapfile ]; then
+        fallocate -l 4G /swapfile
+        chmod 600 /swapfile
+        mkswap /swapfile
+        swapon /swapfile
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+      fi
+
+      systemctl status k3s --no-pager
+
+runcmd:
+  - /opt/bootstrap-k3s.sh

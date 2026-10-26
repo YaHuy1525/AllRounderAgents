@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@mastra/client-js": "^1.56.0",
     "@supabase/supabase-js": "^2.57.0",
     "@xyflow/react": "^12.11.6",
     "mdast-util-from-adf": "^2.3.0",

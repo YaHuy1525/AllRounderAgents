@@ -14,7 +14,7 @@
  */
 
 export * from "./contracts.js";
-export * from "./config.js";
+export * from "./settings.js";
 export * from "./tools/scoring.js";
 export * from "./tools/collectors.js";
 export * from "./tools/store.js";

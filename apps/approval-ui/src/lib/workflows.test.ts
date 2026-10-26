@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  sanitizeStartField,
   sanitizeWorkflow,
   sanitizeWorkflowCatalog,
   type WorkflowDefinition,
@@ -10,6 +11,17 @@ const REVIEW: WorkflowDefinition = {
   id: "review",
   title: "PR review",
   mastraWorkflow: "review-workflow",
+  startFields: [
+    {
+      id: "repository",
+      label: "Repository",
+      kind: "text",
+      required: true,
+      example: "acme/app",
+      help: "",
+      values: [],
+    },
+  ],
   steps: [
     { id: "select-pr", title: "Select the PR", sideEffecting: false, integrations: [] },
     { id: "review-options", title: "Post the review", sideEffecting: true, integrations: ["github"] },
@@ -70,5 +82,30 @@ describe("workflow catalog sanitizers", () => {
         ],
       }),
     ).toBeNull();
+  });
+
+  it("tolerates a catalog without start fields", () => {
+    const legacy = { ...REVIEW, startFields: undefined };
+    expect(sanitizeWorkflow(legacy)?.startFields).toEqual([]);
+  });
+
+  it("drops a malformed start field but keeps the definition", () => {
+    const workflow = sanitizeWorkflow({
+      ...REVIEW,
+      startFields: [
+        REVIEW.startFields[0],
+        { label: "No id" },
+        { id: "tier", kind: "colour", required: true },
+      ],
+    });
+    expect(workflow?.startFields).toEqual([
+      REVIEW.startFields[0],
+      { id: "tier", label: "tier", kind: "text", required: true, example: "", help: "", values: [] },
+    ]);
+  });
+
+  it("rejects a start field without an id", () => {
+    expect(sanitizeStartField({ label: "Repository" })).toBeNull();
+    expect(sanitizeStartField("repository")).toBeNull();
   });
 });

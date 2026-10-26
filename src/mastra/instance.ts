@@ -27,8 +27,10 @@ import {
 import { MemoryHrPolicyRetriever, type HrPolicyRetriever } from "./agents/hr-help/tools/hr-policy.js";
 import { MemoryHrHelpRegistry } from "./agents/hr-help/tools/hr-help-registry.js";
 import { fixtureFile } from "./shared/fixtures.js";
+import { knowledgePlaneEnabled, seedKnowledgePlane } from "./shared/knowledge-plane.js";
 import {
   MastraRagHrPolicyRetriever,
+  knowledgeReranker,
   knowledgeVectorStore,
   readEmbeddingSettings,
 } from "./shared/rag.js";
@@ -40,6 +42,7 @@ import { HttpVendorRegistry } from "./agents/bills/tools/vendors.js";
 import { HttpXeroLedger } from "./agents/bills/tools/xero.js";
 import type { MspFlowDeps } from "./agents/msp/flow.js";
 import { HttpMspKnowledge } from "./agents/msp/tools/knowledge.js";
+import { MastraFirstMspKnowledge } from "./agents/msp/tools/knowledge-mastra.js";
 import type { CodingFlowDeps } from "./agents/programming/flow.js";
 import {
   FetchGitHubTransport,
@@ -55,6 +58,7 @@ import {
   isDockerReachable,
   sweepOrphanedSandboxes,
 } from "./agents/programming/tools/sandbox.js";
+import type { SandboxProvider } from "./agents/programming/tools/sandbox.js";
 import type { ReviewFlowDeps } from "./agents/review/flow.js";
 import { GitHubReviewTools } from "./agents/review/tools/github-review.js";
 import { HaloDeskAdapter } from "./desks/halo.js";
@@ -91,7 +95,9 @@ import { OutboxMailSender } from "./mail/outbox.js";
  * answers on the `hr:policy` knowledge partition through the same service
  * bridge once HR_KB_TENANT names the tenant that owns it (see
  * buildHrHelpDeps), with the company handbook `fixtures/company/hr_policy`
- * as its outage fallback.
+ * as its outage fallback. The Mastra-native knowledge plane (the console
+ * assistant's search tools) is seeded from the same handbook at startup while
+ * `MASTRA_RAG_PILOT=true` wires it.
  */
 function readStringArrayEnv(name: string): string[] | undefined {
   const raw = process.env[name];
@@ -231,10 +237,26 @@ const sandboxLanes = new Set(
     .filter((token) => token !== ""),
 );
 
-// Sandboxed lanes need a live Docker daemon; without one (Docker Desktop not
-// running, or a CI host with no daemon) fall back to the MCP path instead of
-// failing. The probe only runs when at least one lane is otherwise enabled.
-if (sandboxLanes.size > 0 && !isDockerReachable()) {
+// Sandboxed lanes need a live sandbox provider. The E2B provider is a cloud
+// API gated by E2B_API_KEY (the SDK reads it directly, so presence alone is
+// enough here); an unset or unknown SANDBOX_PROVIDER stays on Docker, and an
+// e2b request without the key demotes to Docker. A Docker host with no
+// reachable daemon (Docker Desktop not running, or CI without one) falls back
+// to the MCP path instead of failing. The probe only runs when the Docker
+// provider is active and at least one lane is otherwise enabled.
+const rawProvider = process.env.SANDBOX_PROVIDER?.trim().toLowerCase() || "docker";
+let sandboxProvider: SandboxProvider = rawProvider === "e2b" ? "e2b" : "docker";
+if (rawProvider !== "docker" && rawProvider !== "e2b") {
+  console.warn(`[mastra] unknown SANDBOX_PROVIDER "${rawProvider}"; using the docker provider.`);
+}
+if (sandboxProvider === "e2b" && (process.env.E2B_API_KEY?.trim() || "") === "") {
+  console.warn(
+    "[mastra] SANDBOX_PROVIDER=e2b but E2B_API_KEY is unset;"
+      + " falling back to the docker provider for this process.",
+  );
+  sandboxProvider = "docker";
+}
+if (sandboxProvider === "docker" && sandboxLanes.size > 0 && !isDockerReachable()) {
   console.warn(
     "[mastra] sandbox lanes requested but no reachable Docker daemon; every PR"
       + " lane falls back to the MCP push_files path for this process.",
@@ -248,6 +270,7 @@ function laneSandboxed(lane: "coding" | "issues" | "features" | "a11y" | "deps")
 
 /** One provisioner for the whole instance: every sandboxed lane shares it. */
 const sandboxProvisioner = new SandboxProvisioner({
+  provider: sandboxProvider,
   memory: readOptionalIntegerEnv("SANDBOX_MEMORY_MB"),
   pidsLimit: readOptionalIntegerEnv("SANDBOX_PIDS_LIMIT"),
   cpuQuota: readOptionalIntegerEnv("SANDBOX_CPU_QUOTA_US"),
@@ -256,16 +279,17 @@ const sandboxProvisioner = new SandboxProvisioner({
   startTimeoutMs: readPositiveNumberEnv("SANDBOX_START_TIMEOUT_SECONDS", 900) * 1000,
 });
 
-// Sandboxed lanes own host-visible containers, so only when at least one lane
-// is enabled do we sweep containers orphaned by a prior crashed process and
-// tear the running ones down on a clean signal-driven shutdown. A resource cap
-// set here bounds what a repository's own test/build may consume inside the
-// Docker Desktop VM; CPU is quota/period in microseconds (e.g. 100000/100000
-// caps a container at one core). Both hooks are inert on a flag-off host.
+// Sandboxed Docker lanes own host-visible containers, so only when the Docker
+// provider is active and at least one lane is enabled do we sweep containers
+// orphaned by a prior crashed process. E2B sandboxes are remote and pause /
+// reattach by logical id on their own, so there is nothing host-side to sweep.
+// Either way a clean signal-driven shutdown tears down the live handles.
 if (sandboxLanes.size > 0) {
-  const swept = sweepOrphanedSandboxes();
-  if (swept > 0) {
-    console.info(`[mastra] swept ${swept} orphaned sandbox container(s) at startup.`);
+  if (sandboxProvider === "docker") {
+    const swept = sweepOrphanedSandboxes();
+    if (swept > 0) {
+      console.info(`[mastra] swept ${swept} orphaned sandbox container(s) at startup.`);
+    }
   }
   attachSandboxLifecycle(sandboxProvisioner);
 }
@@ -599,11 +623,12 @@ function buildMspDeps(): MspFlowDeps {
   const knowledgeUrl = process.env.KNOWLEDGE_API_URL?.trim();
   const knowledgeToken = process.env.KNOWLEDGE_SERVICE_TOKEN?.trim();
   let knowledge: MspFlowDeps["knowledge"];
+  let httpKnowledge: HttpMspKnowledge | undefined;
   if (
     knowledgeUrl !== undefined && knowledgeUrl !== ""
     && knowledgeToken !== undefined && knowledgeToken !== ""
   ) {
-    knowledge = new HttpMspKnowledge({ baseUrl: knowledgeUrl, serviceToken: knowledgeToken });
+    httpKnowledge = new HttpMspKnowledge({ baseUrl: knowledgeUrl, serviceToken: knowledgeToken });
     console.info("[mastra] mspFlow grounds drafts through the platform knowledge API.");
   } else if (
     (knowledgeUrl !== undefined && knowledgeUrl !== "")
@@ -613,6 +638,26 @@ function buildMspDeps(): MspFlowDeps {
       "[mastra] KNOWLEDGE_API_URL and KNOWLEDGE_SERVICE_TOKEN must both be set;"
       + " mspFlow drafts carry no retrieval and escalate for a human edit.",
     );
+  }
+  // P4 seam swap: while the knowledge plane is on, the Mastra-owned
+  // msp_runbooks index answers first and the platform hybrid API becomes
+  // the fallback. The plane self-demotes while that index has no corpus, so
+  // this wrapper only changes which arm is asked first, never what happens
+  // when neither knows the answer.
+  const planeStore = knowledgePlaneEnabled() ? knowledgeVectorStore() : undefined;
+  const planeEmbedding = knowledgePlaneEnabled() ? readEmbeddingSettings() : undefined;
+  if (planeStore !== undefined && planeEmbedding !== undefined) {
+    knowledge = new MastraFirstMspKnowledge({
+      store: planeStore,
+      embedding: planeEmbedding,
+      ...(httpKnowledge === undefined ? {} : { fallback: httpKnowledge }),
+    });
+    console.info(
+      "[mastra] mspFlow RAG pilot ON: drafts ground on the Mastra-owned"
+        + " msp_runbooks index first, falling back to the platform knowledge API.",
+    );
+  } else {
+    knowledge = httpKnowledge;
   }
   return { desk, mail, ...(knowledge === undefined ? {} : { knowledge }) };
 }
@@ -687,9 +732,10 @@ const bills = buildBillsDeps();
  * keeps the fixture retriever, so the flow, its citations and its tests run
  * exactly as before. Seed the partition with `scripts/hr-kb-seed.py`.
  *
- * `MASTRA_RAG_PILOT=true` opts the lane into the Phase 4 experiment: the
+ * `MASTRA_RAG_PILOT=true` opts the lane into the Mastra-native upgrade: the
  * baseline above becomes the fallback and a Mastra-owned pgvector index
- * (`hr_policy_pilot`, never the Python-owned `kb_chunks`) answers first,
+ * (`hr_policy`, never the Python-owned `kb_chunks`) answers first, seeded
+ * from the company handbook corpus through the shared MDocument ingest and
  * embedded through the pinned `EMBEDDING_*`/`MODEL_*` block. Needs
  * `DATABASE_URL` plus an embedding key; without either the pilot stays off
  * and the chain below is returned untouched. Any pilot failure degrades to
@@ -702,12 +748,20 @@ function buildHrHelpDeps(): HrHelpFlowDeps {
     const store = knowledgeVectorStore();
     const embedding = readEmbeddingSettings();
     if (store !== undefined && embedding !== undefined) {
+      const reranker = knowledgeReranker();
       console.info(
         "[mastra] hrHelpFlow RAG pilot ON: cosine top-k over the Mastra-owned"
-          + " hr_policy_pilot index, falling back to the baseline retriever.",
+          + " hr_policy index (MDocument chunks), falling back to the baseline retriever"
+          + (reranker === undefined ? "." : " with cross-encoder reranking on the results."),
       );
       return {
-        retriever: new MastraRagHrPolicyRetriever({ store, embedding, fallback: baseline }),
+        retriever: new MastraRagHrPolicyRetriever({
+          store,
+          embedding,
+          fallback: baseline,
+          tenantId: process.env.HR_KB_TENANT?.trim(),
+          ...(reranker === undefined ? {} : { reranker }),
+        }),
         registry,
       };
     }
@@ -751,6 +805,17 @@ function buildHrHelpBaselineRetriever(): HrPolicyRetriever {
 }
 
 const hrHelp = buildHrHelpDeps();
+
+/**
+ * Knowledge plane seed (upgrade plan P3): the console assistant searches the
+ * Mastra-owned indexes through its own tools, so a corpus has to be in pgvector
+ * before the first chat turn instead of waiting on some lane's first retrieval.
+ * The run is memoized per process, idempotent per source, and never rejects:
+ * an unreachable provider leaves the index cold and every lane keeps its
+ * baseline retriever. Deliberately not awaited — embedding a corpus must never
+ * delay the dev host coming up.
+ */
+void seedKnowledgePlane();
 
 export const mastra = createAllRounderMastra({
   ...(coding === undefined ? {} : { coding }),

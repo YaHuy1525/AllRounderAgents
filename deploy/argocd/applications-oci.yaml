@@ -1,0 +1,37 @@
+# The cloud twin of deploy/argocd/applications.yaml.
+#
+# Only the source path changes. The same ArgoCD Application name is used
+# deliberately, because the two clusters are separate control planes and never
+# see each other's Applications. Keeping the name identical means the same
+# refresh and diff commands work against either cluster from muscle memory.
+#
+# Apply with:
+#   kubectl apply -f deploy/argocd/applications-oci.yaml
+# once ArgoCD itself is installed on the k3s node.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: allrounder
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/YaHuy1525/AllRounderAgents.git
+    targetRevision: main
+    path: deploy/k8s/overlays/oci
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: allrounder
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+
+# The observability Application from the local file is intentionally absent.
+# kube-prometheus-stack costs roughly 2 GB of the 12 GB Always Free budget, and
+# that headroom is better spent on the agent workloads until the free node is
+# proven. Add it as a second Application once the three app pods are Healthy.

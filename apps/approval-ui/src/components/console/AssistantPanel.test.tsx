@@ -28,37 +28,32 @@ function renderPanel(overrides: Partial<PanelProps> = {}): string {
   return renderToString(<AssistantPanel {...props} />);
 }
 
-describe("assistant panel shell (U8)", () => {
-  it("renders the shell, the agent picker, and the send control", () => {
+describe("assistant panel shell", () => {
+  it("keeps the rail header and hosts the conversation", () => {
     const html = renderPanel();
+    expect(html).toContain("assistant-panel");
     expect(html).toContain("What would you like to work on?");
-    expect(html).toContain("Triage assistant");
-    expect(html).toContain("Support assistant");
-    expect(html).toContain("Coding assistant");
+    expect(html).toContain('id="chat-input"');
     expect(html).toContain('id="chat-send"');
-    expect(html).toContain("Send");
+    expect(html).toContain('aria-label="Conversations"');
   });
 
-  it("renders the lane quick actions for the selected ticket", () => {
+  it("contains no lane picker and no quick-action pad", () => {
     const html = renderPanel();
-    expect(html).toContain("List blockers");
-    expect(html).toContain("Create task");
-    // Effects do not run in SSR, so the run context (and the run-only
-    // action plus the context strip that hang off it) stays hidden.
-    expect(html).not.toContain("Summarize this run");
-    expect(html).not.toContain("chat-run-context");
+    for (const gone of [
+      "agent-picker",
+      "Triage assistant",
+      "Support assistant",
+      "Coding assistant",
+      "quick-chips",
+      "List blockers",
+      "Create task",
+    ]) {
+      expect(html).not.toContain(gone);
+    }
   });
 
-  it("hides the quick actions without a selected ticket", () => {
-    const html = renderPanel({ selectedKey: undefined });
-    expect(html).toContain("What would you like to work on?");
-    expect(html).not.toContain("List blockers");
-    expect(html).not.toContain("Create task");
-  });
-
-  it("keeps the drop-a-ticket hint in the empty log", () => {
-    const html = renderPanel();
-    expect(html).toContain("drag a ticket here for context");
-    expect(html).toContain("pick a quick action below");
+  it("holds no regex-driven intent copy anywhere in the panel", () => {
+    expect(renderPanel()).not.toContain("pick a quick action below");
   });
 });

@@ -24,6 +24,15 @@ RUN npm ci --workspaces=false --legacy-peer-deps
 COPY tsconfig.json ./
 COPY src ./src
 
+# mastra build does two things: it bundles, then it runs a fresh `npm install`
+# of the bundle's externalised dependencies inside .mastra/output. That second
+# install does NOT read the repo .npmrc (deliberately not copied here), so it
+# resolves peers strictly and aborts when @mastra/mcp@2.5.0's `zod@^4.2.0` peer
+# meets this project's `zod@^3.25` pin. npm honours the same policy through the
+# environment, so the deployer's install gets the flag the app's own `npm ci`
+# already uses. Platform-independent: without it the amd64 image fails too.
+ENV NPM_CONFIG_LEGACY_PEER_DEPS=true
+
 RUN npx --no-install mastra build --dir src/mastra
 
 # ---------- Stage 2: runtime ----------

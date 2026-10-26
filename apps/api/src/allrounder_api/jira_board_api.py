@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import asdict
 
 import httpx
@@ -12,8 +13,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from .auth import AuthenticationError, BearerVerifier, Principal
 from .jira import JIRA_PROJECT_KEY_PATTERN, JiraIssueReader
 from .logging import get_logger
+from .ticket_search import MAX_TICKETS, search_lane_tickets, ticket_payload
 
 _VIEW_ROLES = frozenset({"viewer", "agent", "approver", "admin"})
+_WORKFLOW_ID_PATTERN = r"^[a-z][a-z-]{0,39}$"
 
 
 def build_jira_board_router(
@@ -132,5 +135,48 @@ def build_jira_board_router(
             "total": len(issues),
             "issues": [asdict(issue) for issue in issues],
         }
+
+    @router.get("/tickets")
+    async def search_tickets(
+        workflows: str | None = Query(default=None, max_length=320),
+        text: str | None = Query(default=None, max_length=200),
+        max_results: int = Query(default=30, ge=1, le=MAX_TICKETS),
+        identity: Principal = Depends(principal),
+    ) -> dict[str, object]:
+        """Lane-filtered ticket listing across the tenant's projects.
+
+        The chat's "list all HR tickets" door: the console asks for workflow
+        ids (comma-separated) and/or a text needle, and the same keyword
+        vocabulary the board matcher uses decides membership server-side,
+        so the answer is not capped at the tickets currently on screen.
+        """
+
+        allowed_projects = _allowed_projects(identity)
+        ids = [item.strip() for item in (workflows or "").split(",") if item.strip()]
+        if any(re.fullmatch(_WORKFLOW_ID_PATTERN, item) is None for item in ids):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid workflow id")
+        if len(ids) > 8:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Too many workflow ids")
+        if not ids and not (text or "").strip():
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "a ticket query needs workflows or text",
+            )
+        try:
+            found = await asyncio.to_thread(
+                search_lane_tickets,
+                reader,
+                allowed_projects,
+                workflows=ids,
+                text=text or "",
+                limit=max_results,
+            )
+        except (httpx.HTTPError, json.JSONDecodeError, OSError, ValueError):
+            logger.exception("jira_ticket_search_failed", tenant_id=identity.tenant_id)
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                "Jira tickets could not be loaded",
+            ) from None
+        return {"total": len(found), "tickets": [ticket_payload(item) for item in found]}
 
     return router

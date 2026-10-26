@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The Oracle Always Free cluster: one Ampere Arm64 node running k3s.
+#
+# Two things differ from overlays/local, and nothing else does.
+#
+# First, architecture. Every image tag in this overlay must resolve to a
+# manifest list that carries linux/arm64. The images published before the
+# multi-arch change in .github/workflows/cd.yml are amd64 only, so this
+# overlay stays in ImagePullBackOff until the first CD run after that change
+# pins a new tag here. That is the expected sequence, not a misconfiguration.
+#
+# Second, hostnames. The local overlay routes by host through nip.io because a
+# laptop has one loopback address and many apps want a name. This cluster is
+# reached by a single public IP, and the UI container proxies /backend to the
+# api Service itself, so a host match would only break access by IP. The
+# ingress patch therefore collapses the two host rules into one catch-all rule.
+namespace: allrounder
+
+resources:
+  - ../../base
+
+patches:
+  - path: ingress-patch.yaml
+    target:
+      kind: Ingress
+      name: allrounder
+
+images:
+  - name: ghcr.io/yahuy1525/allrounderagent-api
+    newTag: sha-dd81ebb
+  - name: ghcr.io/yahuy1525/allrounderagent-mastra
+    newTag: sha-dd81ebb
+  - name: ghcr.io/yahuy1525/allrounderagent-ui
+    newTag: sha-dd81ebb

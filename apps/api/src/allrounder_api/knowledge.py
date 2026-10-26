@@ -299,6 +299,11 @@ def _sse_line_delta(line: str) -> tuple[bool, str] | None:
 class OpenAICompatibleAdapter:
     """Provider-neutral adapter for OpenAI-compatible embedding and chat endpoints."""
 
+    #: Ceiling on the texts one embedding request may carry. Providers reject the
+    #: whole request above it, and a long document routinely splits into more
+    #: spans than that, so the slice happens here instead of in each caller.
+    MAX_EMBED_BATCH = 96
+
     def __init__(
         self, *, base_url: str, api_key: str, embedding_model: str,
         dimensions: int, chat_model: str, client: httpx.AsyncClient | None = None,
@@ -312,10 +317,22 @@ class OpenAICompatibleAdapter:
         self._owns_client = client is None
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        payload = await self._post(
-            "/embeddings", {"model": self.model, "input": texts, "dimensions": self.dimensions}
-        )
-        return [item["embedding"] for item in payload["data"]]
+        """Embed every text, in order, over as many requests as the batch ceiling needs."""
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.MAX_EMBED_BATCH):
+            batch = texts[start : start + self.MAX_EMBED_BATCH]
+            payload = await self._post(
+                "/embeddings",
+                {"model": self.model, "input": batch, "dimensions": self.dimensions},
+            )
+            data = payload.get("data")
+            if not isinstance(data, list):
+                raise ValueError("Provider returned an invalid embeddings payload")
+            if len(data) != len(batch):
+                msg = f"Provider returned {len(data)} embeddings for {len(batch)} inputs"
+                raise ValueError(msg)
+            vectors.extend(item["embedding"] for item in data)
+        return vectors
 
     async def complete(self, system: str, user: str) -> str:
         payload = await self._post(

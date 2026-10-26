@@ -1,0 +1,20 @@
+# A JSON 6902 patch rather than a strategic merge patch, because the base
+# Ingress declares two host-based rules and this overlay needs exactly one
+# host-less rule. List fields without a merge key are not reliably replaced by
+# a merge patch, so the operation is stated explicitly.
+#
+# The result is a catch-all route to the UI. Every host and a bare IP address
+# work. API traffic reaches FastAPI through the /backend proxy inside the UI
+# container, so no separate host rule is required for it.
+- op: replace
+  path: /spec/rules
+  value:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ui
+                port:
+                  name: http

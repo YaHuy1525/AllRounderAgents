@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { allRounderAgents } from "../../registry.js";
-import { DEFAULT_DROPPY_CONFIG, loadDroppyConfig } from "../config.js";
+import { DEFAULT_DROPPY_CONFIG, loadDroppyConfig } from "../settings.js";
 import { createEventEmittingStore, createInMemoryStore } from "../tools/store.js";
 import type { AdObservation, DomainEvent, Order, Product, ShortlistCandidate } from "../contracts.js";
 

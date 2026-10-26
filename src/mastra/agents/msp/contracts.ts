@@ -49,8 +49,12 @@ export const StepDecisionSchema = z
 
 export type StepDecision = z.infer<typeof StepDecisionSchema>;
 
-/** Reply citation discipline: a source id plus a character span. */
-export const SPAN_PATTERN = /^\d+-\d+$/;
+/**
+ * Reply citation discipline: a source id plus a span. Character ranges come
+ * from the lexical platform store; `chunk-N` spans come from the Mastra-owned
+ * MDocument ingest, where a citation names the chunk window, not a range.
+ */
+export const SPAN_PATTERN = /^(?:\d+-\d+|chunk-\d+)$/;
 
 export const CitationSchema = z
   .object({

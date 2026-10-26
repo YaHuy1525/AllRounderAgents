@@ -13,12 +13,39 @@ export type WorkflowStep = {
   integrations: string[];
 };
 
+/** Input control a start field asks for (mirrors the API's ``StartField.kind``). */
+export type WorkflowStartKind = "text" | "date" | "number" | "enum" | "list";
+
+/**
+ * One value a workflow needs before its first step can run. Published by
+ * `GET /workflows`, so the start card renders exactly the fields the server
+ * validates instead of a hand-written form per workflow.
+ */
+export type WorkflowStartField = {
+  id: string;
+  label: string;
+  kind: WorkflowStartKind;
+  required: boolean;
+  example: string;
+  help: string;
+  values: string[];
+};
+
 export type WorkflowDefinition = {
   id: string;
   title: string;
   mastraWorkflow: string;
+  startFields: WorkflowStartField[];
   steps: WorkflowStep[];
 };
+
+const START_FIELD_KINDS: ReadonlySet<string> = new Set([
+  "text",
+  "date",
+  "number",
+  "enum",
+  "list",
+]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
@@ -55,6 +82,35 @@ function sanitizeStep(value: unknown): WorkflowStep | null {
   };
 }
 
+export function sanitizeStartField(value: unknown): WorkflowStartField | null {
+  const record = asRecord(value);
+  if (!record || typeof record.id !== "string" || record.id === "") return null;
+  const values = record.values === undefined ? [] : asStringArray(record.values);
+  const kind = typeof record.kind === "string" && START_FIELD_KINDS.has(record.kind)
+    ? (record.kind as WorkflowStartKind)
+    : "text";
+  return {
+    id: record.id,
+    label: typeof record.label === "string" && record.label !== "" ? record.label : record.id,
+    kind,
+    required: record.required === true,
+    example: typeof record.example === "string" ? record.example : "",
+    help: typeof record.help === "string" ? record.help : "",
+    values: values ?? [],
+  };
+}
+
+/** Start fields are additive: a malformed row is dropped, an absent key is empty. */
+function sanitizeStartFields(value: unknown): WorkflowStartField[] {
+  if (!Array.isArray(value)) return [];
+  const fields: WorkflowStartField[] = [];
+  for (const item of value) {
+    const field = sanitizeStartField(item);
+    if (field !== null) fields.push(field);
+  }
+  return fields;
+}
+
 export function sanitizeWorkflow(value: unknown): WorkflowDefinition | null {
   const record = asRecord(value);
   if (!record) return null;
@@ -78,6 +134,7 @@ export function sanitizeWorkflow(value: unknown): WorkflowDefinition | null {
     id: record.id,
     title: record.title,
     mastraWorkflow: record.mastraWorkflow,
+    startFields: sanitizeStartFields(record.startFields),
     steps,
   };
 }

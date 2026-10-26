@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     max_webhook_bytes: int = Field(default=1_000_000, ge=1)
     dedupe_ttl_seconds: int = Field(default=86_400, ge=1)
     redis_url: str = "redis://localhost:6379/0"
+    # Storage backend for the run plane (registry, receipts, locks, event bus,
+    # webhook dedup, rate counters). "redis" is the multi-process default;
+    # "memory" keeps all state in one uvicorn process so host development
+    # needs no Redis server.
+    runs_backend: Literal["redis", "memory"] = "redis"
     database_url: SecretStr = SecretStr("")
     supabase_service_role_key: SecretStr = SecretStr("")
     jira_base_url: str = "https://example.atlassian.net"

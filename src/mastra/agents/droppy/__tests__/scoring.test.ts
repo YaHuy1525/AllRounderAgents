@@ -9,7 +9,7 @@ import {
   totalScore,
 } from "../tools/scoring.js";
 import { scoreProduct } from "../tools/collectors.js";
-import { DEFAULT_DROPPY_CONFIG, loadDroppyConfig } from "../config.js";
+import { DEFAULT_DROPPY_CONFIG, loadDroppyConfig } from "../settings.js";
 import type { AdObservation, Product, TikTokShopListing } from "../contracts.js";
 
 const config = loadDroppyConfig();

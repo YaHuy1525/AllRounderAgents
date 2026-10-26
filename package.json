@@ -11,6 +11,8 @@
   ],
   "scripts": {
     "dev": "node scripts/dev.mjs",
+    "dev:backend": "node scripts/dev.mjs backend",
+    "dev:frontend": "node scripts/dev.mjs frontend",
     "dev:mastra": "mastra dev --dir src/mastra",
     "studio": "mastra studio",
     "lint": "tsc -p tsconfig.json --noEmit && npm run lint -w @allrounder/approval-ui",
@@ -19,12 +21,14 @@
     "test:coverage": "vitest run --coverage",
     "eval:seed": "node --env-file=.env scripts/seed-mastra-datasets.mjs",
     "eval:run": "node scripts/run-coding-eval.mjs",
+    "eval:coding-quality": "node --experimental-strip-types scripts/run-coding-quality-eval.mjs",
     "build": "npm run build --workspaces --if-present"
   },
   "dependencies": {
     "@mastra/agent-browser": "^0.5.3",
     "@mastra/core": "^1.76.0",
     "@mastra/docker": "^0.10.0",
+    "@mastra/e2b": "^0.13.0",
     "@mastra/evals": "^1.10.6",
     "@mastra/mcp": "^2.3.0",
     "@mastra/memory": "^1.30.0",
@@ -37,6 +41,7 @@
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@vitest/coverage-v8": "^3.0.4",
+    "jose": "^6.2.13",
     "mastra": "^1.27.3",
     "supabase": "^2.116.0",
     "typescript": "^5.7.3",

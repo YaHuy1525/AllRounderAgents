@@ -100,11 +100,24 @@ services:
       args:
         NEXT_PUBLIC_SUPABASE_URL: ${VITE_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
-        NEXT_PUBLIC_API_URL: ${VITE_API_URL:-http://localhost:8000}
+        # Same-origin by design, so the Compose stack exercises the exact nginx
+        # /backend proxy path the cloud clusters use. A browser request to
+        # localhost:3000/backend is forwarded to the api container, which is the
+        # only way this proxy gets tested before deploy.
+        NEXT_PUBLIC_API_URL: /backend
+        # Same story for the assistant: the browser calls /mastra/ on the UI
+        # origin and the UI container's nginx forwards it to the host service.
+        # A build arg, not an environment value — `output: "export"` bakes this
+        # into the bundle, so an env entry would never be read.
+        NEXT_PUBLIC_MASTRA_URL: /mastra
     ports:
       - "3000:8080"
     depends_on:
       api:
+        condition: service_healthy
+      # nginx resolves the proxy_pass hostname when it starts, so the host has
+      # to be addressable before the UI container comes up.
+      mastra:
         condition: service_healthy
     restart: unless-stopped
 

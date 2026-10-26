@@ -215,6 +215,76 @@ const KEYWORD_WORKFLOW_RULES: ReadonlyArray<{ id: string; tokens: readonly strin
 
 const CODE_TICKET_TYPES = new Set(["bug", "story", "task", "epic", "feature", "improvement", "chore"]);
 
+/** Keyword-routed lane ids; a bare "list tickets" query reads across these. */
+export const KEYWORD_WORKFLOW_IDS: readonly string[] = KEYWORD_WORKFLOW_RULES.map(
+  (rule) => rule.id,
+);
+
+/**
+ * Coarse domains the chat expands when a listing names one ("HR") into the
+ * lane ids the server keyword rules actually route. Only keyword-addressable
+ * lanes appear: a domain never claims a lane no ticket text can match.
+ */
+export const WORKFLOW_DOMAINS: Readonly<Record<string, readonly string[]>> = {
+  hr: ["leave", "onboarding", "offboarding", "screening", "hr-help"],
+  coding: ["issues", "dependencies", "accessibility"],
+  security: ["security"],
+  vendors: ["vendors"],
+};
+
+/**
+ * One row of `GET /jira/tickets`: a board ticket as the search returns it,
+ * plus every lane its summary and labels matched, in rule order.
+ */
+export type LaneTicketRow = {
+  key: string;
+  project: string;
+  summary: string;
+  status: string;
+  issueType: string;
+  priority: string;
+  assignee: string | null;
+  labels: string[];
+  matchedWorkflows: string[];
+};
+
+/**
+ * Ask the server for the tenant's lane-matched tickets. The same keyword
+ * vocabulary this module's board matcher uses decides membership server-side
+ * (pinned by test_ticket_search.py), so the answer is not capped at the
+ * tickets currently on screen.
+ */
+export async function searchLaneTickets(input: {
+  workflows: readonly string[];
+  text?: string;
+  maxResults?: number;
+}): Promise<LaneTicketRow[]> {
+  const params = new URLSearchParams();
+  params.set("workflows", input.workflows.join(","));
+  if (input.text !== undefined && input.text !== "") params.set("text", input.text);
+  if (input.maxResults !== undefined) params.set("max_results", String(input.maxResults));
+  const result = await api<{ total: number; tickets: LaneTicketRow[] }>(
+    `/jira/tickets?${params.toString()}`,
+  );
+  return Array.isArray(result.tickets) ? result.tickets : [];
+}
+
+/**
+ * Workflows whose keyword rule fires on this text, in rule order. Shared by
+ * the board's ticket matcher and the assistant's start-run intent, so both
+ * read one vocabulary.
+ */
+export function matchWorkflowsFromText(text: string): string[] {
+  const haystack = text.toLowerCase();
+  const matched: string[] = [];
+  for (const rule of KEYWORD_WORKFLOW_RULES) {
+    if (rule.tokens.some((token) => haystack.includes(token)) && !matched.includes(rule.id)) {
+      matched.push(rule.id);
+    }
+  }
+  return matched;
+}
+
 /**
  * Workflows supported for a ticket, most relevant first. An explicit keyword
  * match wins outright: an HR question filed as a Task must not inherit the
@@ -229,14 +299,13 @@ export function workflowsForTicket(ticket: {
   labels: string[];
 }): string[] {
   const type = ticket.issueType.trim().toLowerCase();
-  const text = `${ticket.summary} ${ticket.labels.join(" ")}`.toLowerCase();
   const supported: string[] = [];
   const add = (id: string): void => {
     if (!supported.includes(id)) supported.push(id);
   };
 
-  for (const rule of KEYWORD_WORKFLOW_RULES) {
-    if (rule.tokens.some((token) => text.includes(token))) add(rule.id);
+  for (const id of matchWorkflowsFromText(`${ticket.summary} ${ticket.labels.join(" ")}`)) {
+    add(id);
   }
   if (supported.length === 0) {
     if (type === "bug") add("issues");
@@ -864,6 +933,39 @@ export async function startRun(input: {
   input: Record<string, unknown>;
 }): Promise<RunDetail> {
   return api<RunDetail>("/runs", { method: "POST", body: JSON.stringify(input) });
+}
+
+/** One value a record could prove, plus the record it came from. */
+export type WorkflowPrefillField = {
+  id: string;
+  label: string;
+  value: string;
+  source: string;
+};
+
+/** The prefill answer: what the API could fill, and what it still needs. */
+export type WorkflowPrefill = {
+  workflow: string;
+  fields: WorkflowPrefillField[];
+  missing: { id: string; label: string }[];
+};
+
+/**
+ * Ask what records can prove for a drafted start. Read-only: the answer fills
+ * the card, and the run still starts only when the human confirms it. A field
+ * the caller already has in ``values`` comes back unchanged.
+ */
+export async function prefillStartFields(input: {
+  workflow: string;
+  ticketKey: string;
+  ticketSummary: string;
+  text: string;
+  values: Record<string, string>;
+}): Promise<WorkflowPrefill> {
+  return api<WorkflowPrefill>("/runs/prefill", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export type CaseOpenResult = {

@@ -1,4 +1,4 @@
-import type { Agent } from "@mastra/core/agent";
+import type { Agent, DelegationConfig } from "@mastra/core/agent";
 import type { z } from "zod";
 
 import { DEFAULT_AGENT_MODEL, estimateCostMicro } from "../shared/model.js";
@@ -57,6 +57,17 @@ export interface ContractGenerateOptions {
    * fail an otherwise-valid contract output.
    */
   readonly onUsage?: (costMicro: number) => void;
+  /**
+   * Sub-agent delegation hooks. Passed straight through to `generate`, which
+   * is where Mastra reads them: they are an execution option, not a
+   * constructor key. A supervisor needs this to gate which child runs.
+   */
+  readonly delegation?: DelegationConfig;
+  /**
+   * Iteration ceiling for one generate pass. A supervisor spends a step on each
+   * delegation, so the default of one would never reach a child.
+   */
+  readonly maxSteps?: number;
 }
 
 /**
@@ -113,9 +124,13 @@ export async function generateContractOutput<T extends object>(
 ): Promise<T> {
   const tierModel = options?.model;
   const tracingOptions = options?.tracingOptions;
+  const delegation = options?.delegation;
+  const maxSteps = options?.maxSteps;
   const generateOptions = {
     ...(tierModel !== undefined ? { model: tierModel } : {}),
     ...(tracingOptions !== undefined ? { tracingOptions } : {}),
+    ...(delegation !== undefined ? { delegation } : {}),
+    ...(maxSteps !== undefined ? { maxSteps } : {}),
     structuredOutput: { schema },
   };
   const modelId = tierModel?.id ?? DEFAULT_AGENT_MODEL;
